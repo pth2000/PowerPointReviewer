@@ -1,0 +1,17 @@
+<RCC>
+  <qresource prefix="image">
+    <file>image/Clock.svg</file>
+    <file>image/info.svg</file>
+    <file>image/Folder.svg</file>
+    <file>image/update.svg</file>
+    <file>image/gitee.svg</file>
+    <file>image/ppt_ico.svg</file>
+    <file>image/ppt.svg</file>
+    <file>image/backward.svg</file>
+    <file>image/play.svg</file>
+    <file>image/countdown.svg</file>
+    <file>image/parting.svg</file>
+    <file>image/stop.svg</file>
+    <file>image/word.svg</file>
+  </qresource>
+</RCC>
