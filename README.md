@@ -1,11 +1,11 @@
-<p align="center">
-</p>
-  <h1 align="center">
-  PowerPointReviewer
-</h1>
-<p align="center">
-  一个 PowerPoint 讲稿朗读审阅工具
-</p>
+<div style="text-align: center;">
+    <h1>
+        PowerPointReviewer
+    </h1>
+    <p>
+        一个 PowerPoint 讲稿朗读审阅工具
+    </p>
+</div>
 
 ![截图](./image/screenshots.png)
 
@@ -49,7 +49,7 @@
 
 使用pyinstaller：
 
-```python
+```shell
 pyinstaller -w -i .\image\ppt_ico.ico main.py -n PowerPointReviewer --add-data "venv\\Lib\\site-packages\\pptx\\templates\\*;.\\pptx\\templates"
 ```
 
