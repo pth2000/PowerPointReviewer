@@ -457,8 +457,18 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             h, m = divmod(m, 60)
             return f'{round(h)} 小时 {round(m)} 分钟 {round(s)} 秒'
 
+    def count_words(self):
+        """字数统计"""
+        text = ''
+        for page in self.notes:
+            text += self.notes[page]
+        text = re.sub(r'\s+', '', text)
+        return len(text)
+
     def show_info_dialog(self):
+        """显示统计弹窗"""
         title = '统计信息'
+        words_count = self.count_words()
         max_duration = max(self.notes_duration_list)
         max_duration_index = self.notes_duration_list.index(max_duration)
         min_duration = min(self.notes_duration_list)
@@ -466,6 +476,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         content_list = [
             ['页码总计', f'{len(self.notes)} 页'],
             ['音频总计', f'{len(self.notes_list)} 条'],
+            ['演讲稿字数总计', f'{words_count} 字'],
             ['音频总时长', f'{self.s_to_str(sum(self.notes_duration_list))}\n'],
             ['最长音频时长', f'{self.s_to_str(max_duration)}'],
             ['最长音频索引', f'{max_duration_index}'],
@@ -509,7 +520,7 @@ class SaveThread(QThread):
     def save_countdown_wav():
         """生成倒计时语音"""
         for index, time_num in enumerate(range(w.ppt_r.currentSpinBox.maximum(), 0, -1)):
-            tts.save_file(f'{time_num}', f'{w.ppt_r.countdown_wav_temp_path}/{time_num}.wav')
+            tts.save_file_local(f'{time_num}', f'{w.ppt_r.countdown_wav_temp_path}/{time_num}.wav')
         print('倒计时生成完成')
 
 
@@ -792,15 +803,31 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.githubButton.clicked.connect(self.open_github_url)
         self.giteeButton.clicked.connect(self.open_gitee_url)
 
+        self.engineSelectComboBox.addItem('本地 TTSx3 引擎')
+        self.engineSelectComboBox.addItem('在线 edge-TTS 引擎')
         self.setup_voices_list()
+        self.engineSelectComboBox.currentIndexChanged.connect(self.change_tts_engine)
 
         self.update_thread = UpdateThread()
         self.update_thread.signal_finish.connect(self.thread_get_update_finish)
 
     def setup_voices_list(self):
         voices_list = tts.get_voices_list()
+        self.engineComboBox.clear()
         for item in voices_list:
             self.engineComboBox.addItem(item)
+
+    def change_tts_engine(self):
+        if self.engineSelectComboBox.currentIndex() == 0:
+            tts.is_local_mode = True
+        else:
+            tts.is_local_mode = False
+            self.create_warning_info_bar('已选择在线引擎',
+                                         '在线引擎受网络速度影响，导出速度较慢，稳定性较低，请谨慎使用！\n'
+                                         '目前在线引擎不支持调节音量与语速！')
+        self.CardWidget_2.setEnabled(tts.is_local_mode)
+        self.CardWidget_3.setEnabled(tts.is_local_mode)
+        self.setup_voices_list()
 
     def save_setting(self):
         try:
@@ -842,6 +869,18 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def create_success_info_bar(self, title, text):
         """成功消息框"""
         InfoBar.success(
+            title=title,
+            content=text,
+            orient=Qt.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+            parent=self
+        )
+
+    def create_warning_info_bar(self, title, text):
+        """警告消息框"""
+        InfoBar.warning(
             title=title,
             content=text,
             orient=Qt.Horizontal,
@@ -897,7 +936,7 @@ class Window(SplitFluentWindow):
 
 
 if __name__ == '__main__':
-    VERSION = '1.0.1'
+    VERSION = '1.0.2'
     tts = TTSEngine()
     app = QApplication(sys.argv)  # 声明应用程序
     w = Window()  # 声明窗口

@@ -27,7 +27,7 @@ class Ui_settingInterface(object):
     def setupUi(self, settingInterface):
         if not settingInterface.objectName():
             settingInterface.setObjectName(u"settingInterface")
-        settingInterface.resize(858, 692)
+        settingInterface.resize(858, 745)
         self.horizontalLayout_3 = QHBoxLayout(settingInterface)
         self.horizontalLayout_3.setObjectName(u"horizontalLayout_3")
         self.bgWidget = QWidget(settingInterface)
@@ -47,6 +47,42 @@ class Ui_settingInterface(object):
         self.SubtitleLabel.setMaximumSize(QSize(16777215, 30))
 
         self.verticalLayout_2.addWidget(self.SubtitleLabel)
+
+        self.CardWidget_5 = CardWidget(self.importWidget)
+        self.CardWidget_5.setObjectName(u"CardWidget_5")
+        self.horizontalLayout_14 = QHBoxLayout(self.CardWidget_5)
+        self.horizontalLayout_14.setObjectName(u"horizontalLayout_14")
+        self.horizontalLayout_14.setContentsMargins(20, 20, 20, 20)
+        self.verticalLayout_11 = QVBoxLayout()
+        self.verticalLayout_11.setSpacing(0)
+        self.verticalLayout_11.setObjectName(u"verticalLayout_11")
+        self.engineSelectPathLabel = QLabel(self.CardWidget_5)
+        self.engineSelectPathLabel.setObjectName(u"engineSelectPathLabel")
+        self.engineSelectPathLabel.setStyleSheet(u"font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';")
+
+        self.verticalLayout_11.addWidget(self.engineSelectPathLabel)
+
+        self.engineSelectCaptionLabel = CaptionLabel(self.CardWidget_5)
+        self.engineSelectCaptionLabel.setObjectName(u"engineSelectCaptionLabel")
+
+        self.verticalLayout_11.addWidget(self.engineSelectCaptionLabel)
+
+
+        self.horizontalLayout_14.addLayout(self.verticalLayout_11)
+
+        self.horizontalSpacer_4 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        self.horizontalLayout_14.addItem(self.horizontalSpacer_4)
+
+        self.engineSelectComboBox = ComboBox(self.CardWidget_5)
+        self.engineSelectComboBox.setObjectName(u"engineSelectComboBox")
+        self.engineSelectComboBox.setMinimumSize(QSize(240, 0))
+        self.engineSelectComboBox.setMaximumSize(QSize(240, 16777215))
+
+        self.horizontalLayout_14.addWidget(self.engineSelectComboBox)
+
+
+        self.verticalLayout_2.addWidget(self.CardWidget_5)
 
         self.CardWidget = CardWidget(self.importWidget)
         self.CardWidget.setObjectName(u"CardWidget")
@@ -315,8 +351,10 @@ class Ui_settingInterface(object):
     def retranslateUi(self, settingInterface):
         settingInterface.setWindowTitle(QCoreApplication.translate("settingInterface", u"Form", None))
         self.SubtitleLabel.setText(QCoreApplication.translate("settingInterface", u"TTS \u5f15\u64ce\u8bbe\u7f6e", None))
-        self.enginePathLabel.setText(QCoreApplication.translate("settingInterface", u"\u5f15\u64ce\u9009\u62e9", None))
-        self.engineCaptionLabel.setText(QCoreApplication.translate("settingInterface", u"\u9009\u62e9\u53ef\u7528\u7684 TTS \u5f15\u64ce", None))
+        self.engineSelectPathLabel.setText(QCoreApplication.translate("settingInterface", u"\u5f15\u64ce\u9009\u62e9", None))
+        self.engineSelectCaptionLabel.setText(QCoreApplication.translate("settingInterface", u"\u9009\u62e9\u672c\u5730 TTS \u5f15\u64ce\u6216\u5728\u7ebf\u5f15\u64ce", None))
+        self.enginePathLabel.setText(QCoreApplication.translate("settingInterface", u"\u97f3\u6e90\u9009\u62e9", None))
+        self.engineCaptionLabel.setText(QCoreApplication.translate("settingInterface", u"\u9009\u62e9\u53ef\u7528\u7684 TTS \u97f3\u6e90", None))
         self.ratePathLabel.setText(QCoreApplication.translate("settingInterface", u"\u8bed\u901f\u8bbe\u7f6e", None))
         self.rateCaptionLabel.setText(QCoreApplication.translate("settingInterface", u"\u8c03\u8282\u53d1\u58f0\u901f\u5ea6\uff0c\u9ed8\u8ba4\u4e3a 200", None))
         self.volumePathLabel.setText(QCoreApplication.translate("settingInterface", u"\u97f3\u91cf\u8bbe\u7f6e", None))
