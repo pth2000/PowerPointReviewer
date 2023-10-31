@@ -1,8 +1,8 @@
 <div style="text-align: center;">
-    <h1>
+    <h1 style="text-align: center;">
         PowerPointReviewer
     </h1>
-    <p>
+    <p style="text-align: center;">
         一个 PowerPoint 讲稿朗读审阅工具
     </p>
 </div>
