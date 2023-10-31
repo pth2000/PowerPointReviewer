@@ -31,6 +31,10 @@ class TTSEngine:
     def set_voice(self, index):
         self.tts_engine.setProperty("voice", self.voices[index].id)
 
+    def save_file(self, text, path):
+        self.tts_engine.save_to_file(text, path)
+        self.tts_engine.runAndWait()
+
 
 if __name__ == '__main__':
     tts = TTSEngine()

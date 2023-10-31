@@ -6,6 +6,7 @@ import webbrowser
 import pyautogui
 import requests
 from PySide6.QtGui import QIcon
+from mutagen import File
 from pptx import Presentation
 from docx import Document
 from docx.oxml.ns import qn
@@ -39,17 +40,20 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.current_index = 0  # 当前播放的音频文件索引
         self.wait_current_index = 0  # 倒计时索引
         self.note_file_path = ''
+        self.note_file_name = ''
         self.notes = {}  # 每页讲稿
         self.notes_list = []  # 每块讲稿
+        self.notes_duration_list = [0]
         self.is_play_notes = False
         self.is_import = False
-        self.auto_num = 5
         self.mark = '●'
 
         self.partingIconWidget.setIcon(QIcon(':/image/image/parting.svg'))
         self.fileIconWidget.setIcon(QIcon(':/image/image/Folder.svg'))
         self.currentIconWidget.setIcon(QIcon(':/image/image/countdown.svg'))
         self.currentTimeIconWidget.setIcon(QIcon(':/image/image/Clock.svg'))
+        self.pageJumpToolButton.setIcon(FluentIcon.ACCEPT_MEDIUM)
+        # self.infoPushButton.setIcon(FluentIcon.IOT)
         self.playButton.setIcon(QIcon(':/image/image/play.svg'))
         self.stopButton.setIcon(QIcon(':/image/image/stop.svg'))
         self.resetButton.setIcon(QIcon(':/image/image/backward.svg'))
@@ -66,6 +70,8 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.resetButton.clicked.connect(self.reset_audio)
         self.getFileButton.clicked.connect(self.init_ppt_play)
         self.editMarkPushButton.clicked.connect(self.show_edit_mark_dialog)
+        self.pageJumpToolButton.clicked.connect(self.jump_page)
+        self.infoPushButton.clicked.connect(self.show_info_dialog)
 
         self.next_timer = QTimer(self)
         self.next_timer.timeout.connect(self.timeout_play_next_audio)  # 当计时器超时时连接到play_next_audio方法
@@ -88,11 +94,15 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         """检查导入状态"""
         if self.is_import:
             self.playCardWidget.setEnabled(True)
+            self.playCardWidget_2.setEnabled(True)
+            self.playCardWidget_3.setEnabled(True)
             self.statusLabel.setText('已导入')
             self.IconInfoBadge.setLevel(InfoLevel.SUCCESS)
             self.IconInfoBadge.setIcon(FluentIcon.ACCEPT_MEDIUM)
         else:
             self.playCardWidget.setEnabled(False)
+            self.playCardWidget_2.setEnabled(False)
+            self.playCardWidget_3.setEnabled(False)
             self.statusLabel.setText('未导入')
             self.IconInfoBadge.setLevel(InfoLevel.INFOAMTION)
             self.IconInfoBadge.setIcon(FluentIcon.ACCEPT_MEDIUM)
@@ -105,13 +115,11 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                 self.player.play()
                 self.playButton.setEnabled(False)  # 禁用播放按钮
                 self.currentStatusLabel.setText('播放')
-                self.currentPageLabel.setText(f'{self.notes_list[self.current_index]["page"]} / {len(self.notes)}')
-                self.currentIndexLabel.setText(f'{self.current_index + 1} / {len(self.notes_list)}')
+                self.set_current_label_text()
                 print(self.notes_list[self.current_index]["text"])
             else:
                 print('播放完毕')
-                self.current_index = 0
-                self.playButton.setEnabled(True)  # 启用播放按钮
+                self.reset_audio()
 
         else:  # 播放倒计时
             if self.wait_current_index < len(self.media_list):  # 正在播放
@@ -143,14 +151,24 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         """重置播放"""
         self.stop_audio()
         self.current_index = 0
+        self.set_current_label_text()
+
+    def set_current_label_text(self):
         self.currentPageLabel.setText(f'{self.notes_list[self.current_index]["page"]} / {len(self.notes)}')
         self.currentIndexLabel.setText(f'{self.current_index + 1} / {len(self.notes_list)}')
+
+    def get_index_from_page(self, page):
+        notes_list = self.notes_list
+        for i, item in enumerate(notes_list):
+            if item['page'] == page:
+                return i
+        return -1
 
     def timeout_play_next_audio(self):
         """定时结束，自动播放下一个音频"""
         self.next_timer.stop()
         if self.is_play_notes:
-            if self.scrollEnableSwitch.isChecked():
+            if self.scrollEnableSwitch.isChecked():  # 同步翻页
                 pyautogui.press("pagedown")
             self.current_index += 1
         else:
@@ -200,7 +218,6 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.create_error_info_bar('PowerPoint 文件解析错误', f'详情：{e}')
             self.getFileButton.setEnabled(True)
             return False
-        print(self.notes)
         self.init_general_play()
 
     def init_general_play(self):
@@ -217,6 +234,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         try:
             self.clean_temp_folder(self.wav_temp_path)  # 清理缓存语音
+            self.clean_temp_folder(self.countdown_wav_temp_path)  # 清理缓存语音
         except Exception as e:
             print(e)
             self.create_error_info_bar('缓存清理错误', f'详情：{e}')
@@ -245,11 +263,18 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         """获取word路径"""
         selected_files = QFileDialog.getOpenFileName(self, "选择Word文件", "", "Word Files (*.docx)")
         self.note_file_path = selected_files[0]
+        self.set_filename()
 
     def get_ppt_path(self):
         """获取ppt路径"""
         selected_files = QFileDialog.getOpenFileName(self, "选择PowerPoint文件", "", "PowerPoint Files (*.pptx)")
         self.note_file_path = selected_files[0]
+        self.set_filename()
+
+    def set_filename(self):
+        """根据文件路径生成文件名"""
+        filename = os.path.basename(self.note_file_path)
+        self.note_file_name = os.path.splitext(filename)[0]
 
     def get_word_notes_dict(self):
         """从word获取讲稿字典"""
@@ -326,6 +351,8 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.getFileButton.setEnabled(True)
         self.is_import = True
         self.check_import()
+        self.set_current_label_text()
+        self.pageJumpSpinBox.setMaximum(len(self.notes))
 
     def init_play(self):
         """准备播放"""
@@ -339,8 +366,6 @@ class PPTReviewer(QWidget, Ui_mainwindow):
     def play_wait(self):
         """播放倒计时"""
         self.is_play_notes = False
-        # self.clean_temp_folder(self.countdown_wav_temp_path)  # 清理
-        self.save_countdown_wav()  # 生成倒计时
         self.wait_current_index = 0
         self.load_wait_audio_files()
         print('已导入倒计时')
@@ -369,13 +394,12 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.media_list = [f'{self.countdown_wav_temp_path}/{f}' for f in audio_files]
         print('倒计时列表载入完成')
 
-    def save_countdown_wav(self):
-        """生成倒计时语音"""
-        self.auto_num = self.currentSpinBox.value()
-        for time_num in range(self.auto_num, 0, -1):
-            tts.tts_engine.save_to_file(f'{time_num}', f'{self.countdown_wav_temp_path}/{time_num}.wav')
-            tts.tts_engine.runAndWait()
-        print('倒计时生成完成')
+    def jump_page(self):
+        self.stop_audio()
+        index = self.get_index_from_page(self.pageJumpSpinBox.value())
+        if index > -1:
+            self.current_index = index
+        self.set_current_label_text()
 
     def create_success_info_bar(self, title, text):
         """成功消息框"""
@@ -421,6 +445,44 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             print(f'分隔符：{text}')
             self.mark = text
 
+    @staticmethod
+    def s_to_str(s):
+        """将秒转换为时间标签"""
+        if s < 60:
+            return f'{round(s, 2)} 秒'
+        m, s = divmod(s, 60)
+        if m < 60:
+            return f'{round(m)} 分钟 {round(s)} 秒'
+        else:
+            h, m = divmod(m, 60)
+            return f'{round(h)} 小时 {round(m)} 分钟 {round(s)} 秒'
+
+    def show_info_dialog(self):
+        title = '统计信息'
+        max_duration = max(self.notes_duration_list)
+        max_duration_index = self.notes_duration_list.index(max_duration)
+        min_duration = min(self.notes_duration_list)
+        min_duration_index = self.notes_duration_list.index(min_duration)
+        content_list = [
+            ['页码总计', f'{len(self.notes)} 页'],
+            ['音频总计', f'{len(self.notes_list)} 条'],
+            ['音频总时长', f'{self.s_to_str(sum(self.notes_duration_list))}\n'],
+            ['最长音频时长', f'{self.s_to_str(max_duration)}'],
+            ['最长音频索引', f'{max_duration_index}'],
+            ['最长音频所属页码', f'第 {self.notes_list[max_duration_index]["page"]} 页'],
+            ['最短音频时长', f'{self.s_to_str(min_duration)}'],
+            ['最短音频索引', f'{min_duration_index}'],
+            ['最短音频所属页码', f'第 {self.notes_list[min_duration_index]["page"]} 页']
+        ]
+
+        content = ''
+        for item in content_list:
+            content += f'{item[0]}：{item[1]}\n'
+        dialog = MessageBox(title, content, self)
+        dialog.yesButton.setText('确定')
+        dialog.cancelButton.setVisible(False)
+        dialog.exec()
+
 
 class SaveThread(QThread):
     """生成语音线程"""
@@ -428,16 +490,27 @@ class SaveThread(QThread):
     signal_finish = Signal()
 
     def run(self):
+        self.save_countdown_wav()
         self.save_wav()
+        self.signal_finish.emit()
 
     def save_wav(self):
         """调用TTS保存文字为wav"""
+        info_list = []
         for index, note_dict in enumerate(w.ppt_r.notes_list):
-            tts.tts_engine.save_to_file(note_dict['text'],
-                                        f'{w.ppt_r.wav_temp_path}/{note_dict["page"]}_{index + 1}.wav')
-            tts.tts_engine.runAndWait()
+            path = f'{w.ppt_r.wav_temp_path}/{note_dict["page"]}_{index + 1}.wav'
+            tts.save_file(note_dict['text'], path)
+            audio = File(path)
+            info_list.append(audio.info.length)  # 获取时长
             self.signal_import_index.emit(index + 1)
-        self.signal_finish.emit()
+        w.ppt_r.notes_duration_list = info_list
+
+    @staticmethod
+    def save_countdown_wav():
+        """生成倒计时语音"""
+        for index, time_num in enumerate(range(w.ppt_r.currentSpinBox.maximum(), 0, -1)):
+            tts.save_file(f'{time_num}', f'{w.ppt_r.countdown_wav_temp_path}/{time_num}.wav')
+        print('倒计时生成完成')
 
 
 class UpdateThread(QThread):
@@ -571,7 +644,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             self.create_error_info_bar('PowerPoint 读取错误', f'详情：{e}')
             return False
 
-        path = f'{dir_path}/{ppt_name}_new.pptx'
+        path = f'{dir_path}/{ppt_name}_NEW.pptx'
 
         try:
             ppt.save(path)
@@ -584,13 +657,14 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
     def write_to_word(self):
         """写入word"""
         notes = w.ppt_r.notes
+        file_name = w.ppt_r.note_file_name
 
         if not notes:
             self.create_warning_info_bar('演讲稿未导入', '请先导入演讲稿。')
             return False
 
         dir_path = self.get_dir_path()
-        file_name = 'notes.docx'
+        file_name = f'{file_name}_Notes.docx'
         file_path = f'{dir_path}/{file_name}'
         if not dir_path:
             self.create_warning_info_bar('目录选择已取消', '请重新选择保存目录。')
@@ -631,12 +705,13 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
     def write_to_json(self):
         """写入json"""
         notes_dict = w.ppt_r.notes
+        file_name = w.ppt_r.note_file_name
         if not notes_dict:
             self.create_warning_info_bar('演讲稿未导入', '请先导入演讲稿。')
             return False
 
         dir_path = self.get_dir_path()
-        file_name = 'notes.json'
+        file_name = f'{file_name}_Notes.json'
         file_path = f'{dir_path}/{file_name}'
         if not dir_path:
             self.create_warning_info_bar('目录选择已取消', '请重新选择保存目录。')
@@ -748,7 +823,6 @@ class SettingInterface(QWidget, Ui_settingInterface):
         if data_list[0] == 0:
             self.create_success_info_bar(data_list[1], data_list[2])
         elif data_list[0] == 1:
-            # self.create_success_info_bar(data_list[1], data_list[2])
             self.show_update_dialog(data_list[1], data_list[2], data_list[3])
         else:
             self.create_error_info_bar(data_list[1], data_list[2])
@@ -823,7 +897,7 @@ class Window(SplitFluentWindow):
 
 
 if __name__ == '__main__':
-    VERSION = '1.0.0'
+    VERSION = '1.0.1'
     tts = TTSEngine()
     app = QApplication(sys.argv)  # 声明应用程序
     w = Window()  # 声明窗口

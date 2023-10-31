@@ -21,19 +21,19 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QSizePolicy,
 from qfluentwidgets import (CaptionLabel, CardWidget, CheckBox, IconInfoBadge,
     IconWidget, IndeterminateProgressBar, InfoBadge, PrimarySplitPushButton,
     PushButton, SpinBox, SplitPushButton, SubtitleLabel,
-    SwitchButton)
+    SwitchButton, ToolButton)
 import resource_rc
 
 class Ui_mainwindow(object):
     def setupUi(self, mainwindow):
         if not mainwindow.objectName():
             mainwindow.setObjectName(u"mainwindow")
-        mainwindow.resize(850, 698)
+        mainwindow.resize(850, 713)
         font = QFont()
         font.setFamilies([u"Microsoft YaHei UI"])
         mainwindow.setFont(font)
-        self.horizontalLayout_9 = QHBoxLayout(mainwindow)
-        self.horizontalLayout_9.setObjectName(u"horizontalLayout_9")
+        self.horizontalLayout_13 = QHBoxLayout(mainwindow)
+        self.horizontalLayout_13.setObjectName(u"horizontalLayout_13")
         self.bgWidget = QWidget(mainwindow)
         self.bgWidget.setObjectName(u"bgWidget")
         self.verticalLayout_8 = QVBoxLayout(self.bgWidget)
@@ -183,10 +183,12 @@ class Ui_mainwindow(object):
 
         self.verticalLayout_6.addWidget(self.SubtitleLabel_2)
 
+        self.horizontalLayout_9 = QHBoxLayout()
+        self.horizontalLayout_9.setObjectName(u"horizontalLayout_9")
         self.playCardWidget = CardWidget(self.bgWidget)
         self.playCardWidget.setObjectName(u"playCardWidget")
-        self.playCardWidget.setMinimumSize(QSize(0, 180))
-        self.playCardWidget.setMaximumSize(QSize(16777215, 180))
+        self.playCardWidget.setMinimumSize(QSize(0, 120))
+        self.playCardWidget.setMaximumSize(QSize(16777215, 120))
         self.verticalLayout_5 = QVBoxLayout(self.playCardWidget)
         self.verticalLayout_5.setObjectName(u"verticalLayout_5")
         self.verticalLayout_5.setContentsMargins(20, 20, 20, 20)
@@ -241,40 +243,123 @@ class Ui_mainwindow(object):
 
         self.verticalLayout_5.addLayout(self.horizontalLayout_6)
 
+
+        self.horizontalLayout_9.addWidget(self.playCardWidget)
+
+        self.playCardWidget_2 = CardWidget(self.bgWidget)
+        self.playCardWidget_2.setObjectName(u"playCardWidget_2")
+        self.playCardWidget_2.setMinimumSize(QSize(0, 120))
+        self.playCardWidget_2.setMaximumSize(QSize(16777215, 120))
+        self.verticalLayout_10 = QVBoxLayout(self.playCardWidget_2)
+        self.verticalLayout_10.setObjectName(u"verticalLayout_10")
+        self.verticalLayout_10.setContentsMargins(20, 20, 20, 20)
+        self.horizontalLayout_10 = QHBoxLayout()
+        self.horizontalLayout_10.setSpacing(5)
+        self.horizontalLayout_10.setObjectName(u"horizontalLayout_10")
+        self.pageJumpShowLabel = QLabel(self.playCardWidget_2)
+        self.pageJumpShowLabel.setObjectName(u"pageJumpShowLabel")
+        self.pageJumpShowLabel.setMinimumSize(QSize(90, 0))
+        self.pageJumpShowLabel.setMaximumSize(QSize(90, 16777215))
+
+        self.horizontalLayout_10.addWidget(self.pageJumpShowLabel)
+
+        self.horizontalSpacer_2 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        self.horizontalLayout_10.addItem(self.horizontalSpacer_2)
+
+        self.pageJumpSpinBox = SpinBox(self.playCardWidget_2)
+        self.pageJumpSpinBox.setObjectName(u"pageJumpSpinBox")
+        self.pageJumpSpinBox.setMinimumSize(QSize(135, 33))
+        self.pageJumpSpinBox.setMaximumSize(QSize(135, 33))
+        self.pageJumpSpinBox.setMinimum(1)
+
+        self.horizontalLayout_10.addWidget(self.pageJumpSpinBox)
+
+        self.pageJumpToolButton = ToolButton(self.playCardWidget_2)
+        self.pageJumpToolButton.setObjectName(u"pageJumpToolButton")
+        self.pageJumpToolButton.setMinimumSize(QSize(40, 33))
+        self.pageJumpToolButton.setMaximumSize(QSize(40, 33))
+        self.pageJumpToolButton.setIconSize(QSize(10, 10))
+
+        self.horizontalLayout_10.addWidget(self.pageJumpToolButton)
+
+
+        self.verticalLayout_10.addLayout(self.horizontalLayout_10)
+
+        self.horizontalLayout_12 = QHBoxLayout()
+        self.horizontalLayout_12.setSpacing(10)
+        self.horizontalLayout_12.setObjectName(u"horizontalLayout_12")
+        self.infoShowLabel = QLabel(self.playCardWidget_2)
+        self.infoShowLabel.setObjectName(u"infoShowLabel")
+        self.infoShowLabel.setMinimumSize(QSize(90, 0))
+        self.infoShowLabel.setMaximumSize(QSize(90, 16777215))
+
+        self.horizontalLayout_12.addWidget(self.infoShowLabel)
+
+        self.horizontalSpacer_3 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        self.horizontalLayout_12.addItem(self.horizontalSpacer_3)
+
+        self.infoPushButton = PushButton(self.playCardWidget_2)
+        self.infoPushButton.setObjectName(u"infoPushButton")
+        self.infoPushButton.setMinimumSize(QSize(180, 0))
+        self.infoPushButton.setMaximumSize(QSize(180, 16777215))
+
+        self.horizontalLayout_12.addWidget(self.infoPushButton)
+
+
+        self.verticalLayout_10.addLayout(self.horizontalLayout_12)
+
+
+        self.horizontalLayout_9.addWidget(self.playCardWidget_2)
+
+        self.horizontalLayout_9.setStretch(0, 1)
+        self.horizontalLayout_9.setStretch(1, 1)
+
+        self.verticalLayout_6.addLayout(self.horizontalLayout_9)
+
+        self.playCardWidget_3 = CardWidget(self.bgWidget)
+        self.playCardWidget_3.setObjectName(u"playCardWidget_3")
+        self.playCardWidget_3.setMinimumSize(QSize(0, 80))
+        self.playCardWidget_3.setMaximumSize(QSize(16777215, 80))
+        self.horizontalLayout_15 = QHBoxLayout(self.playCardWidget_3)
+        self.horizontalLayout_15.setSpacing(20)
+        self.horizontalLayout_15.setObjectName(u"horizontalLayout_15")
+        self.horizontalLayout_15.setContentsMargins(20, 18, 20, 18)
         self.horizontalLayout_5 = QHBoxLayout()
         self.horizontalLayout_5.setSpacing(10)
         self.horizontalLayout_5.setObjectName(u"horizontalLayout_5")
-        self.playButton = PushButton(self.playCardWidget)
+        self.playButton = PushButton(self.playCardWidget_3)
         self.playButton.setObjectName(u"playButton")
         self.playButton.setMinimumSize(QSize(80, 40))
         self.playButton.setMaximumSize(QSize(80, 40))
 
         self.horizontalLayout_5.addWidget(self.playButton)
 
-        self.stopButton = PushButton(self.playCardWidget)
+        self.stopButton = PushButton(self.playCardWidget_3)
         self.stopButton.setObjectName(u"stopButton")
         self.stopButton.setMinimumSize(QSize(80, 40))
         self.stopButton.setMaximumSize(QSize(80, 40))
 
         self.horizontalLayout_5.addWidget(self.stopButton)
 
-        self.resetButton = PushButton(self.playCardWidget)
+        self.resetButton = PushButton(self.playCardWidget_3)
         self.resetButton.setObjectName(u"resetButton")
         self.resetButton.setMinimumSize(QSize(80, 40))
         self.resetButton.setMaximumSize(QSize(80, 40))
 
         self.horizontalLayout_5.addWidget(self.resetButton)
 
-        self.scrollEnableSwitch = CheckBox(self.playCardWidget)
+        self.scrollEnableSwitch = CheckBox(self.playCardWidget_3)
         self.scrollEnableSwitch.setObjectName(u"scrollEnableSwitch")
 
         self.horizontalLayout_5.addWidget(self.scrollEnableSwitch)
 
 
-        self.verticalLayout_5.addLayout(self.horizontalLayout_5)
+        self.horizontalLayout_15.addLayout(self.horizontalLayout_5)
 
 
-        self.verticalLayout_6.addWidget(self.playCardWidget)
+        self.verticalLayout_6.addWidget(self.playCardWidget_3)
 
         self.currentCardWidget = CardWidget(self.bgWidget)
         self.currentCardWidget.setObjectName(u"currentCardWidget")
@@ -369,7 +454,7 @@ class Ui_mainwindow(object):
         self.verticalLayout_8.addLayout(self.verticalLayout_6)
 
 
-        self.horizontalLayout_9.addWidget(self.bgWidget)
+        self.horizontalLayout_13.addWidget(self.bgWidget)
 
 
         self.retranslateUi(mainwindow)
@@ -396,6 +481,9 @@ class Ui_mainwindow(object):
         self.currentPageLabel.setText(QCoreApplication.translate("mainwindow", u"1 / 1", None))
         self.currentIndexShowLabel.setText(QCoreApplication.translate("mainwindow", u"\u5e8f\u53f7\uff1a", None))
         self.currentIndexLabel.setText(QCoreApplication.translate("mainwindow", u"1 / 1", None))
+        self.pageJumpShowLabel.setText(QCoreApplication.translate("mainwindow", u"\u64ad\u653e\u9875\u7801\u8df3\u8f6c", None))
+        self.infoShowLabel.setText(QCoreApplication.translate("mainwindow", u"\u8bb2\u7a3f\u4fe1\u606f\u7edf\u8ba1", None))
+        self.infoPushButton.setText(QCoreApplication.translate("mainwindow", u"\u4fe1\u606f\u7edf\u8ba1", None))
         self.playButton.setText(QCoreApplication.translate("mainwindow", u"\u64ad\u653e", None))
         self.stopButton.setText(QCoreApplication.translate("mainwindow", u"\u505c\u6b62", None))
         self.resetButton.setText(QCoreApplication.translate("mainwindow", u"\u91cd\u7f6e", None))
