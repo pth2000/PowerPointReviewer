@@ -1,10 +1,8 @@
-<div style="text-align: center;">
-    <h1 style="text-align: center;">
-        PowerPointReviewer
-    </h1>
-    <p style="text-align: center;">
-        一个 PowerPoint 讲稿朗读审阅工具
-    </p>
+<div align="center">
+<!-- Title: -->
+  <h1>PowerPointReviewer</h1>
+<!-- Short description: -->
+  <p>一个 PowerPoint 讲稿朗读审阅工具</p>
 </div>
 
 ![截图](./image/screenshots.png)
