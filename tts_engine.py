@@ -44,10 +44,10 @@ class TTSEngine:
     def get_voices_list_local(self):
         voices_list = []
         for voice in self.voices:
-            match = re.search(r'Tokens\\([^ ]+)', str(voice))
+            match = re.search(r'name=([^\n]+)', str(voice))
             if match:
-                voice_string = match.group(1).strip()
-                voices_list.append(voice_string)
+                voice_name = match.group(1).strip()
+                voices_list.append(voice_name)
         return voices_list
 
     def get_voices_list_online(self):

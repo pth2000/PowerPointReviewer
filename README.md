@@ -42,6 +42,12 @@
 
 您可以使用本软件导入，快速预览效果，了解其实现方式。
 
+## 进阶方法
+
+在Windows系统中，本地TTS功能通过调用SAPI 5 text-to-speech (TTS) engine来实现，默认引擎均为微软的普通语音包，发音较为生硬。
+
+推荐本地部署[NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)，能够为本软件提供微软自然语音的SAPI 5 TTS引擎。下载本地自然语音包后，启动相关功能即可，具体部署方法请参见该项目文档。
+
 ## 如何打包
 
 本项目提供Windows可执行文件。如果您想从代码重新编译本项目，您可以参考以下指令。

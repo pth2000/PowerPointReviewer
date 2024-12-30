@@ -936,7 +936,7 @@ class Window(SplitFluentWindow):
 
 
 if __name__ == '__main__':
-    VERSION = '1.0.2'
+    VERSION = '1.0.3'
     tts = TTSEngine()
     app = QApplication(sys.argv)  # 声明应用程序
     w = Window()  # 声明窗口
