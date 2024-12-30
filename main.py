@@ -317,13 +317,13 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         """按标记符分割讲稿"""
         notes_list = []
         for page in range(1, len(self.notes) + 1):
-            note_text = self.notes[page].strip()
+            note_text = re.sub(r'[\x00-\x1f\x7f]+', '', self.notes[page])
             if note_text:
-                if note_text[-1] == self.mark:  # 按分隔符分割
+                if note_text[-1] == self.mark:
                     note_text = note_text[:-1]
-            note_list = note_text.split(self.mark)
+            note_list = note_text.split(self.mark)  # 按分隔符分割
             for one_note in note_list:
-                notes_list.append({'page': page, 'text': one_note.strip("\n")})
+                notes_list.append({'page': page, 'text': one_note.strip()})
         self.notes_list = notes_list
         print('讲稿分割完毕')
 
