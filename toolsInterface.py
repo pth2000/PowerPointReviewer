@@ -18,22 +18,28 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QSizePolicy,
     QSpacerItem, QVBoxLayout, QWidget)
 
-from qfluentwidgets import (CaptionLabel, CardWidget, PushButton, SubtitleLabel)
+from qfluentwidgets import (CaptionLabel, CardWidget, PushButton, ScrollArea,
+    SubtitleLabel)
 import resource_rc
 
 class Ui_toolsInterface(object):
     def setupUi(self, toolsInterface):
         if not toolsInterface.objectName():
             toolsInterface.setObjectName(u"toolsInterface")
-        toolsInterface.resize(850, 412)
+        toolsInterface.resize(850, 720)
         self.horizontalLayout = QHBoxLayout(toolsInterface)
         self.horizontalLayout.setObjectName(u"horizontalLayout")
-        self.bgWidget = QWidget(toolsInterface)
-        self.bgWidget.setObjectName(u"bgWidget")
-        self.verticalLayout_8 = QVBoxLayout(self.bgWidget)
-        self.verticalLayout_8.setObjectName(u"verticalLayout_8")
-        self.verticalLayout_8.setContentsMargins(20, 50, 20, 20)
-        self.importWidget = QWidget(self.bgWidget)
+        self.bgScrollArea = ScrollArea(toolsInterface)
+        self.bgScrollArea.setObjectName(u"bgScrollArea")
+        self.bgScrollArea.setWidgetResizable(True)
+        self.scrollAreaWidgetContents = QWidget()
+        self.scrollAreaWidgetContents.setObjectName(u"scrollAreaWidgetContents")
+        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 830, 700))
+        self.verticalLayout = QVBoxLayout(self.scrollAreaWidgetContents)
+        self.verticalLayout.setSpacing(6)
+        self.verticalLayout.setObjectName(u"verticalLayout")
+        self.verticalLayout.setContentsMargins(20, 20, 20, 20)
+        self.importWidget = QWidget(self.scrollAreaWidgetContents)
         self.importWidget.setObjectName(u"importWidget")
         self.verticalLayout_2 = QVBoxLayout(self.importWidget)
         self.verticalLayout_2.setSpacing(5)
@@ -160,14 +166,15 @@ class Ui_toolsInterface(object):
         self.verticalLayout_2.addWidget(self.CardWidget_3)
 
 
-        self.verticalLayout_8.addWidget(self.importWidget)
+        self.verticalLayout.addWidget(self.importWidget)
 
-        self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        self.verticalSpacer = QSpacerItem(20, 353, QSizePolicy.Minimum, QSizePolicy.Expanding)
 
-        self.verticalLayout_8.addItem(self.verticalSpacer)
+        self.verticalLayout.addItem(self.verticalSpacer)
 
+        self.bgScrollArea.setWidget(self.scrollAreaWidgetContents)
 
-        self.horizontalLayout.addWidget(self.bgWidget)
+        self.horizontalLayout.addWidget(self.bgScrollArea)
 
 
         self.retranslateUi(toolsInterface)

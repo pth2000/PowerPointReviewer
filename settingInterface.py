@@ -19,23 +19,29 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QSizePolicy,
     QSpacerItem, QVBoxLayout, QWidget)
 
 from qfluentwidgets import (CaptionLabel, CardWidget, ComboBox, DoubleSpinBox,
-    IconWidget, PrimaryPushButton, PushButton, SpinBox,
-    SubtitleLabel, ToolButton, TransparentToolButton)
+    IconWidget, PrimaryPushButton, PushButton, ScrollArea,
+    SpinBox, SubtitleLabel, ToolButton, TransparentToolButton)
 import resource_rc
 
 class Ui_settingInterface(object):
     def setupUi(self, settingInterface):
         if not settingInterface.objectName():
             settingInterface.setObjectName(u"settingInterface")
-        settingInterface.resize(858, 745)
+        settingInterface.resize(850, 720)
         self.horizontalLayout_3 = QHBoxLayout(settingInterface)
         self.horizontalLayout_3.setObjectName(u"horizontalLayout_3")
-        self.bgWidget = QWidget(settingInterface)
-        self.bgWidget.setObjectName(u"bgWidget")
-        self.verticalLayout_8 = QVBoxLayout(self.bgWidget)
-        self.verticalLayout_8.setObjectName(u"verticalLayout_8")
-        self.verticalLayout_8.setContentsMargins(20, 50, 20, 20)
-        self.importWidget = QWidget(self.bgWidget)
+        self.bgScrollArea = ScrollArea(settingInterface)
+        self.bgScrollArea.setObjectName(u"bgScrollArea")
+        self.bgScrollArea.setWidgetResizable(True)
+        self.scrollAreaWidgetContents = QWidget()
+        self.scrollAreaWidgetContents.setObjectName(u"scrollAreaWidgetContents")
+        self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 830, 700))
+        self.scrollAreaWidgetContents.setStyleSheet(u"background: transparent;")
+        self.verticalLayout_4 = QVBoxLayout(self.scrollAreaWidgetContents)
+        self.verticalLayout_4.setSpacing(6)
+        self.verticalLayout_4.setObjectName(u"verticalLayout_4")
+        self.verticalLayout_4.setContentsMargins(20, 20, 20, 20)
+        self.importWidget = QWidget(self.scrollAreaWidgetContents)
         self.importWidget.setObjectName(u"importWidget")
         self.verticalLayout_2 = QVBoxLayout(self.importWidget)
         self.verticalLayout_2.setSpacing(5)
@@ -197,10 +203,7 @@ class Ui_settingInterface(object):
 
         self.verticalLayout_2.addWidget(self.CardWidget_3)
 
-
-        self.verticalLayout_8.addWidget(self.importWidget)
-
-        self.CardWidget_4 = CardWidget(self.bgWidget)
+        self.CardWidget_4 = CardWidget(self.importWidget)
         self.CardWidget_4.setObjectName(u"CardWidget_4")
         self.horizontalLayout_15 = QHBoxLayout(self.CardWidget_4)
         self.horizontalLayout_15.setObjectName(u"horizontalLayout_15")
@@ -234,18 +237,22 @@ class Ui_settingInterface(object):
         self.horizontalLayout_15.addWidget(self.savePushButton)
 
 
-        self.verticalLayout_8.addWidget(self.CardWidget_4)
+        self.verticalLayout_2.addWidget(self.CardWidget_4)
+
+
+        self.verticalLayout_4.addWidget(self.importWidget)
 
         self.verticalLayout_6 = QVBoxLayout()
+        self.verticalLayout_6.setSpacing(5)
         self.verticalLayout_6.setObjectName(u"verticalLayout_6")
-        self.SubtitleLabel_2 = SubtitleLabel(self.bgWidget)
+        self.SubtitleLabel_2 = SubtitleLabel(self.scrollAreaWidgetContents)
         self.SubtitleLabel_2.setObjectName(u"SubtitleLabel_2")
         self.SubtitleLabel_2.setMinimumSize(QSize(0, 30))
         self.SubtitleLabel_2.setMaximumSize(QSize(16777215, 30))
 
         self.verticalLayout_6.addWidget(self.SubtitleLabel_2)
 
-        self.importCardWidget_2 = CardWidget(self.bgWidget)
+        self.importCardWidget_2 = CardWidget(self.scrollAreaWidgetContents)
         self.importCardWidget_2.setObjectName(u"importCardWidget_2")
         self.importCardWidget_2.setMinimumSize(QSize(0, 80))
         self.importCardWidget_2.setMaximumSize(QSize(16777215, 80))
@@ -287,7 +294,7 @@ class Ui_settingInterface(object):
 
         self.verticalLayout_6.addWidget(self.importCardWidget_2)
 
-        self.importCardWidget = CardWidget(self.bgWidget)
+        self.importCardWidget = CardWidget(self.scrollAreaWidgetContents)
         self.importCardWidget.setObjectName(u"importCardWidget")
         self.importCardWidget.setMinimumSize(QSize(0, 80))
         self.importCardWidget.setMaximumSize(QSize(16777215, 80))
@@ -337,10 +344,11 @@ class Ui_settingInterface(object):
         self.verticalLayout_6.addItem(self.verticalSpacer)
 
 
-        self.verticalLayout_8.addLayout(self.verticalLayout_6)
+        self.verticalLayout_4.addLayout(self.verticalLayout_6)
 
+        self.bgScrollArea.setWidget(self.scrollAreaWidgetContents)
 
-        self.horizontalLayout_3.addWidget(self.bgWidget)
+        self.horizontalLayout_3.addWidget(self.bgScrollArea)
 
 
         self.retranslateUi(settingInterface)
@@ -367,6 +375,6 @@ class Ui_settingInterface(object):
         self.versionLabel.setText(QCoreApplication.translate("settingInterface", u"0.0.0", None))
         self.versionPrimaryPushButton.setText(QCoreApplication.translate("settingInterface", u"\u68c0\u67e5\u66f4\u65b0", None))
         self.copyrightShowLabel.setText(QCoreApplication.translate("settingInterface", u"\u7248\u6743", None))
-        self.copyrightLabel.setText(QCoreApplication.translate("settingInterface", u"Copyright \u00a9 2023 Nagisa", None))
+        self.copyrightLabel.setText(QCoreApplication.translate("settingInterface", u"Copyright \u00a9 2023-2025 Nagisa", None))
     # retranslateUi
 

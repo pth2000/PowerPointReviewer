@@ -11,13 +11,12 @@ from pptx import Presentation
 from docx import Document
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
-from PySide6.QtCore import Signal, QThread, QUrl, QTimer, Qt
+from PySide6.QtCore import Signal, QThread, QUrl, QTimer, Qt, QSize
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtWidgets import QFileDialog, QApplication, QWidget
-from qfluentwidgets import SplitFluentWindow, FluentIcon, InfoBar, InfoBarPosition, \
-    NavigationItemPosition, InfoLevel, setThemeColor, RoundMenu, Action, MessageBoxBase, SubtitleLabel, LineEdit, \
-    MessageBox
-from qframelesswindow import StandardTitleBar
+from qfluentwidgets import (FluentWindow, FluentIcon, InfoBar, InfoBarPosition, NavigationItemPosition,
+                            InfoLevel, setThemeColor, RoundMenu, Action, MessageBoxBase, SubtitleLabel,
+                            LineEdit, MessageBox, SplashScreen)
 
 from Ui_mainwindow import Ui_mainwindow
 from settingInterface import Ui_settingInterface
@@ -64,6 +63,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.file_button_menu.addAction(
             Action(QIcon(':/image/image/word.svg'), '导入 Word', triggered=self.init_word_play))
         self.getFileButton.setFlyout(self.file_button_menu)
+        self.bgScrollArea.enableTransparentBackground()
 
         self.playButton.clicked.connect(self.init_play)
         self.stopButton.clicked.connect(self.stop_audio)
@@ -618,6 +618,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setupUi(self)
+        self.bgScrollArea.enableTransparentBackground()
 
         self.transformPPTPushButton.clicked.connect(self.write_to_ppt)
         self.transformWordPushButton.clicked.connect(self.write_to_word)
@@ -797,6 +798,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.versionLabel.setText(VERSION)
         self.rateSpinBox.setValue(tts.get_rate())
         self.volumeDoubleSpinBox.setValue(tts.get_volume())
+        self.bgScrollArea.enableTransparentBackground()
 
         self.savePushButton.clicked.connect(self.save_setting)
         self.versionPrimaryPushButton.clicked.connect(self.get_update)
@@ -910,33 +912,36 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self.open_update_url(url)
 
 
-class Window(SplitFluentWindow):
+class Window(FluentWindow):
     """主窗体"""
 
     def __init__(self):
         super().__init__()
         setThemeColor('#B7472A')
-        self.resize(850, 670)
+        self.resize(850, 750)
+        # 设置标题
+        self.setWindowTitle('PowerPointReviewer')
+        self.setWindowIcon(QIcon(':/image/image/ppt_ico.svg'))
+        # 设置启动页
+        self.splashScreen = SplashScreen(self.windowIcon(), self)
+        self.splashScreen.setIconSize(QSize(106, 106))
+        self.show()
+        # 加载页面
         self.ppt_r = PPTReviewer(self)
         self.setting_interface = SettingInterface(self)
         self.tools_interface = ToolsInterface(self)
         self.addSubInterface(self.ppt_r, FluentIcon.HOME, '主页')
         self.addSubInterface(self.tools_interface, FluentIcon.APPLICATION, '实用工具')
         self.addSubInterface(self.setting_interface, FluentIcon.SETTING, '设置', NavigationItemPosition.BOTTOM)
-
-        # 设置标题栏
-        self.setTitleBar(StandardTitleBar(self))
-        self.titleBar.raise_()
-        # 设置标题
-        self.setWindowTitle('PowerPointReviewer')
-        self.setWindowIcon(QIcon(':/image/image/ppt_ico.svg'))
+        # 隐藏启动页
+        self.splashScreen.finish()
 
     def click_test(self):
         self.ppt_r.create_success_info_bar('稍安勿躁', '功能还在紧锣密鼓地开发中……')
 
 
 if __name__ == '__main__':
-    VERSION = '1.0.3'
+    VERSION = '1.1.0'
     tts = TTSEngine()
     app = QApplication(sys.argv)  # 声明应用程序
     w = Window()  # 声明窗口
