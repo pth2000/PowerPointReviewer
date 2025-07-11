@@ -580,41 +580,68 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.current_index = index
         self.set_current_label_text()
 
-    def create_success_info_bar(self, title, text):
-        """成功消息框"""
-        InfoBar.success(
-            title=title,
-            content=text,
-            orient=Qt.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
-            duration=2000,
-            parent=self
-        )
+    def create_success_info_bar(self, title: str, text: str) -> None:
+        """创建成功消息框
+        
+        Args:
+            title: 消息标题
+            text: 消息内容
+        """
+        try:
+            InfoBar.success(
+                title=title,
+                content=text,
+                orient=Qt.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=INFO_BAR_DURATIONS['success'],
+                parent=self
+            )
+            logger.info(f"Success message: {title} - {text}")
+        except Exception as e:
+            logger.error(f"Failed to show success info bar: {e}")
 
-    def create_warning_info_bar(self, title, text):
-        """警告消息框"""
-        InfoBar.warning(
-            title=title,
-            content=text,
-            orient=Qt.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
-            duration=3000,
-            parent=self
-        )
+    def create_warning_info_bar(self, title: str, text: str) -> None:
+        """创建警告消息框
+        
+        Args:
+            title: 消息标题
+            text: 消息内容
+        """
+        try:
+            InfoBar.warning(
+                title=title,
+                content=text,
+                orient=Qt.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=INFO_BAR_DURATIONS['warning'],
+                parent=self
+            )
+            logger.warning(f"Warning message: {title} - {text}")
+        except Exception as e:
+            logger.error(f"Failed to show warning info bar: {e}")
 
-    def create_error_info_bar(self, title, text):
-        """错误消息框"""
-        InfoBar.error(
-            title=title,
-            content=text,
-            orient=Qt.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
-            duration=-1,
-            parent=self
-        )
+    def create_error_info_bar(self, title: str, text: str) -> None:
+        """创建错误消息框
+        
+        Args:
+            title: 消息标题
+            text: 消息内容
+        """
+        try:
+            InfoBar.error(
+                title=title,
+                content=text,
+                orient=Qt.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=INFO_BAR_DURATIONS['error'],
+                parent=self
+            )
+            logger.error(f"Error message: {title} - {text}")
+        except Exception as e:
+            logger.error(f"Failed to show error info bar: {e}")
 
     def show_edit_mark_dialog(self):
         """编辑分隔符弹窗"""
@@ -624,54 +651,69 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             print(f'分隔符：{text}')
             self.mark = text
 
-    @staticmethod
-    def s_to_str(s):
-        """将秒转换为时间标签"""
-        if s < 60:
-            return f'{round(s, 2)} 秒'
-        m, s = divmod(s, 60)
-        if m < 60:
-            return f'{round(m)} 分钟 {round(s)} 秒'
-        else:
-            h, m = divmod(m, 60)
-            return f'{round(h)} 小时 {round(m)} 分钟 {round(s)} 秒'
+    def count_words(self) -> int:
+        """字数统计
+        
+        Returns:
+            讲稿总字数
+        """
+        try:
+            text = ''
+            for page in self.notes:
+                text += self.notes[page]
+            return count_chinese_characters(text)
+        except Exception as e:
+            logger.error(f"Error counting words: {e}")
+            return 0
 
-    def count_words(self):
-        """字数统计"""
-        text = ''
-        for page in self.notes:
-            text += self.notes[page]
-        text = re.sub(r'\s+', '', text)
-        return len(text)
-
-    def show_info_dialog(self):
+    def show_info_dialog(self) -> None:
         """显示统计弹窗"""
-        title = '统计信息'
-        words_count = self.count_words()
-        max_duration = max(self.notes_duration_list)
-        max_duration_index = self.notes_duration_list.index(max_duration)
-        min_duration = min(self.notes_duration_list)
-        min_duration_index = self.notes_duration_list.index(min_duration)
-        content_list = [
-            ['页码总计', f'{len(self.notes)} 页'],
-            ['音频总计', f'{len(self.notes_list)} 条'],
-            ['演讲稿字数总计', f'{words_count} 字'],
-            ['音频总时长', f'{self.s_to_str(sum(self.notes_duration_list))}\n'],
-            ['最长音频时长', f'{self.s_to_str(max_duration)}'],
-            ['最长音频索引', f'{max_duration_index}'],
-            ['最长音频所属页码', f'第 {self.notes_list[max_duration_index]["page"]} 页'],
-            ['最短音频时长', f'{self.s_to_str(min_duration)}'],
-            ['最短音频索引', f'{min_duration_index}'],
-            ['最短音频所属页码', f'第 {self.notes_list[min_duration_index]["page"]} 页']
-        ]
+        try:
+            if not self.notes_duration_list or not self.notes_list:
+                self.create_warning_info_bar('统计信息', '请先导入演讲稿后查看统计信息')
+                return
+            
+            title = '统计信息'
+            words_count = self.count_words()
+            
+            # Safely get duration statistics
+            durations = [d for d in self.notes_duration_list if d > 0]
+            if not durations:
+                self.create_warning_info_bar('统计信息', '音频时长信息不可用')
+                return
+                
+            max_duration = max(durations)
+            max_duration_index = self.notes_duration_list.index(max_duration)
+            min_duration = min(durations)
+            min_duration_index = self.notes_duration_list.index(min_duration)
+            
+            content_list = [
+                ['页码总计', f'{len(self.notes)} 页'],
+                ['音频总计', f'{len(self.notes_list)} 条'],
+                ['演讲稿字数总计', f'{words_count} 字'],
+                ['音频总时长', f'{format_duration(sum(self.notes_duration_list))}\n'],
+                ['最长音频时长', f'{format_duration(max_duration)}'],
+                ['最长音频索引', f'{max_duration_index + 1}'],
+                ['最长音频所属页码', f'第 {self.notes_list[max_duration_index]["page"]} 页'],
+                ['最短音频时长', f'{format_duration(min_duration)}'],
+                ['最短音频索引', f'{min_duration_index + 1}'],
+                ['最短音频所属页码', f'第 {self.notes_list[min_duration_index]["page"]} 页']
+            ]
 
-        content = ''
-        for item in content_list:
-            content += f'{item[0]}：{item[1]}\n'
-        dialog = MessageBox(title, content, self)
-        dialog.yesButton.setText('确定')
-        dialog.cancelButton.setVisible(False)
-        dialog.exec()
+            content = ''
+            for item in content_list:
+                content += f'{item[0]}：{item[1]}\n'
+                
+            dialog = MessageBox(title, content, self)
+            dialog.yesButton.setText('确定')
+            dialog.cancelButton.setVisible(False)
+            dialog.exec()
+            
+            logger.info("Displayed statistics dialog")
+            
+        except Exception as e:
+            error_msg = handle_exception(e, "统计信息显示")
+            self.create_error_info_bar('统计错误', error_msg)
 
 
 class SaveThread(QThread):
@@ -1013,57 +1055,92 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setupUi(self)
+        logger.info("Initializing SettingInterface")
 
+        # Setup icons and version info
         self.versionIconWidget.setIcon(QIcon(':/image/image/update.svg'))
         self.copyrightIconWidget.setIcon(QIcon(':/image/image/info.svg'))
         self.githubButton.setIcon(FluentIcon.GITHUB)
         self.giteeButton.setIcon(QIcon(':/image/image/gitee.svg'))
         self.versionLabel.setText(VERSION)
-        self.rateSpinBox.setValue(tts.get_rate())
-        self.volumeDoubleSpinBox.setValue(tts.get_volume())
+        
+        # Initialize TTS settings
+        try:
+            self.rateSpinBox.setValue(tts.get_rate())
+            self.volumeDoubleSpinBox.setValue(tts.get_volume())
+        except Exception as e:
+            logger.warning(f"Failed to load TTS settings: {e}")
+            
         self.bgScrollArea.enableTransparentBackground()
 
+        # Connect event handlers
         self.savePushButton.clicked.connect(self.save_setting)
         self.versionPrimaryPushButton.clicked.connect(self.get_update)
         self.githubButton.clicked.connect(self.open_github_url)
         self.giteeButton.clicked.connect(self.open_gitee_url)
 
+        # Setup TTS engine options
         self.engineSelectComboBox.addItem('本地 TTSx3 引擎')
         self.engineSelectComboBox.addItem('在线 edge-TTS 引擎')
         self.setup_voices_list()
         self.engineSelectComboBox.currentIndexChanged.connect(self.change_tts_engine)
 
+        # Initialize update thread
         self.update_thread = UpdateThread()
         self.update_thread.signal_finish.connect(self.thread_get_update_finish)
 
-    def setup_voices_list(self):
-        voices_list = tts.get_voices_list()
-        self.engineComboBox.clear()
-        for item in voices_list:
-            self.engineComboBox.addItem(item)
-
-    def change_tts_engine(self):
-        if self.engineSelectComboBox.currentIndex() == 0:
-            tts.is_local_mode = True
-        else:
-            tts.is_local_mode = False
-            self.create_warning_info_bar('已选择在线引擎',
-                                         '在线引擎受网络速度影响，导出速度较慢，稳定性较低，请谨慎使用！\n'
-                                         '目前在线引擎不支持调节音量与语速！')
-        self.CardWidget_2.setEnabled(tts.is_local_mode)
-        self.CardWidget_3.setEnabled(tts.is_local_mode)
-        self.setup_voices_list()
-
-    def save_setting(self):
+    def setup_voices_list(self) -> None:
+        """设置语音列表"""
         try:
-            tts.set_rate(self.rateSpinBox.value())
-            tts.set_volume(self.volumeDoubleSpinBox.value())
-            tts.set_voice(self.engineComboBox.currentIndex())
+            voices_list = tts.get_voices_list()
+            self.engineComboBox.clear()
+            for item in voices_list:
+                self.engineComboBox.addItem(item)
+            logger.debug(f"Loaded {len(voices_list)} voices")
         except Exception as e:
-            print(e)
-            self.create_error_info_bar('保存设置错误', f'详情{e}')
-        else:
+            logger.error(f"Failed to setup voices list: {e}")
+
+    def change_tts_engine(self) -> None:
+        """切换TTS引擎"""
+        try:
+            is_local = self.engineSelectComboBox.currentIndex() == 0
+            tts.switch_mode(is_local)
+            
+            if not is_local:
+                self.create_warning_info_bar('已选择在线引擎',
+                                             '在线引擎受网络速度影响，导出速度较慢，稳定性较低，请谨慎使用！\n'
+                                             '目前在线引擎不支持调节音量与语速！')
+            
+            # Update UI based on engine capabilities
+            self.CardWidget_2.setEnabled(is_local)
+            self.CardWidget_3.setEnabled(is_local)
+            self.setup_voices_list()
+            
+        except Exception as e:
+            error_msg = handle_exception(e, "TTS引擎切换")
+            self.create_error_info_bar('引擎切换错误', error_msg)
+
+    def save_setting(self) -> None:
+        """保存TTS设置"""
+        try:
+            # Validate settings before saving
+            rate = self.rateSpinBox.value()
+            volume = self.volumeDoubleSpinBox.value()
+            voice_index = self.engineComboBox.currentIndex()
+            
+            # Apply settings
+            tts.set_rate(rate)
+            tts.set_volume(volume)
+            tts.set_voice(voice_index)
+            
             self.create_success_info_bar('保存设置成功', '重新导入文件后生效。')
+            logger.info(f"Saved TTS settings: rate={rate}, volume={volume}, voice_index={voice_index}")
+            
+        except TTSError as e:
+            self.create_error_info_bar('TTS设置错误', str(e))
+        except Exception as e:
+            error_msg = handle_exception(e, "保存TTS设置")
+            self.create_error_info_bar('保存设置错误', error_msg)
 
     def get_update(self):
         """获取版本更新"""
@@ -1081,17 +1158,19 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
     @staticmethod
     def open_github_url():
-        webbrowser.open('https://github.com/pth2000')
+        """打开GitHub链接"""
+        webbrowser.open(GITHUB_URL)
 
     @staticmethod
     def open_gitee_url():
-        webbrowser.open('https://gitee.com/pth2000')
+        """打开Gitee链接"""
+        webbrowser.open(GITEE_URL)
 
     @staticmethod
     def open_update_url(url):
         webbrowser.open(url)
 
-    def create_success_info_bar(self, title, text):
+    def create_success_info_bar(self, title: str, text: str) -> None:
         """成功消息框"""
         InfoBar.success(
             title=title,
@@ -1099,11 +1178,11 @@ class SettingInterface(QWidget, Ui_settingInterface):
             orient=Qt.Horizontal,
             isClosable=True,
             position=InfoBarPosition.TOP,
-            duration=5000,
+            duration=INFO_BAR_DURATIONS['update'],
             parent=self
         )
 
-    def create_warning_info_bar(self, title, text):
+    def create_warning_info_bar(self, title: str, text: str) -> None:
         """警告消息框"""
         InfoBar.warning(
             title=title,
@@ -1111,11 +1190,11 @@ class SettingInterface(QWidget, Ui_settingInterface):
             orient=Qt.Horizontal,
             isClosable=True,
             position=InfoBarPosition.TOP,
-            duration=5000,
+            duration=INFO_BAR_DURATIONS['update'],
             parent=self
         )
 
-    def create_error_info_bar(self, title, text):
+    def create_error_info_bar(self, title: str, text: str) -> None:
         """错误消息框"""
         InfoBar.error(
             title=title,
@@ -1123,7 +1202,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
             orient=Qt.Horizontal,
             isClosable=True,
             position=InfoBarPosition.TOP,
-            duration=-1,
+            duration=INFO_BAR_DURATIONS['error'],
             parent=self
         )
 
