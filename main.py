@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import sys
@@ -18,10 +19,32 @@ from qfluentwidgets import (FluentWindow, FluentIcon, InfoBar, InfoBarPosition, 
                             InfoLevel, setThemeColor, RoundMenu, Action, MessageBoxBase, SubtitleLabel,
                             LineEdit, MessageBox, SplashScreen)
 
+# Import our custom modules
+from config import (
+    VERSION, APP_NAME, COPYRIGHT, WINDOW_SIZE, SPLASH_ICON_SIZE,
+    DEFAULT_THEME_COLOR, WORD_THEME_COLOR, PPT_THEME_COLOR,
+    TEMP_DIR, COUNTDOWN_TEMP_DIR, DEFAULT_MARK, DEFAULT_COUNTDOWN_MAX,
+    SUPPORTED_PPT_EXTENSIONS, SUPPORTED_WORD_EXTENSIONS, SUPPORTED_AUDIO_EXTENSIONS,
+    INFO_BAR_DURATIONS, GITHUB_URL, GITEE_URL, UPDATE_API_URL, UI_TEXT,
+    ensure_temp_directories
+)
+from exceptions import (
+    PowerPointReviewerError, FileImportError, TTSError, AudioProcessingError,
+    handle_exception, safe_execute
+)
+from logger_utils import get_logger, setup_logger
+from utils import (
+    sanitize_text_for_tts, validate_file_path, safe_file_operation,
+    clean_audio_files, get_audio_duration, format_duration,
+    safe_json_save, count_chinese_characters, generate_filename_with_suffix
+)
 from Ui_mainwindow import Ui_mainwindow
 from settingInterface import Ui_settingInterface
 from toolsInterface import Ui_toolsInterface
 from tts_engine import TTSEngine
+
+# Setup application logger
+logger = get_logger()
 
 
 class PPTReviewer(QWidget, Ui_mainwindow):
@@ -30,11 +53,15 @@ class PPTReviewer(QWidget, Ui_mainwindow):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setupUi(self)
+        logger.info("Initializing PPTReviewer")
 
+        # Initialize media player
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.player.setAudioOutput(self.audio_output)
         self.player.mediaStatusChanged.connect(self.media_status_changed)
+        
+        # Initialize data structures
         self.media_list = []  # 存储音频文件的列表
         self.current_index = 0  # 当前播放的音频文件索引
         self.wait_current_index = 0  # 倒计时索引
@@ -45,26 +72,59 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.notes_duration_list = [0]
         self.is_play_notes = False
         self.is_import = False
-        self.mark = '●'
+        self.mark = DEFAULT_MARK
 
+        # Setup UI icons and components
+        self._setup_ui_components()
+        
+        # Setup event handlers
+        self._setup_event_handlers()
+        
+        # Initialize timer for audio transitions
+        self.next_timer = QTimer(self)
+        self.next_timer.timeout.connect(self.timeout_play_next_audio)
+
+        # Setup temporary directories
+        self.wav_temp_path = TEMP_DIR
+        self.countdown_wav_temp_path = COUNTDOWN_TEMP_DIR
+        ensure_temp_directories()
+
+        # Initialize worker thread
+        self.save_thread = SaveThread()
+        self.save_thread.signal_import_index.connect(self.thread_print_index)
+        self.save_thread.signal_finish.connect(self.thread_save_finish)
+
+        # Check initial import status
+        self.check_import()
+        logger.info("PPTReviewer initialized successfully")
+
+    def _setup_ui_components(self) -> None:
+        """Setup UI components and icons."""
+        # Set up icons
         self.partingIconWidget.setIcon(QIcon(':/image/image/parting.svg'))
         self.fileIconWidget.setIcon(QIcon(':/image/image/Folder.svg'))
         self.currentIconWidget.setIcon(QIcon(':/image/image/countdown.svg'))
         self.currentTimeIconWidget.setIcon(QIcon(':/image/image/Clock.svg'))
         self.pageJumpToolButton.setIcon(FluentIcon.ACCEPT_MEDIUM)
-        # self.infoPushButton.setIcon(FluentIcon.IOT)
         self.playButton.setIcon(QIcon(':/image/image/play.svg'))
         self.stopButton.setIcon(QIcon(':/image/image/stop.svg'))
         self.resetButton.setIcon(QIcon(':/image/image/backward.svg'))
+        
+        # Hide progress bar initially
         self.IndeterminateProgressBar.setVisible(False)
 
+        # Setup file button and menu
         self.getFileButton.setIcon(QIcon(':/image/image/ppt.svg'))
         self.file_button_menu = RoundMenu(parent=self)
         self.file_button_menu.addAction(
             Action(QIcon(':/image/image/word.svg'), '导入 Word', triggered=self.init_word_play))
         self.getFileButton.setFlyout(self.file_button_menu)
+        
+        # Enable transparent background
         self.bgScrollArea.enableTransparentBackground()
 
+    def _setup_event_handlers(self) -> None:
+        """Setup event handlers for UI components."""
         self.playButton.clicked.connect(self.init_play)
         self.stopButton.clicked.connect(self.stop_audio)
         self.resetButton.clicked.connect(self.reset_audio)
@@ -72,40 +132,27 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.editMarkPushButton.clicked.connect(self.show_edit_mark_dialog)
         self.pageJumpToolButton.clicked.connect(self.jump_page)
         self.infoPushButton.clicked.connect(self.show_info_dialog)
-
-        self.next_timer = QTimer(self)
-        self.next_timer.timeout.connect(self.timeout_play_next_audio)  # 当计时器超时时连接到play_next_audio方法
-
-        self.wav_temp_path = './temp'
-        self.countdown_wav_temp_path = './temp/countdown'
-
-        if not os.path.exists(self.wav_temp_path):
-            os.mkdir(self.wav_temp_path)
-        if not os.path.exists(self.countdown_wav_temp_path):
-            os.mkdir(self.countdown_wav_temp_path)
-
-        self.save_thread = SaveThread()
-        self.save_thread.signal_import_index.connect(self.thread_print_index)
-        self.save_thread.signal_finish.connect(self.thread_save_finish)
-
-        self.check_import()
-
-    def check_import(self):
-        """检查导入状态"""
-        if self.is_import:
-            self.playCardWidget.setEnabled(True)
-            self.playCardWidget_2.setEnabled(True)
-            self.playCardWidget_3.setEnabled(True)
-            self.statusLabel.setText('已导入')
-            self.IconInfoBadge.setLevel(InfoLevel.SUCCESS)
-            self.IconInfoBadge.setIcon(FluentIcon.ACCEPT_MEDIUM)
-        else:
-            self.playCardWidget.setEnabled(False)
-            self.playCardWidget_2.setEnabled(False)
-            self.playCardWidget_3.setEnabled(False)
-            self.statusLabel.setText('未导入')
-            self.IconInfoBadge.setLevel(InfoLevel.INFOAMTION)
-            self.IconInfoBadge.setIcon(FluentIcon.ACCEPT_MEDIUM)
+    def check_import(self) -> None:
+        """检查导入状态并更新UI"""
+        try:
+            if self.is_import:
+                self.playCardWidget.setEnabled(True)
+                self.playCardWidget_2.setEnabled(True)
+                self.playCardWidget_3.setEnabled(True)
+                self.statusLabel.setText(UI_TEXT['status']['imported'])
+                self.IconInfoBadge.setLevel(InfoLevel.SUCCESS)
+                self.IconInfoBadge.setIcon(FluentIcon.ACCEPT_MEDIUM)
+                logger.debug("UI updated to imported state")
+            else:
+                self.playCardWidget.setEnabled(False)
+                self.playCardWidget_2.setEnabled(False)
+                self.playCardWidget_3.setEnabled(False)
+                self.statusLabel.setText(UI_TEXT['status']['not_imported'])
+                self.IconInfoBadge.setLevel(InfoLevel.INFOAMTION)
+                self.IconInfoBadge.setIcon(FluentIcon.ACCEPT_MEDIUM)
+                logger.debug("UI updated to not imported state")
+        except Exception as e:
+            logger.error(f"Error updating import status UI: {e}")
 
     def play_audio(self):
         """播放音频文件"""
@@ -175,106 +222,238 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.wait_current_index += 1
         self.play_audio()
 
-    def init_word_play(self):
-        """初始化word"""
+    def init_word_play(self) -> None:
+        """初始化Word文档导入"""
+        logger.info("Starting Word document import")
         self.getFileButton.setEnabled(False)
-        self.get_word_path()  # 获取word文档地址
-        if not self.note_file_path:  # 未选择地址，警告
-            print('文件未导入！')
-            self.create_warning_info_bar('导入已取消', '请重新选择文件进行导入。')
-            self.getFileButton.setEnabled(True)
-            return False
-        self.notesPathLabel.setText(self.note_file_path)  # 设置label
-
-        setThemeColor('#2B579A')
-
+        
         try:
-            self.get_word_notes_dict()  # 解析word备注
-        except Exception as e:  # 解析失败，报错
-            print(e)
-            self.create_error_info_bar('Word 文件解析错误', f'详情：{e}')
-            self.getFileButton.setEnabled(True)
-            return False
-        self.init_general_play()
+            success, error_msg = self._get_word_path()
+            if not success:
+                if error_msg:
+                    self.create_warning_info_bar(UI_TEXT['messages']['import_cancelled'], error_msg)
+                self.getFileButton.setEnabled(True)
+                return
 
-    def init_ppt_play(self):
-        """初始化PPT"""
+            self.notesPathLabel.setText(self.note_file_path)
+            setThemeColor(WORD_THEME_COLOR)
+
+            success, error_msg = self._parse_word_document()
+            if not success:
+                self.create_error_info_bar('Word 文件解析错误', error_msg)
+                self.getFileButton.setEnabled(True)
+                return
+
+            self.init_general_play()
+            
+        except Exception as e:
+            error_msg = handle_exception(e, "Word导入")
+            self.create_error_info_bar('Word 导入错误', error_msg)
+            self.getFileButton.setEnabled(True)
+
+    def init_ppt_play(self) -> None:
+        """初始化PPT文档导入"""
+        logger.info("Starting PowerPoint document import")
         self.getFileButton.setEnabled(False)
 
-        self.get_ppt_path()
-        if not self.note_file_path:  # 未选择地址，警告
-            print('文件未导入！')
-            self.create_warning_info_bar('导入已取消', '请重新选择文件进行导入。')
-            self.getFileButton.setEnabled(True)
-            return False
-        self.notesPathLabel.setText(self.note_file_path)  # 设置label
-
-        setThemeColor('#B7472A')
-
         try:
-            self.get_ppt_notes_dict()
-        except Exception as e:  # 解析失败，报错
-            print(e)
-            self.create_error_info_bar('PowerPoint 文件解析错误', f'详情：{e}')
-            self.getFileButton.setEnabled(True)
-            return False
-        self.init_general_play()
+            success, error_msg = self._get_ppt_path()
+            if not success:
+                if error_msg:
+                    self.create_warning_info_bar(UI_TEXT['messages']['import_cancelled'], error_msg)
+                self.getFileButton.setEnabled(True)
+                return
 
-    def init_general_play(self):
-        """通用初始化"""
-        try:
-            self.mark_split()  # 分割备注
-        except Exception as e:  # 失败，报错
-            print(e)
-            self.create_error_info_bar('讲稿解析错误', f'详情：{e}')
-            self.getFileButton.setEnabled(True)
-            return False
+            self.notesPathLabel.setText(self.note_file_path)
+            setThemeColor(PPT_THEME_COLOR)
 
-        self.clean_and_reset()
+            success, error_msg = self._parse_ppt_document()
+            if not success:
+                self.create_error_info_bar('PowerPoint 文件解析错误', error_msg)
+                self.getFileButton.setEnabled(True)
+                return
 
-        try:
-            self.clean_temp_folder(self.wav_temp_path)  # 清理缓存语音
-            self.clean_temp_folder(self.countdown_wav_temp_path)  # 清理缓存语音
+            self.init_general_play()
+            
         except Exception as e:
-            print(e)
-            self.create_error_info_bar('缓存清理错误', f'详情：{e}')
+            error_msg = handle_exception(e, "PowerPoint导入")
+            self.create_error_info_bar('PowerPoint 导入错误', error_msg)
             self.getFileButton.setEnabled(True)
-            return False
 
+    def _get_word_path(self) -> tuple[bool, str]:
+        """获取Word文档路径
+        
+        Returns:
+            Tuple of (success, error_message)
+        """
+        selected_files = QFileDialog.getOpenFileName(
+            self, "选择Word文件", "", "Word Files (*.docx)"
+        )
+        
+        self.note_file_path = selected_files[0]
+        if not self.note_file_path:
+            logger.info("Word file selection cancelled by user")
+            return False, ""
+        
+        if not validate_file_path(self.note_file_path, SUPPORTED_WORD_EXTENSIONS):
+            return False, "选择的Word文件无效"
+        
+        self.set_filename()
+        logger.info(f"Selected Word file: {self.note_file_path}")
+        return True, ""
+
+    def _get_ppt_path(self) -> tuple[bool, str]:
+        """获取PowerPoint文档路径
+        
+        Returns:
+            Tuple of (success, error_message)
+        """
+        selected_files = QFileDialog.getOpenFileName(
+            self, "选择PowerPoint文件", "", "PowerPoint Files (*.pptx)"
+        )
+        
+        self.note_file_path = selected_files[0]
+        if not self.note_file_path:
+            logger.info("PowerPoint file selection cancelled by user")
+            return False, ""
+        
+        if not validate_file_path(self.note_file_path, SUPPORTED_PPT_EXTENSIONS):
+            return False, "选择的PowerPoint文件无效"
+        
+        self.set_filename()
+        logger.info(f"Selected PowerPoint file: {self.note_file_path}")
+        return True, ""
+
+    def _parse_word_document(self) -> tuple[bool, str]:
+        """解析Word文档获取讲稿
+        
+        Returns:
+            Tuple of (success, error_message)
+        """
+        success, result, error_msg = safe_execute(
+            self.get_word_notes_dict,
+            context="Word文档解析"
+        )
+        
+        if not success:
+            return False, error_msg
+        
+        logger.info(f"Successfully parsed Word document with {len(self.notes)} pages")
+        return True, ""
+
+    def _parse_ppt_document(self) -> tuple[bool, str]:
+        """解析PowerPoint文档获取讲稿
+        
+        Returns:
+            Tuple of (success, error_message)
+        """
+        success, result, error_msg = safe_execute(
+            self.get_ppt_notes_dict,
+            context="PowerPoint文档解析"
+        )
+        
+        if not success:
+            return False, error_msg
+        
+        logger.info(f"Successfully parsed PowerPoint document with {len(self.notes)} pages")
+        return True, ""
+    def init_general_play(self) -> None:
+        """通用初始化流程"""
+        logger.info("Starting general initialization")
+        
         try:
-            self.save_thread.start()  # 解析成功，开始转换语音
-            self.IndeterminateProgressBar.setVisible(True)
+            # Parse notes with delimiter
+            success, error_msg = self._split_notes_by_mark()
+            if not success:
+                self.create_error_info_bar('讲稿解析错误', error_msg)
+                self.getFileButton.setEnabled(True)
+                return
+
+            # Clean previous state
+            self.clean_and_reset()
+
+            # Clean temporary audio files
+            success, error_msg = self._clean_temp_audio_files()
+            if not success:
+                self.create_error_info_bar('缓存清理错误', error_msg)
+                self.getFileButton.setEnabled(True)
+                return
+
+            # Start TTS conversion in background thread
+            try:
+                self.save_thread.start()
+                self.IndeterminateProgressBar.setVisible(True)
+                logger.info("Started TTS conversion thread")
+            except Exception as e:
+                error_msg = handle_exception(e, "语音转换启动")
+                self.create_error_info_bar('语音转换错误', error_msg)
+                self.getFileButton.setEnabled(True)
+                
         except Exception as e:
-            print(e)
-            self.create_error_info_bar('语音转换错误', f'详情：{e}')
+            error_msg = handle_exception(e, "初始化")
+            self.create_error_info_bar('初始化错误', error_msg)
             self.getFileButton.setEnabled(True)
-            return False
 
-    def clean_and_reset(self):
-        """清理可能已导入的内容"""
-        self.stop_audio()
-        self.player.setSource('')
-        self.media_list = []
-        self.current_index = 0
-        self.is_import = False
-        self.check_import()
+    def _split_notes_by_mark(self) -> tuple[bool, str]:
+        """按标记符分割讲稿
+        
+        Returns:
+            Tuple of (success, error_message)
+        """
+        success, result, error_msg = safe_execute(
+            self.mark_split,
+            context="讲稿分割"
+        )
+        
+        if not success:
+            return False, error_msg
+        
+        logger.info(f"Successfully split notes into {len(self.notes_list)} segments")
+        return True, ""
 
-    def get_word_path(self):
-        """获取word路径"""
-        selected_files = QFileDialog.getOpenFileName(self, "选择Word文件", "", "Word Files (*.docx)")
-        self.note_file_path = selected_files[0]
-        self.set_filename()
+    def _clean_temp_audio_files(self) -> tuple[bool, str]:
+        """清理临时音频文件
+        
+        Returns:
+            Tuple of (success, error_message)
+        """
+        # Clean main temp directory
+        success1, msg1 = clean_audio_files(self.wav_temp_path)
+        if not success1:
+            return False, msg1
+        
+        # Clean countdown temp directory  
+        success2, msg2 = clean_audio_files(self.countdown_wav_temp_path)
+        if not success2:
+            return False, msg2
+        
+        logger.info("Cleaned temporary audio files")
+        return True, ""
 
-    def get_ppt_path(self):
-        """获取ppt路径"""
-        selected_files = QFileDialog.getOpenFileName(self, "选择PowerPoint文件", "", "PowerPoint Files (*.pptx)")
-        self.note_file_path = selected_files[0]
-        self.set_filename()
+    def clean_and_reset(self) -> None:
+        """清理已导入的内容并重置状态"""
+        logger.debug("Cleaning and resetting application state")
+        
+        try:
+            self.stop_audio()
+            self.player.setSource('')
+            self.media_list = []
+            self.current_index = 0
+            self.is_import = False
+            self.check_import()
+            logger.debug("Application state reset successfully")
+        except Exception as e:
+            logger.error(f"Error during clean and reset: {e}")
 
-    def set_filename(self):
+    def set_filename(self) -> None:
         """根据文件路径生成文件名"""
-        filename = os.path.basename(self.note_file_path)
-        self.note_file_name = os.path.splitext(filename)[0]
+        try:
+            filename = os.path.basename(self.note_file_path)
+            self.note_file_name = os.path.splitext(filename)[0]
+            logger.debug(f"Set filename to: {self.note_file_name}")
+        except Exception as e:
+            logger.error(f"Error setting filename: {e}")
+            self.note_file_name = "untitled"
 
     def get_word_notes_dict(self):
         """从word获取讲稿字典"""
@@ -501,27 +680,62 @@ class SaveThread(QThread):
     signal_finish = Signal()
 
     def run(self):
-        self.save_countdown_wav()
-        self.save_wav()
-        self.signal_finish.emit()
+        """运行TTS转换"""
+        try:
+            logger.info("Starting TTS conversion thread")
+            self.save_countdown_wav()
+            self.save_wav()
+            self.signal_finish.emit()
+            logger.info("TTS conversion completed successfully")
+        except Exception as e:
+            logger.error(f"TTS conversion failed: {e}")
+            # Note: In a production app, we'd want to emit an error signal
 
-    def save_wav(self):
+    def save_wav(self) -> None:
         """调用TTS保存文字为wav"""
         info_list = []
+        
         for index, note_dict in enumerate(w.ppt_r.notes_list):
-            path = f'{w.ppt_r.wav_temp_path}/{note_dict["page"]}_{index + 1}.wav'
-            tts.save_file(note_dict['text'], path)
-            audio = File(path)
-            info_list.append(audio.info.length)  # 获取时长
-            self.signal_import_index.emit(index + 1)
+            try:
+                # Sanitize text before TTS conversion
+                text = sanitize_text_for_tts(note_dict['text'])
+                if not text:
+                    logger.warning(f"Empty text after sanitization for note {index + 1}")
+                    info_list.append(0.0)
+                    continue
+                
+                path = f'{w.ppt_r.wav_temp_path}/{note_dict["page"]}_{index + 1}.wav'
+                
+                # Save TTS file
+                tts.save_file(text, path)
+                
+                # Get duration safely
+                duration = get_audio_duration(path)
+                info_list.append(duration)
+                
+                self.signal_import_index.emit(index + 1)
+                logger.debug(f"Generated TTS for note {index + 1}, duration: {duration:.2f}s")
+                
+            except Exception as e:
+                logger.error(f"Failed to generate TTS for note {index + 1}: {e}")
+                info_list.append(0.0)  # Add placeholder duration
+        
         w.ppt_r.notes_duration_list = info_list
+        logger.info(f"Generated {len(info_list)} TTS files")
 
     @staticmethod
-    def save_countdown_wav():
+    def save_countdown_wav() -> None:
         """生成倒计时语音"""
-        for index, time_num in enumerate(range(w.ppt_r.currentSpinBox.maximum(), 0, -1)):
-            tts.save_file_local(f'{time_num}', f'{w.ppt_r.countdown_wav_temp_path}/{time_num}.wav')
-        print('倒计时生成完成')
+        try:
+            countdown_max = w.ppt_r.currentSpinBox.maximum()
+            for time_num in range(countdown_max, 0, -1):
+                path = f'{w.ppt_r.countdown_wav_temp_path}/{time_num}.wav'
+                tts.save_file_local(f'{time_num}', path)
+            
+            logger.info(f"Generated {countdown_max} countdown files")
+        except Exception as e:
+            logger.error(f"Failed to generate countdown files: {e}")
+            raise
 
 
 class UpdateThread(QThread):
@@ -529,36 +743,45 @@ class UpdateThread(QThread):
     signal_finish = Signal(list)
 
     def run(self):
+        """运行更新检查"""
+        logger.info("Starting update check")
         self.get_update()
 
-    def get_update(self):
+    def get_update(self) -> None:
         """HTTP从gitee获取更新"""
         try:
-            response = requests.get("https://gitee.com/api/v5/repos/pth2000/PowerPointReviewer/releases/latest")
-        except Exception as e:
-            print(e)
-            self.signal_finish.emit([2, '获取更新失败', f'详情：{e}'])
-            return False
+            response = requests.get(UPDATE_API_URL, timeout=10)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            error_msg = handle_exception(e, "获取更新")
+            logger.error(f"Update check failed: {e}")
+            self.signal_finish.emit([2, '获取更新失败', error_msg])
+            return
 
         try:
             res = response.json()
             latest_version = res['tag_name']
-            latest_version = latest_version[1:]
+            if latest_version.startswith('v'):
+                latest_version = latest_version[1:]
+            
             latest_version_name = res['name']
             latest_version_time = res['created_at']
             latest_version_download_url = res['assets'][0]['browser_download_url']
 
             if self.compare_versions(VERSION, latest_version):
-                str_update = f'当前版本为最新版\n服务器版本：{latest_version}\n更新时间：{latest_version_time}'
-                self.signal_finish.emit([0, '获取更新成功', str_update])
+                update_msg = f'当前版本为最新版\n服务器版本：{latest_version}\n更新时间：{latest_version_time}'
+                self.signal_finish.emit([0, '获取更新成功', update_msg])
+                logger.info("Already using latest version")
             else:
-                str_update = (f"发现新版本！{VERSION} --> {latest_version}\n"
-                              f"更新内容：{latest_version_name}\n更新时间：{latest_version_time}")
-                self.signal_finish.emit([1, '获取更新成功', str_update, latest_version_download_url])
-        except Exception as e:
-            print(e)
-            self.signal_finish.emit([2, 'HTTP 解析失败', f'详情：{e}'])
-            return False
+                update_msg = (f"发现新版本！{VERSION} --> {latest_version}\n"
+                             f"更新内容：{latest_version_name}\n更新时间：{latest_version_time}")
+                self.signal_finish.emit([1, '获取更新成功', update_msg, latest_version_download_url])
+                logger.info(f"New version available: {latest_version}")
+                
+        except (KeyError, IndexError, ValueError) as e:
+            error_msg = f"HTTP 解析失败: {str(e)}"
+            logger.error(error_msg)
+            self.signal_finish.emit([2, 'HTTP 解析失败', error_msg])
 
     @staticmethod
     def compare_versions(version1, version2):
@@ -917,33 +1140,61 @@ class Window(FluentWindow):
 
     def __init__(self):
         super().__init__()
-        setThemeColor('#B7472A')
-        self.resize(850, 750)
-        # 设置标题
-        self.setWindowTitle('PowerPointReviewer')
+        logger.info(f"Initializing {APP_NAME} v{VERSION}")
+        
+        # Set theme and window properties
+        setThemeColor(DEFAULT_THEME_COLOR)
+        self.resize(*WINDOW_SIZE)
+        self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(':/image/image/ppt_ico.svg'))
-        # 设置启动页
+        
+        # Setup splash screen
         self.splashScreen = SplashScreen(self.windowIcon(), self)
-        self.splashScreen.setIconSize(QSize(106, 106))
+        self.splashScreen.setIconSize(QSize(*SPLASH_ICON_SIZE))
         self.show()
-        # 加载页面
+        
+        # Initialize interfaces
         self.ppt_r = PPTReviewer(self)
         self.setting_interface = SettingInterface(self)
         self.tools_interface = ToolsInterface(self)
+        
+        # Add interfaces to navigation
         self.addSubInterface(self.ppt_r, FluentIcon.HOME, '主页')
         self.addSubInterface(self.tools_interface, FluentIcon.APPLICATION, '实用工具')
         self.addSubInterface(self.setting_interface, FluentIcon.SETTING, '设置', NavigationItemPosition.BOTTOM)
-        # 隐藏启动页
+        
+        # Hide splash screen
         self.splashScreen.finish()
+        logger.info("Application initialized successfully")
 
     def click_test(self):
+        """测试方法"""
         self.ppt_r.create_success_info_bar('稍安勿躁', '功能还在紧锣密鼓地开发中……')
 
 
 if __name__ == '__main__':
-    VERSION = '1.1.0'
-    tts = TTSEngine()
-    app = QApplication(sys.argv)  # 声明应用程序
-    w = Window()  # 声明窗口
-    w.show()
-    sys.exit(app.exec())
+    # Initialize application
+    try:
+        # Setup logging for debug mode
+        setup_logger(console_output=True, level=logging.DEBUG)
+        logger.info(f"Starting {APP_NAME} v{VERSION}")
+        
+        # Initialize TTS engine
+        tts = TTSEngine()
+        
+        # Create Qt application
+        app = QApplication(sys.argv)
+        app.setApplicationName(APP_NAME)
+        app.setApplicationVersion(VERSION)
+        
+        # Create main window
+        w = Window()
+        w.show()
+        
+        # Run application
+        sys.exit(app.exec())
+        
+    except Exception as e:
+        error_msg = handle_exception(e, "应用程序启动")
+        print(f"Failed to start application: {error_msg}")
+        sys.exit(1)
