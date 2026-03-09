@@ -156,234 +156,6 @@
            </widget>
           </item>
           <item>
-           <widget class="CardWidget" name="CardWidget">
-            <layout class="QHBoxLayout" name="horizontalLayout_11">
-             <property name="leftMargin">
-              <number>20</number>
-             </property>
-             <property name="topMargin">
-              <number>20</number>
-             </property>
-             <property name="rightMargin">
-              <number>20</number>
-             </property>
-             <property name="bottomMargin">
-              <number>20</number>
-             </property>
-             <item>
-              <layout class="QVBoxLayout" name="verticalLayout_7">
-               <property name="spacing">
-                <number>0</number>
-               </property>
-               <item>
-                <widget class="QLabel" name="enginePathLabel">
-                 <property name="styleSheet">
-                  <string notr="true">font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
-                 </property>
-                 <property name="text">
-                  <string>音源选择</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="CaptionLabel" name="engineCaptionLabel">
-                 <property name="text">
-                  <string>选择可用的 TTS 音源</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item>
-              <spacer name="horizontalSpacer">
-               <property name="orientation">
-                <enum>Qt::Horizontal</enum>
-               </property>
-               <property name="sizeHint" stdset="0">
-                <size>
-                 <width>40</width>
-                 <height>20</height>
-                </size>
-               </property>
-              </spacer>
-             </item>
-             <item>
-              <widget class="ComboBox" name="engineComboBox">
-               <property name="minimumSize">
-                <size>
-                 <width>240</width>
-                 <height>0</height>
-                </size>
-               </property>
-               <property name="maximumSize">
-                <size>
-                 <width>240</width>
-                 <height>16777215</height>
-                </size>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </widget>
-          </item>
-          <item>
-           <widget class="CardWidget" name="CardWidget_2">
-            <layout class="QHBoxLayout" name="horizontalLayout_12">
-             <property name="leftMargin">
-              <number>20</number>
-             </property>
-             <property name="topMargin">
-              <number>20</number>
-             </property>
-             <property name="rightMargin">
-              <number>20</number>
-             </property>
-             <property name="bottomMargin">
-              <number>20</number>
-             </property>
-             <item>
-              <layout class="QVBoxLayout" name="verticalLayout_9">
-               <property name="spacing">
-                <number>0</number>
-               </property>
-               <item>
-                <widget class="QLabel" name="ratePathLabel">
-                 <property name="styleSheet">
-                  <string notr="true">font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
-                 </property>
-                 <property name="text">
-                  <string>语速设置</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="CaptionLabel" name="rateCaptionLabel">
-                 <property name="text">
-                  <string>调节发声速度，默认为 200</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item>
-              <spacer name="horizontalSpacer_2">
-               <property name="orientation">
-                <enum>Qt::Horizontal</enum>
-               </property>
-               <property name="sizeHint" stdset="0">
-                <size>
-                 <width>40</width>
-                 <height>20</height>
-                </size>
-               </property>
-              </spacer>
-             </item>
-             <item>
-              <widget class="SpinBox" name="rateSpinBox">
-               <property name="minimumSize">
-                <size>
-                 <width>180</width>
-                 <height>33</height>
-                </size>
-               </property>
-               <property name="maximumSize">
-                <size>
-                 <width>180</width>
-                 <height>33</height>
-                </size>
-               </property>
-               <property name="maximum">
-                <number>500</number>
-               </property>
-               <property name="value">
-                <number>200</number>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </widget>
-          </item>
-          <item>
-           <widget class="CardWidget" name="CardWidget_3">
-            <layout class="QHBoxLayout" name="horizontalLayout_13">
-             <property name="leftMargin">
-              <number>20</number>
-             </property>
-             <property name="topMargin">
-              <number>20</number>
-             </property>
-             <property name="rightMargin">
-              <number>20</number>
-             </property>
-             <property name="bottomMargin">
-              <number>20</number>
-             </property>
-             <item>
-              <layout class="QVBoxLayout" name="verticalLayout_10">
-               <property name="spacing">
-                <number>0</number>
-               </property>
-               <item>
-                <widget class="QLabel" name="volumePathLabel">
-                 <property name="styleSheet">
-                  <string notr="true">font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
-                 </property>
-                 <property name="text">
-                  <string>音量设置</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="CaptionLabel" name="volumeCaptionLabel">
-                 <property name="text">
-                  <string>调节音量，默认为 1.0</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item>
-              <spacer name="horizontalSpacer_3">
-               <property name="orientation">
-                <enum>Qt::Horizontal</enum>
-               </property>
-               <property name="sizeHint" stdset="0">
-                <size>
-                 <width>40</width>
-                 <height>20</height>
-                </size>
-               </property>
-              </spacer>
-             </item>
-             <item>
-              <widget class="DoubleSpinBox" name="volumeDoubleSpinBox">
-               <property name="minimumSize">
-                <size>
-                 <width>180</width>
-                 <height>33</height>
-                </size>
-               </property>
-               <property name="maximumSize">
-                <size>
-                 <width>180</width>
-                 <height>33</height>
-                </size>
-               </property>
-               <property name="maximum">
-                <double>1.000000000000000</double>
-               </property>
-               <property name="singleStep">
-                <double>0.010000000000000</double>
-               </property>
-               <property name="value">
-                <double>1.000000000000000</double>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </widget>
-          </item>
-          <item>
            <widget class="CardWidget" name="CardWidget_4">
             <layout class="QHBoxLayout" name="horizontalLayout_15">
              <property name="leftMargin">
@@ -434,6 +206,25 @@
                 </size>
                </property>
               </spacer>
+             </item>
+             <item>
+              <widget class="PushButton" name="previewButton">
+               <property name="minimumSize">
+                <size>
+                 <width>100</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>100</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="text">
+                <string>试听</string>
+               </property>
+              </widget>
              </item>
              <item>
               <widget class="PushButton" name="savePushButton">
