@@ -191,6 +191,13 @@ class TTSEngine:
             'voice_index': int(self._voice_index_map.get(mode, 0)),
         }
 
+    def get_output_extension(self, mode: Optional[str] = None) -> str:
+        """返回指定引擎的默认输出后缀（不带点）"""
+        target_mode = mode or self.get_mode()
+        if target_mode == 'edge':
+            return 'mp3'
+        return 'wav'
+
     @staticmethod
     def normalize_text_for_cache(text: str) -> str:
         """最小化规整文本，降低空白差异导致的重复生成"""

@@ -3,7 +3,6 @@
 import json
 import re
 from datetime import datetime
-import wave
 from pathlib import Path
 
 import pyautogui
@@ -63,6 +62,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.notes_list = []  # 每块讲稿
         self.notes_duration_list = []
         self.note_cache_keys = []
+        self.note_cache_exts = []
         self.cache_hit_count = 0  # 新增：缓存命中数
         self.is_play_notes = False
         self.is_import = False
@@ -317,6 +317,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.current_index = 0
         self.notes_duration_list = []
         self.note_cache_keys = []
+        self.note_cache_exts = []
         self.cache_hit_count = 0
         self.is_import = False
         self.check_import()
@@ -327,8 +328,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.load_audio_files()
         duration_list = []
         for path in self.media_list:
-            with wave.open(str(path), 'rb') as wav_file:
-                duration = wav_file.getnframes() / float(wav_file.getframerate())
+            duration = AudioGenerationTask.get_audio_duration(path)
             duration_list.append(duration)
         self.notes_duration_list = duration_list
 
@@ -397,13 +397,14 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
     @staticmethod
     def clean_temp_folder(path: Path):
-        """清理缓存 wav"""
-        for file_path in path.glob('*.wav'):
-            try:
-                file_path.unlink()
-                print(f'已清理 {file_path.name}')
-            except Exception as e:
-                print(f'清理文件失败: {file_path.name}, 原因: {e}')
+        """清理临时音频（wav/mp3）"""
+        for pattern in ('*.wav', '*.mp3'):
+            for file_path in path.glob(pattern):
+                try:
+                    file_path.unlink()
+                    print(f'已清理 {file_path.name}')
+                except Exception as e:
+                    print(f'清理文件失败: {file_path.name}, 原因: {e}')
         print('转换完成')
 
     def thread_print_index(self, import_index):
@@ -449,6 +450,10 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                 for item in self.notes_list
             ]
 
+        if len(self.note_cache_exts) != len(self.notes_list):
+            output_ext = self.ctx.tts_engine.get_output_extension()
+            self.note_cache_exts = [output_ext] * len(self.notes_list)
+
         durations = self.notes_duration_list[:]
         if len(durations) != len(self.notes_list):
             durations = [0.0] * len(self.notes_list)
@@ -461,6 +466,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                 'text': note['text'],
                 'duration': float(durations[index]),
                 'cache_key': self.note_cache_keys[index],
+                'cache_ext': self.note_cache_exts[index],
             })
 
         now = datetime.now()
@@ -531,6 +537,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         notes_list = []
         duration_list = []
         cache_keys = []
+        cache_exts = []
 
         for idx, item in enumerate(items):
             page = int(item.get('page', 0))
@@ -540,9 +547,21 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                 profile = record.get('generation_profile', {})
                 cache_key = self.ctx.tts_engine.build_audio_cache_key(text, profile)
 
-            cache_path = self.audio_cache_path / f'{cache_key}.wav'
+            cache_ext = str(item.get('cache_ext', '')).strip().lower().lstrip('.')
+            ext_candidates = [cache_ext] if cache_ext else []
+            for ext in ('wav', 'mp3'):
+                if ext not in ext_candidates:
+                    ext_candidates.append(ext)
 
-            if not cache_path.exists() or cache_path.stat().st_size <= 0:
+            cache_path = None
+            for ext in ext_candidates:
+                candidate = self.audio_cache_path / f'{cache_key}.{ext}'
+                if candidate.exists() and candidate.stat().st_size > 0:
+                    cache_path = candidate
+                    cache_ext = ext
+                    break
+
+            if cache_path is None:
                 missing_list.append(f'第{page}页-第{idx + 1}条')
                 continue
 
@@ -550,6 +569,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             notes_list.append({'page': page, 'text': text})
             duration_list.append(float(item.get('duration', 0.0)))
             cache_keys.append(cache_key)
+            cache_exts.append(cache_ext)
 
         if missing_list:
             missing_text = '、'.join(missing_list[:10])
@@ -572,6 +592,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.notes_list = notes_list
         self.notes_duration_list = duration_list
         self.note_cache_keys = cache_keys
+        self.note_cache_exts = cache_exts
 
         self.media_list = media_list
         self.current_index = 0
@@ -608,9 +629,10 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.play_audio()
 
     def load_audio_files(self):
-        """查找所有 wav，添加到 media_list 中"""
+        """查找所有正文音频（wav/mp3），添加到 media_list 中"""
+        audio_files = list(self.wav_temp_path.glob('*.wav')) + list(self.wav_temp_path.glob('*.mp3'))
         audio_files = sorted(
-            self.wav_temp_path.glob('*.wav'),
+            audio_files,
             key=lambda path: [int(part) if part.isdigit() else part for part in path.stem.split('_')]
         )
         self.media_list = audio_files

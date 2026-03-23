@@ -125,7 +125,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
             text = '这是一个试听音频，用于测试当前的语音设置'
             temp_dir = Path('./temp').resolve()
             temp_dir.mkdir(parents=True, exist_ok=True)
-            preview_path = temp_dir / f'preview_{int(time.time())}.wav'
+            preview_ext = self.ctx.tts_engine.get_output_extension()
+            preview_path = temp_dir / f'preview_{int(time.time())}.{preview_ext}'
 
             self.previewButton.setEnabled(False)
             self.previewButton.setText('正在生成...')
