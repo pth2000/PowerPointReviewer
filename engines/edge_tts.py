@@ -1,4 +1,4 @@
-"""edge-tts 在线 TTS 引擎：内置音色列表、参数格式转换工具、音频合成。"""
+"""edge-tts 在线 TTS 引擎：内置音色列表、参数格式转换工具、音频合成"""
 
 import asyncio
 
@@ -22,22 +22,22 @@ VOICES: list[str] = [
 # ──────────────────────────────────────────────────────────
 
 def _percent_text(value: int) -> str:
-    """把整数转为 edge-tts 百分比文本，如 +10%、-5%。"""
+    """把整数转为 edge-tts 百分比文本，如 +10%、-5%"""
     return f'+{value}%' if value >= 0 else f'{value}%'
 
 
 def rate_to_edge(rate: int) -> str:
-    """把 UI 速率（基准 200 = 0%）映射为 edge-tts 速率文本。"""
+    """把 UI 速率（基准 200 = 0%）映射为 edge-tts 速率文本"""
     return _percent_text(int((rate - 200) / 2))
 
 
 def volume_to_edge(volume: float) -> str:
-    """把 0~1 音量映射为 edge-tts 百分比文本（1.0 → +0%）。"""
+    """把 0~1 音量映射为 edge-tts 百分比文本（1.0 → +0%）"""
     return _percent_text(int((volume - 1.0) * 100))
 
 
 def pitch_to_edge(pitch: int) -> str:
-    """把音调偏移量转为 edge-tts Hz 文本，如 +0Hz、-10Hz。"""
+    """把音调偏移量转为 edge-tts Hz 文本，如 +0Hz、-10Hz"""
     return f'+{pitch}Hz' if pitch >= 0 else f'{pitch}Hz'
 
 

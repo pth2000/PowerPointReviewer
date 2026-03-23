@@ -1,6 +1,7 @@
-"""阿里百炼 TTS 引擎：内置音色列表、_FileCallback 回调类、基于 tts_v2 的音频合成。"""
+"""阿里百炼 TTS 引擎：内置音色列表、_FileCallback 回调类、基于 tts_v2 的音频合成"""
 
 import os
+from pathlib import Path
 import threading
 import traceback
 from typing import Optional
@@ -230,7 +231,7 @@ class _FileCallback(ResultCallback):  # type: ignore[misc]
     """将百炼 WebSocket 流式音频分片写入目标文件，并在完成时发出事件信号。"""
 
     def __init__(self, output_path: str) -> None:
-        self.output_path = output_path
+        self.output_path = Path(output_path)
         self.file = None
         self.error_message: Optional[str] = None
         self.total_bytes: int = 0
@@ -238,7 +239,7 @@ class _FileCallback(ResultCallback):  # type: ignore[misc]
         self.done_event = threading.Event()
 
     def on_open(self) -> None:
-        self.file = open(self.output_path, 'wb')
+        self.file = self.output_path.open('wb')
         print(f'[百炼TTS] 连接建立，输出文件：{self.output_path}')
 
     def on_complete(self) -> None:
@@ -327,7 +328,8 @@ def save(text: str, path: str, *, voices: list[str] = VOICES, voice_index: int =
             raise RuntimeError('百炼 TTS 在 30 秒内未完成，可能是网络超时或服务阻塞')
         if callback.error_message:
             raise RuntimeError(f'百炼 TTS 回调报错：{callback.error_message}')
-        if not os.path.exists(path) or os.path.getsize(path) == 0:
+        output_path = Path(path)
+        if not output_path.exists() or output_path.stat().st_size == 0:
             event_tail = callback.events[-3:] if callback.events else []
             raise RuntimeError(
                 f'百炼 TTS 输出文件为空；累计字节={callback.total_bytes}；最近事件={event_tail}'

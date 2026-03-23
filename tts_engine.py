@@ -1,5 +1,7 @@
 ﻿import time
 import traceback
+import hashlib
+import json
 from typing import Optional
 
 from engines import defs
@@ -9,7 +11,7 @@ from engines import bailian
 
 
 class TTSEngine:
-    """可扩展 TTS 管理器：按引擎注册能力，并动态暴露可配置项。"""
+    """可扩展 TTS 管理器：按引擎注册能力，并动态暴露可配置项"""
 
     # ──────────────────────────────────────────────────────────
     # §1  初始化
@@ -35,19 +37,19 @@ class TTSEngine:
     # ──────────────────────────────────────────────────────────
 
     def get_engine_names(self) -> list[str]:
-        """返回引擎名称列表，用于下拉框展示。"""
+        """返回引擎名称列表，用于下拉框展示"""
         return [item['name'] for item in self._engine_defs]
 
     def get_mode(self):
-        """获取当前引擎 ID。"""
+        """获取当前引擎 ID"""
         return self._engine_defs[self._current_engine_index]['id']
 
     def get_mode_index(self):
-        """获取当前引擎索引。"""
+        """获取当前引擎索引"""
         return self._current_engine_index
 
     def set_mode(self, mode):
-        """设置当前引擎。支持索引(int)或引擎ID(str)。"""
+        """设置当前引擎，支持索引(int)或引擎ID(str)"""
         if isinstance(mode, int):
             if 0 <= mode < len(self._engine_defs):
                 self._current_engine_index = mode
@@ -60,7 +62,7 @@ class TTSEngine:
                     return
 
     def get_current_engine_definition(self):
-        """返回当前引擎定义（含可配置项 schema）。"""
+        """返回当前引擎定义（含可配置项 schema）"""
         return self._engine_defs[self._current_engine_index]
 
     # ──────────────────────────────────────────────────────────
@@ -68,15 +70,15 @@ class TTSEngine:
     # ──────────────────────────────────────────────────────────
 
     def can_parallel_generate(self):
-        """当前引擎是否建议启用并行生成。"""
+        """当前引擎是否建议启用并行生成"""
         return bool(self.get_current_engine_definition().get('parallel_enabled', False))
 
     def get_parallel_workers(self):
-        """获取当前引擎建议并行线程数。"""
+        """获取当前引擎建议并行线程数"""
         return int(self.get_current_engine_definition().get('parallel_workers', 1))
 
     def get_retry_policy(self):
-        """获取当前引擎自动重试策略。"""
+        """获取当前引擎自动重试策略"""
         engine_def = self.get_current_engine_definition()
         return {
             'retry_times': int(engine_def.get('retry_times', 0)),
@@ -88,23 +90,23 @@ class TTSEngine:
     # ──────────────────────────────────────────────────────────
 
     def get_current_options_schema(self):
-        """返回当前引擎可调节项。"""
+        """返回当前引擎可调节项"""
         return self.get_current_engine_definition().get('options', [])
 
     def get_current_option_values(self):
-        """返回当前引擎可调节项的当前值。"""
+        """返回当前引擎可调节项的当前值"""
         mode = self.get_mode()
         return self._engine_settings.get(mode, {}).copy()
 
     def set_current_option(self, key, value):
-        """设置当前引擎某个配置项。"""
+        """设置当前引擎某个配置项"""
         mode = self.get_mode()
         if mode not in self._engine_settings:
             return
         self._engine_settings[mode][key] = value
 
     def apply_current_options(self, option_values):
-        """批量应用当前引擎配置。"""
+        """批量应用当前引擎配置"""
         for key, value in option_values.items():
             self.set_current_option(key, value)
 
@@ -113,7 +115,7 @@ class TTSEngine:
     # ──────────────────────────────────────────────────────────
 
     def export_persistent_state(self):
-        """导出可持久化状态（用于保存到本地配置文件）。"""
+        """导出可持久化状态（用于保存到本地配置文件）"""
         return {
             'engine_mode': self.get_mode(),
             'engine_settings': {k: dict(v) for k, v in self._engine_settings.items()},
@@ -121,7 +123,7 @@ class TTSEngine:
         }
 
     def import_persistent_state(self, state):
-        """加载持久化状态并进行字段级容错。"""
+        """加载持久化状态并进行字段级容错"""
         if not isinstance(state, dict):
             return False
 
@@ -159,7 +161,7 @@ class TTSEngine:
     # ──────────────────────────────────────────────────────────
 
     def get_voices_list(self):
-        """获取当前引擎可用发音人列表。"""
+        """获取当前引擎可用发音人列表"""
         mode = self.get_mode()
         if mode == 'local':
             return self._local_voice_names
@@ -171,14 +173,39 @@ class TTSEngine:
         return []
 
     def set_voice(self, index):
-        """设置当前引擎发音人索引。"""
+        """设置当前引擎发音人索引"""
         mode = self.get_mode()
         self._voice_index_map[mode] = index
 
     def get_selected_voice_index(self):
-        """获取当前引擎已选择发音人索引。"""
+        """获取当前引擎已选择发音人索引"""
         mode = self.get_mode()
         return self._voice_index_map.get(mode, 0)
+
+    def get_generation_profile(self):
+        """返回当前生成配置快照，用于缓存键计算"""
+        mode = self.get_mode()
+        return {
+            'mode': mode,
+            'options': self._engine_settings.get(mode, {}).copy(),
+            'voice_index': int(self._voice_index_map.get(mode, 0)),
+        }
+
+    @staticmethod
+    def normalize_text_for_cache(text: str) -> str:
+        """最小化规整文本，降低空白差异导致的重复生成"""
+        return ' '.join(text.strip().split())
+
+    def build_audio_cache_key(self, text: str, generation_profile: Optional[dict] = None) -> str:
+        """基于文本与生成配置计算稳定缓存键"""
+        profile = generation_profile or self.get_generation_profile()
+        payload = {
+            'version': 1,
+            'text': self.normalize_text_for_cache(text),
+            'profile': profile,
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
     # ──────────────────────────────────────────────────────────
     # §7  公开保存接口
@@ -243,7 +270,7 @@ class TTSEngine:
 
     def save_file(self, text: str, path: str,
                   rate=None, volume=None, voice_index=None, **kwargs) -> None:
-        """按当前引擎保存语音，支持通过参数临时覆盖当前配置。"""
+        """按当前引擎保存语音，支持通过参数临时覆盖当前配置"""
         self.save_file_by_mode(
             self.get_mode(), text, path,
             rate=rate, volume=volume, voice_index=voice_index, **kwargs,
@@ -251,7 +278,7 @@ class TTSEngine:
 
     def save_file_for_stable_local(self, text: str, path: str,
                                    rate=None, volume=None, voice_index=None) -> None:
-        """强制本地引擎保存（适合倒计时等需稳定离线场景）。"""
+        """强制本地引擎保存（适合倒计时等需稳定离线场景）"""
         self.save_file_by_mode('local', text, path, rate=rate, volume=volume, voice_index=voice_index)
 
 

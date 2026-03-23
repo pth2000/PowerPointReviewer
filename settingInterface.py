@@ -264,6 +264,6 @@ class Ui_settingInterface(object):
         self.versionLabel.setText(QCoreApplication.translate("settingInterface", u"0.0.0", None))
         self.versionPrimaryPushButton.setText(QCoreApplication.translate("settingInterface", u"\u68c0\u67e5\u66f4\u65b0", None))
         self.copyrightShowLabel.setText(QCoreApplication.translate("settingInterface", u"\u7248\u6743", None))
-        self.copyrightLabel.setText(QCoreApplication.translate("settingInterface", u"Copyright \u00a9 2023-2025 Nagisa", None))
+        self.copyrightLabel.setText(QCoreApplication.translate("settingInterface", u"Copyright \u00a9 2023-2026 Nagisa", None))
     # retranslateUi
 

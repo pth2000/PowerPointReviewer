@@ -431,7 +431,7 @@
               <item>
                <widget class="CaptionLabel" name="copyrightLabel">
                 <property name="text">
-                 <string>Copyright © 2023-2025 Nagisa</string>
+                 <string>Copyright © 2023-2026 Nagisa</string>
                 </property>
                </widget>
               </item>
