@@ -54,6 +54,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.device_check_timer.start(1000)
 
         self.media_list = []  # 存储音频文件的列表
+        self.wait_media_list = []  # 存储倒计时音频文件列表
         self.current_index = 0  # 当前播放的音频文件索引
         self.wait_current_index = 0  # 倒计时索引
         self.note_file_path = None
@@ -164,11 +165,11 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                 print('播放完毕')
                 self.reset_audio()
         else:
-            if self.wait_current_index < len(self.media_list):
-                self.player.setSource(QUrl.fromLocalFile(str(self.media_list[self.wait_current_index])))
+            if self.wait_current_index < len(self.wait_media_list):
+                self.player.setSource(QUrl.fromLocalFile(str(self.wait_media_list[self.wait_current_index])))
                 self.player.play()
                 self.playButton.setEnabled(False)
-                temp_index = len(self.media_list) - self.wait_current_index
+                temp_index = len(self.wait_media_list) - self.wait_current_index
                 self.currentStatusLabel.setText('倒计时')
                 self.currentPageLabel.setText(f'{temp_index}')
                 self.currentIndexLabel.setText(f'{temp_index}')
@@ -314,6 +315,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             pass
 
         self.media_list = []
+        self.wait_media_list = []
         self.current_index = 0
         self.notes_duration_list = []
         self.note_cache_keys = []
@@ -618,13 +620,16 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.is_play_notes = False
         self.wait_current_index = 0
         self.load_wait_audio_files()
+        if not self.wait_media_list:
+            self.create_warning_info_bar('倒计时音频缺失', '未找到可用倒计时音频文件，请检查 data/cache/countdown 目录')
+            return
         print('已导入倒计时')
         self.play_audio()
 
     def play_notes(self):
         """播放讲稿"""
         self.is_play_notes = True
-        if not self.media_list or 'countdown' in str(self.media_list[0]):
+        if not self.media_list:
             self.load_audio_files()
         self.play_audio()
 
@@ -645,7 +650,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             if path.stem.isdigit() and int(path.stem) <= self.currentSpinBox.value()
         ]
         audio_files = sorted(audio_files, key=lambda path: int(path.stem), reverse=True)
-        self.media_list = audio_files
+        self.wait_media_list = audio_files
         print('倒计时列表载入完成')
 
     def jump_page(self):
