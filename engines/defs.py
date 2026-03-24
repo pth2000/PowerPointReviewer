@@ -4,7 +4,7 @@
 ENGINE_DEFS = [
     {
         'id': 'local',
-        'name': '【本地】 TTSx3',
+        'name': '本地 · TTSx3',
         'description': 'TTSx3引擎离线可用，具有较高的稳定性和较快的速度，适合不依赖网络的场景，缺点是音色较为单一。',
         'supports_voice': True,
         'parallel_enabled': False,
@@ -24,8 +24,8 @@ ENGINE_DEFS = [
     },
     {
         'id': 'edge',
-        'name': '【在线】 edge-TTS',
-        'description': 'edge-TTS引擎需联网使用，音色较为自然，无需额外配置，但在网络不稳定时可能出现失败。',
+        'name': '在线 · Edge-TTS',
+        'description': 'Edge-TTS引擎需联网使用，音色较为自然，无需额外配置，但在网络不稳定时可能出现失败。',
         'supports_voice': True,
         'parallel_enabled': True,
         'parallel_workers': 4,
@@ -48,8 +48,8 @@ ENGINE_DEFS = [
     },
     {
         'id': 'bailian',
-        'name': '【在线】 阿里百炼',
-        'description': '阿里百炼引擎需联网使用，需配置API Key，提供丰富的音色和较高的语音质量，但需要额外的账号配置和可能的使用成本。',
+        'name': '在线 · 阿里百炼CosyVoice',
+        'description': '百炼引擎需联网使用，需配置API Key，提供丰富的音色和较高的语音质量，但需要额外的账号配置和可能的使用成本。',
         'supports_voice': True,
         'parallel_enabled': False,
         'parallel_workers': 1,
@@ -85,6 +85,54 @@ ENGINE_DEFS = [
                     'wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference'
                 ],
                 'default': 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'
+            }
+        ]
+    },
+    {
+        'id': 'qwen_clone',
+        'name': '在线 · 千问音色复刻',
+        'description': '千问引擎需联网，需配置API Key，支持使用云端保存的复刻音色进行语音合成。可在设置页创建、刷新、删除音色。',
+        'supports_voice': True,
+        'parallel_enabled': False,
+        'parallel_workers': 1,
+        'retry_times': 2,
+        'retry_delay': 0.8,
+        'options': [
+            {
+                'key': 'api_key', 'label': 'API Key', 'description': '千问 API Key（可留空，留空时尝试环境变量 DASHSCOPE_API_KEY）',
+                'type': 'password', 'default': ''
+            },
+            {
+                'key': 'region', 'label': '地域', 'description': '北京/新加坡，必须与 API Key 所属地域一致',
+                'type': 'choice', 'choices': ['cn-beijing', 'intl-singapore'], 'default': 'cn-beijing'
+            },
+            {
+                'key': 'model', 'label': '合成模型', 'description': '复刻音色推荐使用 qwen3-tts-vc',
+                'type': 'choice', 'choices': ['qwen3-tts-vc-2026-01-22'], 'default': 'qwen3-tts-vc-2026-01-22'
+            },
+            {
+                'key': 'language_type', 'label': '语言类型', 'description': '建议与文本语言一致（Chinese/English）',
+                'type': 'choice', 'choices': ['Chinese', 'English'], 'default': 'Chinese'
+            },
+            {
+                'key': 'voice', 'label': '当前音色', 'description': '当前使用的复刻音色（自动填入）',
+                'type': 'text', 'default': ''
+            },
+            {
+                'key': 'preferred_name', 'label': '默认音色名', 'description': '创建音色时使用的默认名称（字母数字下划线，<=16）',
+                'type': 'text', 'default': 'ppt_reviewer'
+            },
+            {
+                'key': 'reference_audio_path', 'label': '参考音频路径', 'description': '创建音色时使用的本地音频路径（10~20秒推荐）',
+                'type': 'text', 'default': ''
+            },
+            {
+                'key': 'audio_mime_type', 'label': '参考音频MIME', 'description': '参考音频 MIME 类型',
+                'type': 'choice', 'choices': ['audio/mpeg', 'audio/wav', 'audio/mp4'], 'default': 'audio/mpeg'
+            },
+            {
+                'key': 'request_timeout', 'label': '请求超时(秒)', 'description': '网络请求超时设置',
+                'type': 'int', 'min': 10, 'max': 180, 'step': 5, 'default': 60
             }
         ]
     }

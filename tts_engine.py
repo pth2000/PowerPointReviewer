@@ -8,6 +8,7 @@ from engines import defs
 from engines import pyttsx3 as pyttsx3_engine
 from engines import edge_tts as edge_tts_engine
 from engines import bailian
+from engines import qwen_clone as qwen_clone_engine
 
 
 class TTSEngine:
@@ -170,6 +171,23 @@ class TTSEngine:
         if mode == 'bailian':
             model = self._engine_settings['bailian'].get('model', 'cosyvoice-v3-flash')
             return bailian.MODEL_VOICES.get(model, bailian.VOICES)
+        if mode == 'qwen_clone':
+            settings = self._engine_settings.get('qwen_clone', {})
+            try:
+                voice_items = qwen_clone_engine.list_voices(
+                    api_key=settings.get('api_key', ''),
+                    region=settings.get('region', 'cn-beijing'),
+                    page_size=100,
+                    page_index=0,
+                )
+                voices = [item.get('voice', '') for item in voice_items if item.get('voice', '')]
+                if voices:
+                    return voices
+            except Exception as e:
+                print(f'[TTS][qwen_clone] 获取音色列表失败：{e}')
+
+            fallback_voice = str(settings.get('voice', '')).strip()
+            return [fallback_voice] if fallback_voice else []
         return []
 
     def set_voice(self, index):
@@ -198,6 +216,45 @@ class TTSEngine:
             return 'mp3'
         return 'wav'
 
+    def create_qwen_clone_voice(self, reference_audio_path: str, *, preferred_name: Optional[str] = None) -> str:
+        """创建千问复刻音色并写回当前配置。"""
+        settings = self._engine_settings.get('qwen_clone', {})
+        model = str(settings.get('model', 'qwen3-tts-vc-2026-01-22'))
+        region = str(settings.get('region', 'cn-beijing'))
+        api_key = str(settings.get('api_key', ''))
+        audio_mime_type = str(settings.get('audio_mime_type', 'audio/mpeg'))
+        name = preferred_name if preferred_name is not None else str(settings.get('preferred_name', 'ppt_reviewer'))
+
+        voice = qwen_clone_engine.create_voice(
+            reference_audio_path=reference_audio_path,
+            target_model=model,
+            preferred_name=name,
+            audio_mime_type=audio_mime_type,
+            api_key=api_key,
+            region=region,
+        )
+        self._engine_settings['qwen_clone']['voice'] = voice
+        return voice
+
+    def delete_qwen_clone_voice(self, voice: str) -> None:
+        """删除千问复刻音色。"""
+        settings = self._engine_settings.get('qwen_clone', {})
+        qwen_clone_engine.delete_voice(
+            voice=voice,
+            api_key=str(settings.get('api_key', '')),
+            region=str(settings.get('region', 'cn-beijing')),
+        )
+
+    def list_qwen_clone_voice_items(self) -> list[dict]:
+        """获取千问复刻音色详情列表。"""
+        settings = self._engine_settings.get('qwen_clone', {})
+        return qwen_clone_engine.list_voices(
+            api_key=str(settings.get('api_key', '')),
+            region=str(settings.get('region', 'cn-beijing')),
+            page_size=100,
+            page_index=0,
+        )
+
     @staticmethod
     def normalize_text_for_cache(text: str) -> str:
         """最小化规整文本，降低空白差异导致的重复生成"""
@@ -224,7 +281,7 @@ class TTSEngine:
 
         所有参数（rate/volume/voice_index 等）若为 None，则自动从引擎当前配置读取默认值。
         """
-        if mode not in ('local', 'edge', 'bailian'):
+        if mode not in ('local', 'edge', 'bailian', 'qwen_clone'):
             raise RuntimeError(f'不支持的引擎模式：{mode}')
 
         # 查找该引擎的默认重试策略
@@ -264,6 +321,26 @@ class TTSEngine:
                         api_key=kwargs.get('api_key', settings.get('api_key', '')),
                         ws_url=kwargs.get('ws_url', settings.get(
                             'ws_url', 'wss://dashscope.aliyuncs.com/api-ws/v1/inference')),
+                    )
+                elif mode == 'qwen_clone':
+                    selected_voice = str(settings.get('voice', '')).strip()
+                    if not selected_voice:
+                        voices = self.get_voices_list()
+                        if voices:
+                            idx = max(0, min(int(r_voice), len(voices) - 1))
+                            selected_voice = voices[idx]
+
+                    qwen_clone_engine.save(
+                        text,
+                        path,
+                        model=str(kwargs.get('model', settings.get('model', 'qwen3-tts-vc-2026-01-22'))),
+                        voice=selected_voice,
+                        language_type=str(kwargs.get('language_type', settings.get('language_type', 'Chinese'))),
+                        instructions=str(kwargs.get('instructions', settings.get('instructions', ''))),
+                        optimize_instructions=bool(kwargs.get('optimize_instructions', settings.get('optimize_instructions', False))),
+                        api_key=str(kwargs.get('api_key', settings.get('api_key', ''))),
+                        region=str(kwargs.get('region', settings.get('region', 'cn-beijing'))),
+                        request_timeout=int(kwargs.get('request_timeout', settings.get('request_timeout', 60))),
                     )
                 return
             except Exception as e:

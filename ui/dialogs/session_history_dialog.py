@@ -15,6 +15,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 from qfluentwidgets import (
+    InfoBar,
+    InfoBarPosition,
+    MessageBox,
     PrimaryPushButton,
     PushButton,
     TableWidget,
@@ -66,21 +69,25 @@ class SessionHistoryDialog(QDialog):
             header.setSectionResizeMode(col, mode)
         
         self.table.itemDoubleClicked.connect(self.accept_selected)
+        self.table.itemSelectionChanged.connect(self._update_action_buttons_state)
 
         # 使用 qfluentwidgets 的按钮
         self.refresh_button = PushButton('刷新', self)
         self.refresh_button.setIcon(QIcon(':/image/image/backward.svg'))
         self.open_button = PrimaryPushButton('加载选中记录', self)
+        self.delete_button = PushButton('删除选中记录', self)
         self.cancel_button = PushButton('取消', self)
 
         self.refresh_button.clicked.connect(self.reload_records)
         self.open_button.clicked.connect(self.accept_selected)
+        self.delete_button.clicked.connect(self.delete_selected)
         self.cancel_button.clicked.connect(self.reject)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.refresh_button)
         button_layout.addStretch(1)
         button_layout.addWidget(self.open_button)
+        button_layout.addWidget(self.delete_button)
         button_layout.addWidget(self.cancel_button)
         button_layout.setSpacing(10)
         button_layout.setContentsMargins(0, 10, 0, 0)
@@ -92,6 +99,7 @@ class SessionHistoryDialog(QDialog):
         main_layout.setContentsMargins(12, 12, 12, 12)
 
         self.reload_records()
+        self._update_action_buttons_state()
 
     def get_selected_record_path(self) -> Path | None:
         """返回已选中的记录路径"""
@@ -103,6 +111,7 @@ class SessionHistoryDialog(QDialog):
         self.selected_record_path = None
 
         if not self.session_root_path.exists():
+            self._update_action_buttons_state()
             return
 
         record_files = sorted(
@@ -117,6 +126,16 @@ class SessionHistoryDialog(QDialog):
 
         if self.table.rowCount() > 0:
             self.table.selectRow(0)
+
+        self._update_action_buttons_state()
+
+    def _update_action_buttons_state(self):
+        """根据列表和选中状态更新操作按钮可用性"""
+        has_rows = self.table.rowCount() > 0
+        has_selection = self.table.currentRow() >= 0
+        can_operate = has_rows and has_selection
+        self.open_button.setEnabled(can_operate)
+        self.delete_button.setEnabled(can_operate)
 
     def accept_selected(self):
         """确认加载当前选中行"""
@@ -133,6 +152,49 @@ class SessionHistoryDialog(QDialog):
                     self.selected_record_path = Path(str(record_path))
                     self.accept()
                     return
+
+    def delete_selected(self):
+        """删除当前选中记录文件"""
+        row = self.table.currentRow()
+        if row < 0:
+            self._show_warning('未选择记录', '请先在列表中选中一条历史记录')
+            return
+
+        record_path: Path | None = None
+        for col in range(self.table.columnCount()):
+            item = self.table.item(row, col)
+            if item is not None:
+                raw_path = item.data(Qt.ItemDataRole.UserRole)
+                if raw_path:
+                    record_path = Path(str(raw_path))
+                    break
+
+        if record_path is None:
+            self._show_warning('删除失败', '未找到对应记录文件路径')
+            return
+
+        if not record_path.exists():
+            self.reload_records()
+            self._show_warning('文件不存在', f'记录文件已不存在：{record_path.name}')
+            return
+
+        confirm = MessageBox('确认删除', f'确定删除历史记录 {record_path.name} 吗？\n此操作不可恢复。', self)
+        confirm.yesButton.setText('删除')
+        confirm.cancelButton.setText('取消')
+        if not confirm.exec():
+            return
+
+        try:
+            record_path.unlink()
+        except Exception as e:
+            self._show_error('删除失败', f'无法删除文件：{e}')
+            return
+
+        if self.selected_record_path == record_path:
+            self.selected_record_path = None
+
+        self.reload_records()
+        self._show_success('删除成功', f'已删除：{record_path.name}')
 
     def _append_row(self, row_data: dict):
         """添加一行展示数据"""
@@ -212,3 +274,36 @@ class SessionHistoryDialog(QDialog):
             'mark': str(data.get('mark', '-')),
             'session_id': str(data.get('session_id', record_path.stem)),
         }
+
+    def _show_success(self, title: str, content: str):
+        InfoBar.success(
+            title=title,
+            content=content,
+            orient=Qt.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=2200,
+            parent=self,
+        )
+
+    def _show_warning(self, title: str, content: str):
+        InfoBar.warning(
+            title=title,
+            content=content,
+            orient=Qt.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+            parent=self,
+        )
+
+    def _show_error(self, title: str, content: str):
+        InfoBar.error(
+            title=title,
+            content=content,
+            orient=Qt.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=-1,
+            parent=self,
+        )

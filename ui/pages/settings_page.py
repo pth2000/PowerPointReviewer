@@ -19,6 +19,8 @@ from qfluentwidgets import (
     InfoBarPosition,
     LineEdit,
     MessageBox,
+    PrimaryPushButton,
+    PushButton,
     SpinBox,
 )
 
@@ -26,6 +28,7 @@ from app.app_context import AppContext
 from settingInterface import Ui_settingInterface
 from tasks.preview_task import PreviewTask
 from tasks.update_task import UpdateTask
+from ui.dialogs.qwen_clone_voice_dialog import QwenCloneVoiceDialog
 
 
 class SettingInterface(QWidget, Ui_settingInterface):
@@ -52,6 +55,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         # 动态创建的音色卡片，随模型切换重建
         self._voice_card = None
         self._voice_combo = None
+        self._qwen_clone_manage_card = None
 
         self.savePushButton.clicked.connect(self.save_setting)
         self.versionPrimaryPushButton.clicked.connect(self.get_update)
@@ -169,6 +173,11 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self._voice_card = None
             self._voice_combo = None
 
+        if self._qwen_clone_manage_card is not None:
+            self.verticalLayout_2.removeWidget(self._qwen_clone_manage_card)
+            self._qwen_clone_manage_card.deleteLater()
+            self._qwen_clone_manage_card = None
+
     def create_dynamic_option_card(self, option_schema):
         """根据 schema 创建一张配置卡片"""
         card = CardWidget(self.importWidget)
@@ -243,12 +252,18 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.clear_dynamic_option_cards()
         current_values = self.ctx.tts_engine.get_current_option_values()
         schema_list = self.ctx.tts_engine.get_current_options_schema()
+        mode = self.ctx.tts_engine.get_mode()
 
         engine_def = self.ctx.tts_engine.get_current_engine_definition()
         self.engineSelectCaptionLabel.setText(engine_def.get('description', ''))
 
         for item in schema_list:
             key = item.get('key')
+
+            # 千问复刻的部分字段由“复刻音色管理”对话框承载，避免设置页重复展示
+            if mode == 'qwen_clone' and key in ('voice', 'reference_audio_path', 'audio_mime_type'):
+                continue
+
             self.create_dynamic_option_card(item)
             control = self.dynamic_option_widgets.get(key)
             if control is None:
@@ -286,6 +301,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.ctx.tts_engine.apply_current_options(option_values)
         if self._voice_combo is not None:
             self.ctx.tts_engine.set_voice(self._voice_combo.currentIndex())
+            if self.ctx.tts_engine.get_mode() == 'qwen_clone':
+                self.ctx.tts_engine.set_current_option('voice', self._voice_combo.currentText())
 
     def setup_voices_list(self):
         """按当前引擎重建发音人选择卡片"""
@@ -295,7 +312,21 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self._voice_card = None
             self._voice_combo = None
 
-        voices_list = self.ctx.tts_engine.get_voices_list()
+        voices_list = []
+        if self.ctx.tts_engine.get_mode() == 'qwen_clone':
+            # 先渲染管理卡片，确保首次无音色时也能看到“选择参考音频/创建音色”按钮
+            self.setup_qwen_clone_manage_card()
+
+            # 千问复刻音色列表强制走远端查询，避免本地fallback导致“删除后仍显示”
+            try:
+                voice_items = self.ctx.tts_engine.list_qwen_clone_voice_items()
+                voices_list = [str(item.get('voice', '')).strip() for item in voice_items if str(item.get('voice', '')).strip()]
+            except Exception as e:
+                print(f'[设置][qwen_clone] 刷新远端音色失败：{e}')
+                voices_list = []
+        else:
+            voices_list = self.ctx.tts_engine.get_voices_list()
+
         if not voices_list:
             return
 
@@ -323,17 +354,99 @@ class SettingInterface(QWidget, Ui_settingInterface):
         combo.setMinimumSize(QSize(240, 0))
         combo.setMaximumSize(QSize(240, 16777215))
         combo.addItems(voices_list)
+        combo.currentIndexChanged.connect(self._on_voice_combo_changed)
         h_layout.addWidget(combo)
 
         insert_idx = self.verticalLayout_2.indexOf(self.CardWidget_4)
         self.verticalLayout_2.insertWidget(insert_idx, card)
 
-        saved_index = self.ctx.tts_engine.get_selected_voice_index()
-        if 0 <= saved_index < combo.count():
-            combo.setCurrentIndex(saved_index)
+        if self.ctx.tts_engine.get_mode() == 'qwen_clone':
+            selected_voice = str(self.ctx.tts_engine.get_current_option_values().get('voice', '')).strip()
+            if selected_voice:
+                selected_index = combo.findText(selected_voice)
+                if selected_index >= 0:
+                    combo.setCurrentIndex(selected_index)
+                else:
+                    saved_index = self.ctx.tts_engine.get_selected_voice_index()
+                    if 0 <= saved_index < combo.count():
+                        combo.setCurrentIndex(saved_index)
+            else:
+                saved_index = self.ctx.tts_engine.get_selected_voice_index()
+                if 0 <= saved_index < combo.count():
+                    combo.setCurrentIndex(saved_index)
+        else:
+            saved_index = self.ctx.tts_engine.get_selected_voice_index()
+            if 0 <= saved_index < combo.count():
+                combo.setCurrentIndex(saved_index)
 
         self._voice_card = card
         self._voice_combo = combo
+
+    def _on_voice_combo_changed(self, index: int):
+        """设置页音色下拉变化时，立即同步当前引擎状态。"""
+        if self._voice_combo is None:
+            return
+
+        if index < 0:
+            return
+
+        self.ctx.tts_engine.set_voice(index)
+        if self.ctx.tts_engine.get_mode() == 'qwen_clone':
+            self.ctx.tts_engine.set_current_option('voice', self._voice_combo.currentText().strip())
+
+    def setup_qwen_clone_manage_card(self):
+        """为千问复刻引擎创建音色管理卡片"""
+        if self._qwen_clone_manage_card is not None:
+            self.verticalLayout_2.removeWidget(self._qwen_clone_manage_card)
+            self._qwen_clone_manage_card.deleteLater()
+            self._qwen_clone_manage_card = None
+
+        card = CardWidget(self.importWidget)
+        h_layout = QHBoxLayout(card)
+        h_layout.setContentsMargins(20, 20, 20, 20)
+
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(0)
+
+        title_lbl = QLabel(card)
+        title_lbl.setText('复刻音色管理')
+        title_lbl.setStyleSheet("font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';")
+        info_layout.addWidget(title_lbl)
+
+        cap_lbl = CaptionLabel(card)
+        cap_lbl.setText('打开统一对话框管理音色：选择参考音频、创建、刷新、删除、设为当前音色')
+        cap_lbl.setWordWrap(True)
+        info_layout.addWidget(cap_lbl)
+
+        h_layout.addLayout(info_layout, stretch=1)
+        h_layout.addSpacing(20)
+
+        open_button = PrimaryPushButton('打开音色管理', card)
+        open_button.clicked.connect(self.open_qwen_clone_voice_dialog)
+        h_layout.addWidget(open_button)
+
+        insert_idx = self.verticalLayout_2.indexOf(self.CardWidget_4)
+        self.verticalLayout_2.insertWidget(insert_idx, card)
+        self._qwen_clone_manage_card = card
+
+    def open_qwen_clone_voice_dialog(self):
+        """打开千问复刻音色管理对话框"""
+        try:
+            self.apply_ui_settings_to_engine()
+            dialog = QwenCloneVoiceDialog(self.ctx.tts_engine, self)
+            if dialog.exec():
+                selected_voice = dialog.get_selected_voice().strip()
+                if selected_voice:
+                    self.ctx.tts_engine.set_current_option('voice', selected_voice)
+
+                # 对话框可能创建/删除了音色，返回后重建音色下拉
+                self.setup_voices_list()
+                self.create_success_info_bar('已更新音色', '当前音色选择已同步到设置页')
+            else:
+                # 即使取消，也可能在对话框执行了创建/删除
+                self.setup_voices_list()
+        except Exception as e:
+            self.create_error_info_bar('打开管理对话框失败', f'详情：{e}')
 
     def change_tts_engine(self):
         """切换引擎后重绘可调节项"""
