@@ -473,6 +473,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         now = datetime.now()
         session_id = now.strftime('%Y%m%d_%H%M%S')
+        speaker_name = self.ctx.tts_engine.get_selected_voice_name().strip()
         record = {
             'version': 1,
             'session_id': session_id,
@@ -480,6 +481,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             'source_file': str(self.note_file_path) if self.note_file_path else '',
             'source_name': self.note_file_name,
             'mark': self.mark,
+            'speaker': speaker_name,
             'generation_profile': generation_profile,
             'notes': self.notes,
             'items': items,

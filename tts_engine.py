@@ -200,6 +200,27 @@ class TTSEngine:
         mode = self.get_mode()
         return self._voice_index_map.get(mode, 0)
 
+    def get_selected_voice_name(self) -> str:
+        """获取当前引擎已选择发音人名称（用于会话记录展示）"""
+        mode = self.get_mode()
+        settings = self._engine_settings.get(mode, {})
+
+        # 千问复刻优先使用已保存的 voice 字段，避免额外依赖远端列表
+        if mode == 'qwen_clone':
+            voice = str(settings.get('voice', '')).strip()
+            if voice:
+                return voice
+
+        voices = self.get_voices_list()
+        if not voices:
+            return ''
+
+        index = self.get_selected_voice_index()
+        if 0 <= index < len(voices):
+            return str(voices[index])
+
+        return str(voices[0]) if voices else ''
+
     def get_generation_profile(self):
         """返回当前生成配置快照，用于缓存键计算"""
         mode = self.get_mode()

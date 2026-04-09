@@ -40,7 +40,7 @@ class SessionHistoryDialog(QDialog):
         self.table = TableWidget(self)
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
-            '创建时间', '来源文件', '条目数', '引擎', '分隔符', '记录 ID', '文件名'
+            '创建时间', '来源文件', '条目数', '引擎', '发音人', '分隔符', '记录 ID'
         ])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -60,9 +60,9 @@ class SessionHistoryDialog(QDialog):
             (1, QHeaderView.ResizeMode.Stretch),  # 来源文件
             (2, QHeaderView.ResizeMode.ResizeToContents),  # 条目数
             (3, QHeaderView.ResizeMode.ResizeToContents),  # 引擎
-            (4, QHeaderView.ResizeMode.ResizeToContents),  # 分隔符
-            (5, QHeaderView.ResizeMode.ResizeToContents),  # 记录 ID
-            (6, QHeaderView.ResizeMode.ResizeToContents),  # 文件名
+            (4, QHeaderView.ResizeMode.Stretch),  # 发音人
+            (5, QHeaderView.ResizeMode.ResizeToContents),  # 分隔符
+            (6, QHeaderView.ResizeMode.ResizeToContents),  # 记录 ID
         ]
         
         for col, mode in resize_modes:
@@ -206,9 +206,9 @@ class SessionHistoryDialog(QDialog):
             row_data['source_name'],
             str(row_data['items_count']),
             row_data['engine_mode'],
+            row_data['speaker'],
             row_data['mark'],
             row_data['session_id'],
-            row_data['file_name'],
         ]
 
         for col, value in enumerate(values):
@@ -229,6 +229,7 @@ class SessionHistoryDialog(QDialog):
             'source_name': '-',
             'items_count': 0,
             'engine_mode': '-',
+            'speaker': '-',
             'mark': '-',
             'session_id': record_path.stem,
         }
@@ -249,6 +250,15 @@ class SessionHistoryDialog(QDialog):
         mode = '-'
         if isinstance(profile, dict):
             mode = str(profile.get('mode', '-'))
+
+        speaker = str(data.get('speaker', '')).strip()
+        if not speaker and isinstance(profile, dict):
+            # 向后兼容旧记录：尽力从历史 profile 中恢复（qwen_clone 可直接取 voice）
+            options = profile.get('options', {})
+            if isinstance(options, dict):
+                speaker = str(options.get('voice', '')).strip()
+        if not speaker:
+            speaker = '-'
 
         items = data.get('items', [])
         items_count = len(items) if isinstance(items, list) else 0
@@ -271,6 +281,7 @@ class SessionHistoryDialog(QDialog):
             'source_name': source_name,
             'items_count': items_count,
             'engine_mode': mode,
+            'speaker': speaker,
             'mark': str(data.get('mark', '-')),
             'session_id': str(data.get('session_id', record_path.stem)),
         }
