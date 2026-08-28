@@ -1,4 +1,4 @@
-"""历史记录列表弹窗"""
+"""浏览历史会话，并管理其音频缓存。"""
 
 import json
 from datetime import datetime
@@ -15,17 +15,20 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 from qfluentwidgets import (
+    CaptionLabel,
     InfoBar,
     InfoBarPosition,
-    MessageBox,
     PrimaryPushButton,
     PushButton,
     TableWidget,
 )
 
+from app import icons, audio_cache
+from ui.dialogs.delete_record_dialog import DeleteRecordMessageBox
+
 
 class SessionHistoryDialog(QDialog):
-    """显示历史会话记录，并允许选择加载目标"""
+    """列出历史会话，并集中处理加载、批量删除和缓存清理。"""
 
     def __init__(self, session_root_path: Path, parent=None):
         super().__init__(parent)
@@ -36,7 +39,7 @@ class SessionHistoryDialog(QDialog):
         self.setMinimumSize(800, 550)
         self.setWindowIcon(QIcon(':/image/image/update.svg'))
 
-        # 使用 qfluentwidgets 的 TableWidget
+        # 使用 Fluent 表格保持与应用主题一致。
         self.table = TableWidget(self)
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
@@ -44,17 +47,16 @@ class SessionHistoryDialog(QDialog):
         ])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        # 扩展选择支持 Ctrl、Shift 和“全选”批量删除。
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         
-        # 设置列宽自适应：不同列使用不同模式
+        # 短字段按内容适配，来源和发音人等长字段占用剩余宽度。
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         
-        # 列配置：(列索引, ResizeMode)
-        # 短内容列：ResizeToContents
-        # 长内容列：Stretch
+        # 每列单独声明尺寸策略，避免短字段浪费空间。
         resize_modes = [
             (0, QHeaderView.ResizeMode.ResizeToContents),  # 创建时间
             (1, QHeaderView.ResizeMode.Stretch),  # 来源文件
@@ -71,20 +73,33 @@ class SessionHistoryDialog(QDialog):
         self.table.itemDoubleClicked.connect(self.accept_selected)
         self.table.itemSelectionChanged.connect(self._update_action_buttons_state)
 
-        # 使用 qfluentwidgets 的按钮
+        # 历史记录只保存缓存索引，因此记录管理与缓存维护放在同一界面。
+        self.cache_label = CaptionLabel(self)
+        self.clean_button = PushButton('清理未引用音频', self)
+        self.clean_button.clicked.connect(self.clean_orphan_audio)
+
+        cache_layout = QHBoxLayout()
+        cache_layout.addWidget(self.cache_label)
+        cache_layout.addStretch(1)
+        cache_layout.addWidget(self.clean_button)
+        cache_layout.setSpacing(10)
+
         self.refresh_button = PushButton('刷新', self)
-        self.refresh_button.setIcon(QIcon(':/image/image/backward.svg'))
+        icons.apply(self.refresh_button, ':/image/image/backward.svg')
+        self.select_all_button = PushButton('全选', self)
         self.open_button = PrimaryPushButton('加载选中记录', self)
         self.delete_button = PushButton('删除选中记录', self)
-        self.cancel_button = PushButton('取消', self)
+        self.cancel_button = PushButton('关闭', self)
 
         self.refresh_button.clicked.connect(self.reload_records)
+        self.select_all_button.clicked.connect(self.select_all_records)
         self.open_button.clicked.connect(self.accept_selected)
         self.delete_button.clicked.connect(self.delete_selected)
         self.cancel_button.clicked.connect(self.reject)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.refresh_button)
+        button_layout.addWidget(self.select_all_button)
         button_layout.addStretch(1)
         button_layout.addWidget(self.open_button)
         button_layout.addWidget(self.delete_button)
@@ -94,19 +109,44 @@ class SessionHistoryDialog(QDialog):
 
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(self.table)
+        main_layout.addLayout(cache_layout)
         main_layout.addLayout(button_layout)
         main_layout.setSpacing(12)
         main_layout.setContentsMargins(12, 12, 12, 12)
 
         self.reload_records()
         self._update_action_buttons_state()
+        self.refresh_cache_label()
+
+    def refresh_cache_label(self):
+        """刷新缓存文件数量和磁盘占用摘要。"""
+        try:
+            self.cache_label.setText(f'音频缓存：{audio_cache.summary()}')
+        except Exception as e:
+            print(f'[历史记录] 缓存统计失败：{e}')
+            self.cache_label.setText('音频缓存：统计失败')
+
+    def clean_orphan_audio(self):
+        """确认后删除未被任何历史记录引用的音频。"""
+        try:
+            removed, freed = audio_cache.clear_orphans()
+        except Exception as e:
+            self._show_error('清理失败', f'详情：{e}')
+            return
+
+        self.refresh_cache_label()
+        if removed:
+            self._show_success(
+                '清理完成', f'已删除 {removed} 条未引用音频，释放 {audio_cache.format_size(freed)}')
+        else:
+            self._show_success('无需清理', '当前没有未被引用的音频缓存')
 
     def get_selected_record_path(self) -> Path | None:
-        """返回已选中的记录路径"""
+        """返回单条已选记录路径，多选或未选时返回 ``None``。"""
         return self.selected_record_path
 
     def reload_records(self):
-        """重载会话记录列表"""
+        """重新扫描会话目录，并按时间填充记录表格。"""
         self.table.setRowCount(0)
         self.selected_record_path = None
 
@@ -129,21 +169,41 @@ class SessionHistoryDialog(QDialog):
 
         self._update_action_buttons_state()
 
+    def select_all_records(self):
+        """选中表格中的全部历史记录。"""
+        if self.table.rowCount():
+            self.table.selectAll()
+
+    def selected_record_paths(self) -> list:
+        """按表格顺序返回已选行对应的去重记录路径。"""
+        paths_list = []
+        for index in sorted(self.table.selectionModel().selectedRows(), key=lambda i: i.row()):
+            item = self.table.item(index.row(), 0)
+            if item is None:
+                continue
+            raw_path = item.data(Qt.ItemDataRole.UserRole)
+            if raw_path:
+                paths_list.append(Path(str(raw_path)))
+        return paths_list
+
     def _update_action_buttons_state(self):
-        """根据列表和选中状态更新操作按钮可用性"""
+        """根据记录数量和选择数量更新操作按钮。"""
         has_rows = self.table.rowCount() > 0
-        has_selection = self.table.currentRow() >= 0
-        can_operate = has_rows and has_selection
-        self.open_button.setEnabled(can_operate)
-        self.delete_button.setEnabled(can_operate)
+        selected_count = len(self.table.selectionModel().selectedRows()) if has_rows else 0
+        self.select_all_button.setEnabled(has_rows)
+        # 加载只接受单条记录，删除则支持批量选择。
+        self.open_button.setEnabled(selected_count == 1)
+        self.delete_button.setEnabled(selected_count > 0)
+        self.delete_button.setText(
+            f'删除选中记录（{selected_count}）' if selected_count > 1 else '删除选中记录')
 
     def accept_selected(self):
-        """确认加载当前选中行"""
+        """验证单选记录存在后确认关闭弹窗。"""
         row = self.table.currentRow()
         if row < 0:
             return
 
-        # 从任意列获取存储的记录路径数据
+        # 每个单元格都携带相同路径，任意选中列都可定位记录。
         for col in range(self.table.columnCount()):
             path_item = self.table.item(row, col)
             if path_item is not None:
@@ -154,50 +214,61 @@ class SessionHistoryDialog(QDialog):
                     return
 
     def delete_selected(self):
-        """删除当前选中记录文件"""
-        row = self.table.currentRow()
-        if row < 0:
-            self._show_warning('未选择记录', '请先在列表中选中一条历史记录')
-            return
-
-        record_path: Path | None = None
-        for col in range(self.table.columnCount()):
-            item = self.table.item(row, col)
-            if item is not None:
-                raw_path = item.data(Qt.ItemDataRole.UserRole)
-                if raw_path:
-                    record_path = Path(str(raw_path))
-                    break
-
-        if record_path is None:
-            self._show_warning('删除失败', '未找到对应记录文件路径')
-            return
-
-        if not record_path.exists():
+        """删除选中记录，并按用户选择清理其独占音频。"""
+        record_paths = [path for path in self.selected_record_paths() if path.exists()]
+        if not record_paths:
             self.reload_records()
-            self._show_warning('文件不存在', f'记录文件已不存在：{record_path.name}')
+            self._show_warning('未选择记录', '请先在列表中选中要删除的历史记录')
             return
 
-        confirm = MessageBox('确认删除', f'确定删除历史记录 {record_path.name} 吗？\n此操作不可恢复。', self)
-        confirm.yesButton.setText('删除')
-        confirm.cancelButton.setText('取消')
+        # 仅统计目标记录独占缓存，避免破坏仍保留记录的音频引用。
+        exclusive = audio_cache.exclusive_keys(record_paths)
+        audio_count, audio_bytes = audio_cache.measure_keys(exclusive)
+
+        target_text = (f'"{record_paths[0].name}"' if len(record_paths) == 1
+                       else f'选中的 {len(record_paths)} 条历史记录')
+        confirm = DeleteRecordMessageBox(
+            target_text, audio_count, audio_cache.format_size(audio_bytes), self)
         if not confirm.exec():
             return
 
-        try:
-            record_path.unlink()
-        except Exception as e:
-            self._show_error('删除失败', f'无法删除文件：{e}')
-            return
+        delete_audio = confirm.should_delete_audio()
 
-        if self.selected_record_path == record_path:
+        deleted = []
+        failed = []
+        for record_path in record_paths:
+            try:
+                record_path.unlink()
+                deleted.append(record_path)
+            except Exception as e:
+                print(f'[历史记录] 删除失败 {record_path.name}：{e}')
+                failed.append(record_path.name)
+
+        removed_audio, freed = (0, 0)
+        if delete_audio and exclusive and deleted:
+            try:
+                removed_audio, freed = audio_cache.remove_keys(exclusive)
+            except Exception as e:
+                print(f'[历史记录] 删除音频失败：{e}')
+
+        if self.selected_record_path in deleted:
             self.selected_record_path = None
 
         self.reload_records()
-        self._show_success('删除成功', f'已删除：{record_path.name}')
+        self.refresh_cache_label()
+
+        if failed:
+            self._show_error('部分删除失败', f'成功 {len(deleted)} 条，失败 {len(failed)} 条：{"、".join(failed[:5])}')
+            return
+
+        detail = (f'已删除：{deleted[0].name}' if len(deleted) == 1
+                  else f'已删除 {len(deleted)} 条历史记录')
+        if removed_audio:
+            detail += f'，并清理 {removed_audio} 条音频（{audio_cache.format_size(freed)}）'
+        self._show_success('删除成功', detail)
 
     def _append_row(self, row_data: dict):
-        """添加一行展示数据"""
+        """将一条规范化记录信息追加到表格。"""
         row = self.table.rowCount()
         self.table.insertRow(row)
 
@@ -213,14 +284,14 @@ class SessionHistoryDialog(QDialog):
 
         for col, value in enumerate(values):
             cell = QTableWidgetItem(value)
-            # 在所有列存储路径数据，方便后续获取
+            # 路径附加到每个单元格，用户选中任意列都能解析记录。
             cell.setData(Qt.ItemDataRole.UserRole, str(row_data['file_path']))
-            # 设置单元格水平和竖直居中
+            # 统一居中短字段，保持表格视觉节奏。
             cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, col, cell)
 
     def _read_one_record(self, record_path: Path) -> dict:
-        """读取单条记录，解析展示信息，异常时回退默认值"""
+        """读取一条会话记录，并在字段缺失时生成可展示的默认值。"""
         fallback_time = datetime.fromtimestamp(record_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
         fallback = {
             'file_path': record_path,
@@ -251,19 +322,12 @@ class SessionHistoryDialog(QDialog):
         if isinstance(profile, dict):
             mode = str(profile.get('mode', '-'))
 
-        speaker = str(data.get('speaker', '')).strip()
-        if not speaker and isinstance(profile, dict):
-            # 向后兼容旧记录：尽力从历史 profile 中恢复（qwen_clone 可直接取 voice）
-            options = profile.get('options', {})
-            if isinstance(options, dict):
-                speaker = str(options.get('voice', '')).strip()
-        if not speaker:
-            speaker = '-'
+        speaker = str(data.get('speaker', '')).strip() or '-'
 
         items = data.get('items', [])
         items_count = len(items) if isinstance(items, list) else 0
 
-        # 优先使用source_file提取文件名（包含后缀），回退到source_name
+        # source_file 可保留扩展名；旧记录缺失时再回退到 source_name。
         source_name = '-'
         source_file = data.get('source_file', '')
         if source_file:

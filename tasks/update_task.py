@@ -1,4 +1,4 @@
-"""检查更新线程模块"""
+"""在后台查询 Gitee 或 GitHub 的最新发行版。"""
 
 import re
 import requests
@@ -6,7 +6,7 @@ from PySide6.QtCore import QThread, Signal
 
 
 class UpdateTask(QThread):
-    """检查更新线程"""
+    """在后台查询最新发行版，并生成设置页可直接展示的结果。"""
 
     signal_finish = Signal(list)
 
@@ -15,11 +15,11 @@ class UpdateTask(QThread):
         self.version = version
 
     def run(self):
-        """线程入口"""
+        """执行更新查询。"""
         self.get_update()
 
     def get_update(self):
-        """HTTP 获取更新信息：Gitee 主源，GitHub 备选"""
+        """优先查询 Gitee，失败后回退 GitHub，并发出统一结果。"""
         latest = None
         errors = []
 
@@ -67,7 +67,7 @@ class UpdateTask(QThread):
         return True
 
     def _fetch_latest_from_gitee(self) -> dict:
-        """从 Gitee 获取最新 release"""
+        """读取 Gitee 最新发行版并规范化为内部字段。"""
         url = 'https://gitee.com/api/v5/repos/pth2000/PowerPointReviewer/releases/latest'
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -89,7 +89,7 @@ class UpdateTask(QThread):
         }
 
     def _fetch_latest_from_github(self) -> dict:
-        """从 GitHub 获取最新 release"""
+        """读取 GitHub 最新发行版并规范化为内部字段。"""
         url = 'https://api.github.com/repos/pth2000/PowerPointReviewer/releases/latest'
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -112,7 +112,7 @@ class UpdateTask(QThread):
 
     @staticmethod
     def normalize_version(version: str) -> str:
-        """将 tag 归一化为 x.y.z 形式可比对版本串"""
+        """从标签中提取点分数字版本；无法识别时返回 ``0.0.0``。"""
         text = version.strip()
         text = text.lstrip('vV')
         match = re.search(r'\d+(?:\.\d+)*', text)
@@ -122,7 +122,7 @@ class UpdateTask(QThread):
 
     @staticmethod
     def compare_versions(version1, version2):
-        """版本号比较，返回 version1 是否大于等于 version2"""
+        """按数字段比较版本号，返回 ``version1 >= version2``。"""
         parts1 = [int(p) for p in str(version1).split('.') if p.isdigit()]
         parts2 = [int(p) for p in str(version2).split('.') if p.isdigit()]
 

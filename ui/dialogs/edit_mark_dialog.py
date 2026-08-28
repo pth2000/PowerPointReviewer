@@ -1,18 +1,17 @@
-﻿"""编辑分隔符弹窗"""
+﻿"""编辑并校验页内点击分隔符。"""
 
-from PySide6.QtCore import QUrl
 from qfluentwidgets import LineEdit, MessageBoxBase, SubtitleLabel
 
 
 class EditMarkMessageBox(MessageBoxBase):
-    """编辑分隔符界面"""
+    """编辑分隔符，并阻止空白值破坏讲稿切分。"""
 
     def __init__(self, current_mark: str, parent=None):
         super().__init__(parent)
         self.titleLabel = SubtitleLabel('编辑分隔符', self)
         self.urlLineEdit = LineEdit(self)
 
-        self.urlLineEdit.setPlaceholderText('请输入您的讲稿分隔符，如“●”')
+        self.urlLineEdit.setPlaceholderText('请输入页内分隔符，默认为一个实心圆点')
         self.urlLineEdit.setClearButtonEnabled(True)
         self.urlLineEdit.setText(current_mark)
 
@@ -23,10 +22,9 @@ class EditMarkMessageBox(MessageBoxBase):
         self.cancelButton.setText('取消')
         self.widget.setMinimumWidth(350)
 
-        if not self.urlLineEdit.text():
-            self.yesButton.setDisabled(True)
-        self.urlLineEdit.textChanged.connect(self._validate_url)
+        self.urlLineEdit.textChanged.connect(self._validate_mark)
+        self._validate_mark(self.urlLineEdit.text())
 
-    def _validate_url(self, text):
-        """保留原有启用逻辑，避免行为变化"""
-        self.yesButton.setEnabled(QUrl(text).isValid())
+    def _validate_mark(self, text: str):
+        """仅允许非空白分隔符，避免 ``str.split`` 异常或按空格误切讲稿。"""
+        self.yesButton.setEnabled(bool(text.strip()))

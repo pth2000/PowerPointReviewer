@@ -1,0 +1,19 @@
+# 运行期数据：音频缓存、会话记录、临时音频
+/data/
+/temp/
+
+# 本地配置：settings.json 中保存着明文 API Key，切勿提交
+/config/
+
+# 打包产物
+/build/
+/dist/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 开发环境
+/.venv/
+.idea/
+.vscode/

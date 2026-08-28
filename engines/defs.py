@@ -1,6 +1,10 @@
 """引擎注册表：包含所有引擎的 schema 定义和内置音色列表"""
 
-# 所有引擎的统一定义，供 TTSEngine 管理器和设置 UI 使用
+# 千问复刻支持的 language_type 取值，Auto 表示由模型自行判断。
+QWEN_LANGUAGE_TYPES = ('Auto', 'Chinese', 'English', 'German', 'Italian', 'Portuguese',
+                       'Spanish', 'Japanese', 'Korean', 'French', 'Russian')
+
+# 注册表同时驱动 TTSEngine 的调度策略和设置页的动态表单。
 ENGINE_DEFS = [
     {
         'id': 'local',
@@ -33,6 +37,13 @@ ENGINE_DEFS = [
         'retry_delay': 0.8,
         'options': [
             {
+                'key': 'locale', 'label': '语言 / 地区',
+                'description': '决定可选音色的范围，朗读外语讲稿时切换到对应地区',
+                'type': 'choice', 'choices_provider': 'edge_locales',
+                'choices': ['zh-CN', 'en-US'], 'default': 'zh-CN',
+                'rebuild_voices': True
+            },
+            {
                 'key': 'rate', 'label': '语音速率', 'description': '控制语音播放快慢，数值越大越快',
                 'type': 'int', 'min': 50, 'max': 500, 'step': 10, 'default': 200
             },
@@ -48,7 +59,7 @@ ENGINE_DEFS = [
     },
     {
         'id': 'bailian',
-        'name': '在线 · 阿里百炼CosyVoice',
+        'name': '在线 · 阿里百炼 CosyVoice',
         'description': '百炼引擎需联网使用，需配置API Key，提供丰富的音色和较高的语音质量，但需要额外的账号配置和可能的使用成本。',
         'supports_voice': True,
         'parallel_enabled': False,
@@ -63,7 +74,7 @@ ENGINE_DEFS = [
             {
                 'key': 'model', 'label': '模型', 'description': '百炼语音模型',
                 'type': 'choice', 'choices': ['cosyvoice-v3-flash', 'cosyvoice-v3-plus', 'cosyvoice-v2', 'cosyvoice-v1'],
-                'default': 'cosyvoice-v3-flash'
+                'default': 'cosyvoice-v3-flash', 'rebuild_voices': True
             },
             {
                 'key': 'rate', 'label': '语速倍率', 'description': '范围 0.5~2.0，1.0 为默认',
@@ -107,12 +118,22 @@ ENGINE_DEFS = [
                 'type': 'choice', 'choices': ['cn-beijing', 'intl-singapore'], 'default': 'cn-beijing'
             },
             {
-                'key': 'model', 'label': '合成模型', 'description': '复刻音色推荐使用 qwen3-tts-vc',
-                'type': 'choice', 'choices': ['qwen3-tts-vc-2026-01-22'], 'default': 'qwen3-tts-vc-2026-01-22'
+                'key': 'model', 'label': '合成模型',
+                'description': 'qwen-audio-3.0-tts 为当前推荐系列，需填写工作空间 ID 且仅支持北京地域；'
+                               '音色与模型绑定，换模型需重新复刻',
+                'type': 'choice',
+                'choices': ['qwen-audio-3.0-tts-plus', 'qwen-audio-3.0-tts-flash', 'qwen3-tts-vc-2026-01-22'],
+                'default': 'qwen-audio-3.0-tts-plus'
             },
             {
-                'key': 'language_type', 'label': '语言类型', 'description': '建议与文本语言一致（Chinese/English）',
-                'type': 'choice', 'choices': ['Chinese', 'English'], 'default': 'Chinese'
+                'key': 'workspace_id', 'label': '工作空间 ID',
+                'description': '仅 qwen-audio-3.0-tts 系列需要，取自阿里云百炼控制台的业务空间',
+                'type': 'text', 'default': ''
+            },
+            {
+                'key': 'language_type', 'label': '语言类型',
+                'description': '建议与讲稿语言一致，Auto 表示由模型自行判断',
+                'type': 'choice', 'choices': list(QWEN_LANGUAGE_TYPES), 'default': 'Auto'
             },
             {
                 'key': 'voice', 'label': '当前音色', 'description': '当前使用的复刻音色（自动填入）',

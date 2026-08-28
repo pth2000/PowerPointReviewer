@@ -1,4 +1,4 @@
-"""千问复刻音色管理对话框"""
+"""管理千问云端复刻音色及其本地创建参数。"""
 
 from pathlib import Path
 
@@ -26,7 +26,7 @@ from qfluentwidgets import (
 
 
 class QwenCloneVoiceDialog(QDialog):
-    """集中管理千问复刻音色：选择参考音频、创建、刷新、删除、选择当前音色。"""
+    """集中完成参考音频选择、音色创建、刷新、删除和当前音色选择。"""
 
     def __init__(self, tts_engine, parent=None):
         super().__init__(parent)
@@ -43,7 +43,7 @@ class QwenCloneVoiceDialog(QDialog):
         self.tip_label = BodyLabel('说明：创建音色后会保存在云端，后续直接复用，无需重复上传参考音频。', self)
         main_layout.addWidget(self.tip_label)
 
-        # 参考音频区域
+        # 参考音频
         ref_row = QHBoxLayout()
         ref_row.addWidget(QLabel('参考音频', self))
         self.reference_audio_edit = LineEdit(self)
@@ -54,7 +54,7 @@ class QwenCloneVoiceDialog(QDialog):
         ref_row.addWidget(self.choose_audio_button)
         main_layout.addLayout(ref_row)
 
-        # 参数区域
+        # 创建参数
         param_row = QHBoxLayout()
         param_row.addWidget(QLabel('音色名称', self))
         self.preferred_name_edit = LineEdit(self)
@@ -67,7 +67,7 @@ class QwenCloneVoiceDialog(QDialog):
         param_row.addWidget(self.mime_combo)
         main_layout.addLayout(param_row)
 
-        # 列表区域
+        # 云端音色列表
         self.table = TableWidget(self)
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(['音色', '模型', '创建时间'])
@@ -77,7 +77,7 @@ class QwenCloneVoiceDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
 
-        # 列宽策略：音色名拉伸，其它列按内容宽度，避免被截断且保留可读性
+        # 音色 ID 需要最大空间，其余元数据按内容宽度展示。
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -87,7 +87,7 @@ class QwenCloneVoiceDialog(QDialog):
         self.table.itemDoubleClicked.connect(self.use_selected_voice_and_close)
         main_layout.addWidget(self.table, 1)
 
-        # 操作按钮
+        # 音色操作
         action_row = QHBoxLayout()
         self.refresh_button = PushButton('刷新列表', self)
         self.refresh_button.clicked.connect(self.refresh_list)
@@ -117,6 +117,7 @@ class QwenCloneVoiceDialog(QDialog):
         self.refresh_list(select_voice=self.selected_voice)
 
     def _load_current_settings(self):
+        """将当前千问创建参数恢复到弹窗控件。"""
         settings = self.tts_engine.get_current_option_values()
         self.reference_audio_edit.setText(str(settings.get('reference_audio_path', '')))
         self.preferred_name_edit.setText(str(settings.get('preferred_name', 'ppt_reviewer')))
@@ -130,6 +131,7 @@ class QwenCloneVoiceDialog(QDialog):
 
     @staticmethod
     def _infer_mime(path: str) -> str:
+        """根据参考音频扩展名推断服务端接受的 MIME 类型。"""
         suffix = Path(path).suffix.lower()
         if suffix == '.mp3':
             return 'audio/mpeg'
@@ -140,6 +142,7 @@ class QwenCloneVoiceDialog(QDialog):
         return ''
 
     def choose_reference_audio(self):
+        """选择本地参考音频，并同步路径和推断出的 MIME 类型。"""
         selected, _ = QFileDialog.getOpenFileName(
             self,
             '选择参考音频',
@@ -161,6 +164,7 @@ class QwenCloneVoiceDialog(QDialog):
             self._info_warning('无法自动识别', '请手动确认 MIME 类型')
 
     def _current_row_voice(self) -> str:
+        """返回音色列表当前行的服务端音色 ID。"""
         row = self.table.currentRow()
         if row < 0:
             return ''
@@ -170,6 +174,7 @@ class QwenCloneVoiceDialog(QDialog):
         return str(item.data(Qt.ItemDataRole.UserRole) or '').strip()
 
     def refresh_list(self, select_voice: str = ''):
+        """重新查询云端音色，并尽量恢复指定或当前选择。"""
         self.table.setRowCount(0)
 
         try:
@@ -209,6 +214,7 @@ class QwenCloneVoiceDialog(QDialog):
         self.table.selectRow(0)
 
     def create_voice(self):
+        """校验表单、创建云端音色并刷新列表。"""
         reference_path = self.reference_audio_edit.text().strip()
         preferred_name = self.preferred_name_edit.text().strip() or 'ppt_reviewer'
         mime = self.mime_combo.currentText().strip() or 'audio/mpeg'
@@ -221,7 +227,7 @@ class QwenCloneVoiceDialog(QDialog):
             self._info_warning('文件不存在', '请选择有效的参考音频文件')
             return
 
-        # 先把表单写回配置，保证后续保存设置时一致
+        # 先同步表单，确保设置页随后保存的是实际用于创建的参数。
         self.tts_engine.set_current_option('reference_audio_path', reference_path)
         self.tts_engine.set_current_option('preferred_name', preferred_name)
         self.tts_engine.set_current_option('audio_mime_type', mime)
@@ -238,6 +244,7 @@ class QwenCloneVoiceDialog(QDialog):
         self._info_success('创建成功', f'已创建音色：{voice}')
 
     def delete_selected_voice(self):
+        """确认后删除当前云端音色，并刷新列表。"""
         voice = self._current_row_voice()
         if not voice:
             self._info_warning('未选择音色', '请先在列表中选中一个音色')
@@ -268,6 +275,7 @@ class QwenCloneVoiceDialog(QDialog):
             self._info_success('删除成功', f'已删除音色：{voice}')
 
     def use_selected_voice(self):
+        """将列表当前音色写入引擎设置，但保持弹窗打开。"""
         voice = self._current_row_voice()
         if not voice:
             self._info_warning('未选择音色', '请先在列表中选中一个音色')
@@ -278,11 +286,13 @@ class QwenCloneVoiceDialog(QDialog):
         self._info_success('已设置当前音色', f'当前音色：{voice}')
 
     def use_selected_voice_and_close(self, *_):
+        """保存当前音色并确认关闭弹窗。"""
         self.use_selected_voice()
         if self.selected_voice:
             self.accept()
 
     def get_selected_voice(self) -> str:
+        """返回用户最终选择的音色 ID。"""
         return self.selected_voice
 
     def _info_success(self, title: str, text: str):
@@ -311,7 +321,8 @@ class QwenCloneVoiceDialog(QDialog):
         InfoBar.error(
             title=title,
             content=text,
-            orient=Qt.Horizontal,
+            # 错误详情可能很长，竖排布局可保留足够阅读宽度。
+            orient=Qt.Vertical,
             isClosable=True,
             position=InfoBarPosition.TOP,
             duration=-1,

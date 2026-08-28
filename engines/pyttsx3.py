@@ -6,11 +6,9 @@ import pyttsx3
 
 
 def init_voices() -> tuple[list, list[str]]:
-    """初始化本地语音列表。
+    """初始化本地驱动，并返回音色对象及其显示名称。
 
-    Returns:
-        (voices, voice_names): voices 为 pyttsx3 Voice 对象列表，
-        voice_names 为对应的可读名称列表。
+    初始化失败不会阻止程序使用在线引擎，此时返回两个空列表。
     """
     try:
         engine = pyttsx3.init()
@@ -31,15 +29,9 @@ def init_voices() -> tuple[list, list[str]]:
 
 def save(text: str, path: str, *, voices: list, rate: int = 200,
          volume: float = 1.0, voice_index: int = 0) -> None:
-    """使用 pyttsx3 将文本合成为音频文件。
+    """使用独立的 pyttsx3 实例将文本合成为本地音频文件。
 
-    Args:
-        text:        要合成的文本。
-        path:        输出文件路径。
-        voices:      pyttsx3 Voice 对象列表（由 init_voices 返回）。
-        rate:        语速，默认 200。
-        volume:      音量 0~1，默认 1.0。
-        voice_index: 发音人索引。
+    ``voices`` 应来自 :func:`init_voices`；音色索引越界时沿用系统默认音色。
     """
     try:
         engine = pyttsx3.init()

@@ -1,4 +1,4 @@
-"""阿里百炼 TTS 引擎：内置音色列表、_FileCallback 回调类、基于 tts_v2 的音频合成"""
+"""阿里百炼 TTS 引擎：内置音色列表、文件写入回调与基于 tts_v2 的语音合成"""
 
 import os
 from pathlib import Path
@@ -6,82 +6,100 @@ import threading
 import traceback
 from typing import Optional
 
-import dashscope
-from dashscope.audio.tts_v2 import SpeechSynthesizer, ResultCallback, AudioFormat
-
-
+# dashscope 导入耗时接近一秒，且只有实际调用百炼时才需要，
+# 因此推迟到调用点再导入，避免拖慢应用启动。
 _DEFAULT_WS_URL = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'
 
-# 各模型对应的可用音色
+# 百炼模型的音色集合互不完全兼容，必须按当前模型提供选项。
 MODEL_VOICES: dict[str, list[str]] = {
     'cosyvoice-v3-flash': [
-        "longanyang",      # 龙安洋 - 社交陪伴（标杆音色）
-        "longanhuan",      # 龙安欢 - 社交陪伴（标杆音色）
-        "longhuhu_v3",     # 龙呼呼 - 童声（标杆音色）
-        "longpaopao_v3",   # 龙泡泡 - 智能玩具/儿童故事机
-        "longjielidou_v3", # 龙杰力豆 - 智能玩具/儿童故事机
-        "longxian_v3",     # 龙仙 - 智能玩具/儿童故事机
-        "longling_v3",     # 龙铃 - 智能玩具/儿童故事机
-        "longshanshan_v3", # 龙闪闪 - 消费电子-儿童有声书
-        "longniuniu_v3",   # 龙牛牛 - 消费电子-儿童有声书
-        "longjiaxin_v3",   # 龙嘉欣 - 方言（粤语）
-        "longjiayi_v3",    # 龙嘉怡 - 方言（粤语）
-        "longanyue_v3",    # 龙安粤 - 方言（粤语）
-        "longlaotie_v3",   # 龙老铁 - 方言（东北话）
-        "longshange_v3",   # 龙陕哥 - 方言（陕西话）
-        "longanmin_v3",    # 龙安闽 - 方言（闽南话）
-        "loongkyong_v3",   # loongkyong - 出海营销（韩语）
-        "loongriko_v3",    # Riko - 出海营销（日语）
-        "loongtomoka_v3",  # loongtomoka - 出海营销（日语）
-        "longfei_v3",      # 龙飞 - 诗词朗诵
-        "longyingxiao_v3", # 龙应笑 - 电话销售
-        "longyingxun_v3",  # 龙应询 - 客服
-        "longyingjing_v3", # 龙应静 - 客服
-        "longyingling_v3", # 龙应聆 - 客服
-        "longyingtao_v3",  # 龙应桃 - 客服
-        "longxiaochun_v3", # 龙小淳 - 语音助手
-        "longxiaoxia_v3",  # 龙小夏 - 语音助手
-        "longyumi_v3",     # YUMI - 语音助手
-        "longanyun_v3",    # 龙安昀 - 语音助手
-        "longanwen_v3",    # 龙安温 - 语音助手
-        "longanli_v3",     # 龙安莉 - 语音助手
-        "longanlang_v3",   # 龙安朗 - 语音助手
-        "longyingmu_v3",   # 龙应沐 - 语音助手
-        "longantai_v3",    # 龙安台 - 社交陪伴
-        "longhua_v3",      # 龙华 - 社交陪伴
-        "longcheng_v3",    # 龙橙 - 社交陪伴
-        "longze_v3",       # 龙泽 - 社交陪伴
-        "longzhe_v3",      # 龙哲 - 社交陪伴
-        "longyan_v3",      # 龙颜 - 社交陪伴
-        "longxing_v3",     # 龙星 - 社交陪伴
-        "longtian_v3",     # 龙天 - 社交陪伴
-        "longwan_v3",      # 龙婉 - 社交陪伴
-        "longqiang_v3",    # 龙嫱 - 社交陪伴
-        "longfeifei_v3",   # 龙菲菲 - 社交陪伴
-        "longhao_v3",      # 龙浩 - 社交陪伴
-        "longanrou_v3",    # 龙安柔 - 社交陪伴
-        "longhan_v3",      # 龙寒 - 社交陪伴
-        "longanzhi_v3",    # 龙安智 - 社交陪伴
-        "longanling_v3",   # 龙安灵 - 社交陪伴
-        "longanya_v3",     # 龙安雅 - 社交陪伴
-        "longanqin_v3",    # 龙安亲 - 社交陪伴
-        "longmiao_v3",     # 龙妙 - 有声书
-        "longsanshu_v3",   # 龙三叔 - 有声书
-        "longyuan_v3",     # 龙媛 - 有声书
-        "longyue_v3",      # 龙悦 - 有声书
-        "longxiu_v3",      # 龙修 - 有声书
-        "longnan_v3",      # 龙楠 - 有声书
-        "longwanjun_v3",   # 龙婉君 - 有声书
-        "longyichen_v3",   # 龙逸尘 - 有声书
-        "longlaobo_v3",    # 龙老伯 - 有声书
-        "longlaoyi_v3",    # 龙老姨 - 有声书
-        "longjiqi_v3",     # 龙机器 - 短视频配音
-        "longhouge_v3",    # 龙猴哥 - 短视频配音
-        "longdaiyu_v3",    # 龙黛玉 - 短视频配音
-        "longanran_v3",    # 龙安燃 - 直播带货
-        "longanxuan_v3",   # 龙安宣 - 直播带货
-        "longshuo_v3",     # 龙硕 - 新闻播报
-        "longshu_v3",      # 龙书 - 新闻播报
+        "longanyang",       # 龙安洋 - 社交陪伴（标杆音色）
+        "longanhuan_v3",    # 龙安欢（V3） - 欢脱元气女
+        "longanhuan",       # 龙安欢 - 欢脱元气女
+        "longhuhu_v3",      # 龙呼呼 - 童声（标杆音色）
+        "longpaopao_v3",    # 龙泡泡 - 智能玩具/儿童故事机
+        "longjielidou_v3",  # 龙杰力豆 - 智能玩具/儿童故事机
+        "longxian_v3",      # 龙仙 - 智能玩具/儿童故事机
+        "longling_v3",      # 龙铃 - 智能玩具/儿童故事机
+        "longshanshan_v3",  # 龙闪闪 - 消费电子-儿童有声书
+        "longniuniu_v3",    # 龙牛牛 - 消费电子-儿童有声书
+        "longjiaxin_v3",    # 龙嘉欣 - 方言（粤语）
+        "longjiayi_v3",     # 龙嘉怡 - 方言（粤语）
+        "longanyue_v3",     # 龙安粤 - 方言（粤语）
+        "longlaotie_v3",    # 龙老铁 - 方言（东北话）
+        "longshange_v3",    # 龙陕哥 - 方言（陕西话）
+        "longanmin_v3",     # 龙安闽 - 方言（闽南话）
+        "loongkyong_v3",    # loongkyong - 出海营销（韩语）
+        "loongriko_v3",     # Riko - 出海营销（日语）
+        "loongtomoka_v3",   # loongtomoka - 出海营销（日语）
+        "loongabby_v3",     # loongabby - 美式英文女
+        "loongandy_v3",     # loongandy - 美式英文男
+        "loongannie_v3",    # loongannie - 美式英文女
+        "loongava_v3",      # loongava - 美式英文女
+        "loongbeth_v3",     # loongbeth - 美式英文女
+        "loongbetty_v3",    # loongbetty - 美式英文女
+        "loongcally_v3",    # loongcally - 美式英文女
+        "loongcindy_v3",    # loongcindy - 美式英文女
+        "loongdavid_v3",    # loongdavid - 美式英文男
+        "loongdonna_v3",    # loongdonna - 美式英文女
+        "loongemily_v3",    # loongemily - 英式英文女
+        "loongeric_v3",     # loongeric - 英式英文男
+        "loongluna_v3",     # loongluna - 英式英文女
+        "loongluca_v3",     # loongluca - 英式英文男
+        "loongtomoya_v3",   # loongtomoya - 日语男
+        "loongyuuna_v3",    # Yuuna - 日语女
+        "loongyuuma_v3",    # Yuuma - 日语男
+        "loongjihun_v3",    # Jihun - 韩语男
+        "loongindah_v3",    # loongindah - 印尼女
+        "longfei_v3",       # 龙飞 - 诗词朗诵
+        "longyingxiao_v3",  # 龙应笑 - 电话销售
+        "longyingxun_v3",   # 龙应询 - 客服
+        "longyingjing_v3",  # 龙应静 - 客服
+        "longyingling_v3",  # 龙应聆 - 客服
+        "longyingtao_v3",   # 龙应桃 - 客服
+        "longxiaochun_v3",  # 龙小淳 - 语音助手
+        "longxiaoxia_v3",   # 龙小夏 - 语音助手
+        "longyumi_v3",      # YUMI - 语音助手
+        "longanyun_v3",     # 龙安昀 - 语音助手
+        "longanwen_v3",     # 龙安温 - 语音助手
+        "longanli_v3",      # 龙安莉 - 语音助手
+        "longanlang_v3",    # 龙安朗 - 语音助手
+        "longyingmu_v3",    # 龙应沐 - 语音助手
+        "longantai_v3",     # 龙安台 - 社交陪伴
+        "longhua_v3",       # 龙华 - 社交陪伴
+        "longcheng_v3",     # 龙橙 - 社交陪伴
+        "longze_v3",        # 龙泽 - 社交陪伴
+        "longzhe_v3",       # 龙哲 - 社交陪伴
+        "longyan_v3",       # 龙颜 - 社交陪伴
+        "longxing_v3",      # 龙星 - 社交陪伴
+        "longtian_v3",      # 龙天 - 社交陪伴
+        "longwan_v3",       # 龙婉 - 社交陪伴
+        "longqiang_v3",     # 龙嫱 - 社交陪伴
+        "longfeifei_v3",    # 龙菲菲 - 社交陪伴
+        "longhao_v3",       # 龙浩 - 社交陪伴
+        "longanrou_v3",     # 龙安柔 - 社交陪伴
+        "longhan_v3",       # 龙寒 - 社交陪伴
+        "longanzhi_v3",     # 龙安智 - 社交陪伴
+        "longanling_v3",    # 龙安灵 - 社交陪伴
+        "longanya_v3",      # 龙安雅 - 社交陪伴
+        "longanqin_v3",     # 龙安亲 - 社交陪伴
+        "longmiao_v3",      # 龙妙 - 有声书
+        "longsanshu_v3",    # 龙三叔 - 有声书
+        "longyuan_v3",      # 龙媛 - 有声书
+        "longyue_v3",       # 龙悦 - 有声书
+        "longxiu_v3",       # 龙修 - 有声书
+        "longnan_v3",       # 龙楠 - 有声书
+        "longwanjun_v3",    # 龙婉君 - 有声书
+        "longyichen_v3",    # 龙逸尘 - 有声书
+        "longlaobo_v3",     # 龙老伯 - 有声书
+        "longlaoyi_v3",     # 龙老姨 - 有声书
+        "longjiqi_v3",      # 龙机器 - 短视频配音
+        "longhouge_v3",     # 龙猴哥 - 短视频配音
+        "longdaiyu_v3",     # 龙黛玉 - 短视频配音
+        "longanran_v3",     # 龙安燃 - 直播带货
+        "longanxuan_v3",    # 龙安宣 - 直播带货
+        "longshuo_v3",      # 龙硕 - 新闻播报
+        "longshu_v3",       # 龙书 - 新闻播报
         "loongbella_v3",    # Bella3.0 - 新闻播报
     ],
     'cosyvoice-v3-plus': [
@@ -219,81 +237,88 @@ MODEL_VOICES: dict[str, list[str]] = {
         "loongbella",    # Bella
     ]
 }
-# 默认音色（以第一个模型的列表为准）
+# 兼容旧调用方的默认音色列表，与默认模型保持一致。
 VOICES: list[str] = MODEL_VOICES['cosyvoice-v3-flash']
 
+# 流式回调
 
-# ──────────────────────────────────────────────────────────
-# 回调类
-# ──────────────────────────────────────────────────────────
+_FILE_CALLBACK_CLASS = None
 
-class _FileCallback(ResultCallback):  # type: ignore[misc]
-    """将百炼 WebSocket 流式音频分片写入目标文件，并在完成时发出事件信号。"""
 
-    def __init__(self, output_path: str) -> None:
-        self.output_path = Path(output_path)
-        self.file = None
-        self.error_message: Optional[str] = None
-        self.total_bytes: int = 0
-        self.events: list[str] = []
-        self.done_event = threading.Event()
+def _file_callback_class():
+    """首次调用时才定义回调类。
 
-    def on_open(self) -> None:
-        self.file = self.output_path.open('wb')
-        print(f'[百炼TTS] 连接建立，输出文件：{self.output_path}')
+    该类需继承 dashscope 的 ResultCallback，而基类要在类定义时就位，
+    因此把类体包在函数里，随首次合成一起完成导入。
+    """
+    global _FILE_CALLBACK_CLASS
+    if _FILE_CALLBACK_CLASS is not None:
+        return _FILE_CALLBACK_CLASS
 
-    def on_complete(self) -> None:
-        print(f'[百炼TTS] 合成完成，累计字节：{self.total_bytes}')
-        self.done_event.set()
+    from dashscope.audio.tts_v2 import ResultCallback
 
-    def on_error(self, message: str) -> None:
-        self.error_message = message
-        print(f'[百炼TTS] 回调错误：{message}')
-        self.done_event.set()
+    class _FileCallback(ResultCallback):  # type: ignore[misc]
+        """将 WebSocket 音频分片写入文件，并用线程事件通知调用方结束。"""
 
-    def on_close(self) -> None:
-        if self.file:
-            self.file.close()
+        def __init__(self, output_path: str) -> None:
+            self.output_path = Path(output_path)
             self.file = None
-        print('[百炼TTS] 连接关闭')
-        self.done_event.set()
+            self.error_message: Optional[str] = None
+            self.total_bytes: int = 0
+            self.events: list[str] = []
+            self.done_event = threading.Event()
 
-    def on_event(self, message) -> None:
-        msg = str(message)
-        self.events.append(msg)
-        if len(self.events) <= 3:  # 只打印前几条，避免刷屏
-            print(f'[百炼TTS] 事件：{msg}')
+        def on_open(self) -> None:
+            self.file = self.output_path.open('wb')
+            print(f'[百炼TTS] 连接建立，输出文件：{self.output_path}')
 
-    def on_data(self, data: bytes) -> None:
-        if self.file:
-            self.file.write(data)
-            self.total_bytes += len(data)
+        def on_complete(self) -> None:
+            print(f'[百炼TTS] 合成完成，累计字节：{self.total_bytes}')
+            self.done_event.set()
+
+        def on_error(self, message: str) -> None:
+            self.error_message = message
+            print(f'[百炼TTS] 回调错误：{message}')
+            self.done_event.set()
+
+        def on_close(self) -> None:
+            if self.file:
+                self.file.close()
+                self.file = None
+            print('[百炼TTS] 连接关闭')
+            self.done_event.set()
+
+        def on_event(self, message) -> None:
+            msg = str(message)
+            self.events.append(msg)
+            if len(self.events) <= 3:  # 保留少量诊断事件，避免长任务刷屏。
+                print(f'[百炼TTS] 事件：{msg}')
+
+        def on_data(self, data: bytes) -> None:
+            if self.file:
+                self.file.write(data)
+                self.total_bytes += len(data)
+
+    _FILE_CALLBACK_CLASS = _FileCallback
+    return _FILE_CALLBACK_CLASS
 
 
-# ──────────────────────────────────────────────────────────
 # 音频合成
-# ──────────────────────────────────────────────────────────
 
 def save(text: str, path: str, *, voices: list[str] = VOICES, voice_index: int = 0,
          rate: float = 1.0, volume: int = 50, pitch: float = 1.0,
          model: str = 'cosyvoice-v3-flash', api_key: str = '',
          ws_url: str = _DEFAULT_WS_URL) -> None:
-    """使用阿里百炼 tts_v2 将文本合成为音频文件。
+    """通过百炼 ``tts_v2`` WebSocket 接口将文本合成为 WAV。
 
-    Args:
-        text:        要合成的文本。
-        path:        输出文件路径。
-        voices:      百炼音色名称列表，默认使用模块内置 VOICES。
-        voice_index: 发音人索引。
-        rate:        语速倍率（0.5~2.0）。
-        volume:      音量（0~100）。
-        pitch:       音调倍率（0.5~2.0）。
-        model:       百炼语音模型名称。
-        api_key:     阿里百炼 API Key；为空时自动读取环境变量 DASHSCOPE_API_KEY。
-        ws_url:      WebSocket 服务地址。
+    ``rate`` 和 ``pitch`` 为 0.5 至 2.0 的倍率，``volume`` 范围为 0 至 100。
+    未显式传入密钥时读取 ``DASHSCOPE_API_KEY`` 环境变量。
     """
-    if SpeechSynthesizer is None:
-        raise RuntimeError('未安装 dashscope，请先执行: pip install dashscope')
+    try:
+        import dashscope
+        from dashscope.audio.tts_v2 import SpeechSynthesizer, AudioFormat
+    except ImportError as e:
+        raise RuntimeError('未安装 dashscope，请先执行: pip install dashscope') from e
 
     if not api_key:
         api_key = os.getenv('DASHSCOPE_API_KEY', '').strip()
@@ -304,7 +329,7 @@ def save(text: str, path: str, *, voices: list[str] = VOICES, voice_index: int =
     voice_name = voices[voice_index] if 0 <= voice_index < len(voices) else voices[0]
 
     def _call() -> None:
-        callback = _FileCallback(path)
+        callback = _file_callback_class()(path)
         synthesizer = SpeechSynthesizer(
             model=model,
             voice=voice_name,
@@ -322,7 +347,7 @@ def save(text: str, path: str, *, voices: list[str] = VOICES, voice_index: int =
             traceback.print_exc()
             raise RuntimeError(f'百炼 TTS 调用异常：{e}') from e
 
-        # tts_v2 回调异步到达，call() 返回后仍可能在写文件，等待完成信号
+        # call() 返回不代表异步回调已写完文件，必须等待完成、错误或关闭事件。
         completed = callback.done_event.wait(timeout=30)
         if not completed:
             raise RuntimeError('百炼 TTS 在 30 秒内未完成，可能是网络超时或服务阻塞')

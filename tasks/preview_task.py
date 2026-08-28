@@ -1,10 +1,10 @@
-"""试听音频生成线程模块"""
+"""在后台生成设置页使用的单条试听音频。"""
 
 from PySide6.QtCore import QThread, Signal
 
 
 class PreviewTask(QThread):
-    """试听语音生成线程，防止阻塞 UI"""
+    """在后台生成单条试听音频，避免 TTS 请求阻塞界面。"""
 
     signal_finish = Signal(str)
     signal_error = Signal(str)
@@ -16,7 +16,7 @@ class PreviewTask(QThread):
         self.path = path
 
     def run(self):
-        """异步生成试听音频"""
+        """生成试听文件，并通过成功或错误信号返回结果。"""
         try:
             self.tts_engine.save_file(self.text, self.path)
             self.signal_finish.emit(self.path)
