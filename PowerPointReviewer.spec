@@ -12,7 +12,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     # 这些包不再被引用，排除后可缩减产物体积与首次启动的磁盘读取量。
-    excludes=['tkinter', 'PIL', 'pyautogui', 'pyscreeze', 'pygetwindow',
+    excludes=['tkinter', 'pyautogui', 'pyscreeze', 'pygetwindow',
               'pymsgbox', 'mouseinfo', 'pytweening'],
     noarchive=False,
     optimize=0,
