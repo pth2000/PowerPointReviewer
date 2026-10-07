@@ -20,6 +20,7 @@ class AppSettings:
         # 外观
         'theme_mode': 'auto',
         'theme_color': theme.DEFAULT_COLOR,
+        'ui_font': '',
         # 讲稿与播放
         'mark': '●',
         'countdown_enabled': True,

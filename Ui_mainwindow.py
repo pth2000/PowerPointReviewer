@@ -3,7 +3,7 @@
 ################################################################################
 ## Form generated from reading UI file 'Ui_mainwindow.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.3.1
+## Created by: Qt User Interface Compiler version 6.10.2
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
@@ -29,9 +29,6 @@ class Ui_mainwindow(object):
         if not mainwindow.objectName():
             mainwindow.setObjectName(u"mainwindow")
         mainwindow.resize(850, 720)
-        font = QFont()
-        font.setFamilies([u"Microsoft YaHei UI"])
-        mainwindow.setFont(font)
         self.horizontalLayout_13 = QHBoxLayout(mainwindow)
         self.horizontalLayout_13.setObjectName(u"horizontalLayout_13")
         self.bgScrollArea = ScrollArea(mainwindow)
@@ -109,7 +106,8 @@ class Ui_mainwindow(object):
         self.verticalLayout_7.setObjectName(u"verticalLayout_7")
         self.notesPathLabel_5 = QLabel(self.CardWidget)
         self.notesPathLabel_5.setObjectName(u"notesPathLabel_5")
-        self.notesPathLabel_5.setStyleSheet(u"font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';")
+        self.notesPathLabel_5.setStyleSheet(u"font-weight: 700;\n"
+"font-size: 10pt;")
 
         self.verticalLayout_7.addWidget(self.notesPathLabel_5)
 
@@ -121,7 +119,7 @@ class Ui_mainwindow(object):
 
         self.horizontalLayout_11.addLayout(self.verticalLayout_7)
 
-        self.horizontalSpacer = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.horizontalSpacer = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         self.horizontalLayout_11.addItem(self.horizontalSpacer)
 
@@ -155,7 +153,8 @@ class Ui_mainwindow(object):
         self.verticalLayout.setObjectName(u"verticalLayout")
         self.notesPathShowLabel = QLabel(self.importCardWidget)
         self.notesPathShowLabel.setObjectName(u"notesPathShowLabel")
-        self.notesPathShowLabel.setStyleSheet(u"font: 700 9pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';")
+        self.notesPathShowLabel.setStyleSheet(u"font-weight: 700;\n"
+"font-size: 9pt;")
 
         self.verticalLayout.addWidget(self.notesPathShowLabel)
 
@@ -270,7 +269,7 @@ class Ui_mainwindow(object):
 
         self.horizontalLayout_10.addWidget(self.pageJumpShowLabel)
 
-        self.horizontalSpacer_2 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.horizontalSpacer_2 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         self.horizontalLayout_10.addItem(self.horizontalSpacer_2)
 
@@ -303,7 +302,7 @@ class Ui_mainwindow(object):
 
         self.horizontalLayout_12.addWidget(self.infoShowLabel)
 
-        self.horizontalSpacer_3 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.horizontalSpacer_3 = QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         self.horizontalLayout_12.addItem(self.horizontalSpacer_3)
 
@@ -390,7 +389,8 @@ class Ui_mainwindow(object):
         self.verticalLayout_3.setObjectName(u"verticalLayout_3")
         self.currentLabel = QLabel(self.currentCardWidget)
         self.currentLabel.setObjectName(u"currentLabel")
-        self.currentLabel.setStyleSheet(u"font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';")
+        self.currentLabel.setStyleSheet(u"font-weight: 700;\n"
+"font-size: 10pt;")
 
         self.verticalLayout_3.addWidget(self.currentLabel)
 
@@ -427,7 +427,8 @@ class Ui_mainwindow(object):
         self.verticalLayout_9.setObjectName(u"verticalLayout_9")
         self.currentLabel_2 = QLabel(self.currentCardWidget)
         self.currentLabel_2.setObjectName(u"currentLabel_2")
-        self.currentLabel_2.setStyleSheet(u"font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';")
+        self.currentLabel_2.setStyleSheet(u"font-weight: 700;\n"
+"font-size: 10pt;")
 
         self.verticalLayout_9.addWidget(self.currentLabel_2)
 
@@ -453,7 +454,7 @@ class Ui_mainwindow(object):
 
         self.verticalLayout_6.addWidget(self.currentCardWidget)
 
-        self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding)
+        self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
         self.verticalLayout_6.addItem(self.verticalSpacer)
 
@@ -481,7 +482,7 @@ class Ui_mainwindow(object):
         self.editMarkPushButton.setText(QCoreApplication.translate("mainwindow", u"\u7f16\u8f91\u5206\u9694\u7b26", None))
         self.notesPathShowLabel.setText(QCoreApplication.translate("mainwindow", u"\u6587\u4ef6\u8def\u5f84", None))
         self.notesPathLabel.setText(QCoreApplication.translate("mainwindow", u"\u6682\u65e0", None))
-        self.getFileButton.setProperty("text_", QCoreApplication.translate("mainwindow", u"\u5bfc\u5165 PowerPoint", None))
+        self.getFileButton.setProperty(u"text_", QCoreApplication.translate("mainwindow", u"\u5bfc\u5165 PowerPoint", None))
         self.SubtitleLabel_2.setText(QCoreApplication.translate("mainwindow", u"\u64ad\u653e\u63a7\u5236", None))
         self.currentStatusShowLabel.setText(QCoreApplication.translate("mainwindow", u"\u72b6\u6001\uff1a", None))
         self.currentStatusLabel.setText(QCoreApplication.translate("mainwindow", u"\u505c\u6b62", None))

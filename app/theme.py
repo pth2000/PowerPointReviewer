@@ -1,13 +1,16 @@
-"""应用明暗模式与主题色，并修正第三方控件的主题适配差异。
+"""应用明暗模式、主题色与界面字体，并修正第三方控件的主题适配差异。
 
-主题不影响语音生成，因此由设置页即时应用和持久化，不参与语音参数的显式保存流程。
+外观不影响语音生成，因此由设置页即时应用和持久化，不参与语音参数的显式保存流程。
 """
 
 import ctypes
+import hashlib
+import json
 import sys
+from functools import cmp_to_key
 
-from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QCollator, QEvent, QLocale, QObject, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QToolButton, QWidget
 from qfluentwidgets import (
     ColorDialog,
@@ -24,13 +27,15 @@ from qfluentwidgets import (
     ToolTipFilter,
     ToolTipPosition,
     isDarkTheme,
+    setFontFamilies,
     setTheme,
     setThemeColor,
 )
 from qfluentwidgets.common.config import qconfig
-from qfluentwidgets.common.style_sheet import ThemeColor
+from qfluentwidgets.common.icon import drawIcon
+from qfluentwidgets.common.style_sheet import ThemeColor, updateStyleSheet
 
-from app import icons
+from app import icons, paths
 
 DEFAULT_COLOR = '#B7472A'
 
@@ -49,6 +54,22 @@ THEME_MODES = (
 )
 
 _MODE_MAP = {'auto': Theme.AUTO, 'light': Theme.LIGHT, 'dark': Theme.DARK}
+
+# 所选字体缺字时按此顺序回退；该列表同时是 qfluentwidgets 的默认字体。
+FALLBACK_FONTS = ('Segoe UI', 'Microsoft YaHei', 'PingFang SC')
+
+DEFAULT_FONT_LABEL = '系统默认'
+
+# 界面是中文的，只提供能显示中文的字体，否则所选字体对界面几乎没有影响。
+CJK_WRITING_SYSTEMS = (
+    QFontDatabase.WritingSystem.SimplifiedChinese,
+    QFontDatabase.WritingSystem.TraditionalChinese,
+)
+
+# 用来生成字体指纹的取样文字，兼顾中文、西文和数字。
+FONT_PROBE_TEXT = '永字Ag1'
+
+_available_fonts = None
 
 
 def mode_labels() -> list:
@@ -70,6 +91,134 @@ def mode_for_label(label: str) -> str:
         if text == label:
             return mode
     return THEME_MODES[0][0]
+
+
+def available_fonts() -> tuple:
+    """返回可供选择的字体，每项为 ``(字体名, 显示名)``。
+
+    字体全部来自系统枚举，没有内置清单。判断字体能否显示中文需要逐个加载字体文件，
+    耗时随系统安装的字体数量增长，因此结果写入缓存，只在系统字体增减后重新枚举。
+    """
+    global _available_fonts
+    if _available_fonts is None:
+        families = QFontDatabase.families()
+        signature = _font_cache_signature(families)
+        fonts = _cached_fonts(signature)
+        if fonts is None:
+            fonts = _collect_fonts(families)
+            _store_fonts(signature, fonts)
+        _available_fonts = (('', DEFAULT_FONT_LABEL),) + fonts
+    return _available_fonts
+
+
+def _font_cache_signature(families: list) -> str:
+    """计算缓存标识；系统字体或枚举规则变化后不再匹配。"""
+    rules = (FONT_PROBE_TEXT, *(system.name for system in CJK_WRITING_SYSTEMS))
+    payload = '\n'.join((*rules, *families))
+    return hashlib.md5(payload.encode('utf-8')).hexdigest()
+
+
+def _cached_fonts(signature: str):
+    """读取上次的枚举结果；缓存缺失或已失效时返回 ``None``。"""
+    path = paths.FONT_CACHE
+    if not path.is_file():
+        return None
+    try:
+        with path.open('r', encoding='utf-8') as f:
+            data = json.load(f)
+        if data.get('signature') != signature:
+            return None
+        return tuple((str(value), str(label)) for value, label in data['fonts'])
+    except Exception as e:
+        print(f'[字体] 缓存读取失败，将重新枚举：{e}')
+        return None
+
+
+def _store_fonts(signature: str, fonts: tuple):
+    """写入枚举结果；写入失败不影响本次使用。"""
+    try:
+        paths.FONT_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        with paths.FONT_CACHE.open('w', encoding='utf-8') as f:
+            json.dump({'signature': signature, 'fonts': [list(item) for item in fonts]},
+                      f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f'[字体] 缓存写入失败：{e}')
+
+
+def _collect_fonts(families: list) -> tuple:
+    """枚举能显示界面文字的系统字体，合并别名后按中文习惯排序。"""
+    groups = {}
+    for family in families:
+        # 点阵字体无法缩放，放大后会严重锯齿。
+        if not QFontDatabase.isScalable(family):
+            continue
+        if not set(QFontDatabase.writingSystems(family)) & set(CJK_WRITING_SYSTEMS):
+            continue
+        groups.setdefault(_font_signature(family), []).append(family)
+
+    collator = QCollator(QLocale(QLocale.Language.Chinese, QLocale.Country.China))
+    fonts = [_font_names(aliases) for aliases in groups.values()]
+    fonts.sort(key=cmp_to_key(lambda a, b: collator.compare(a[1], b[1])))
+    return tuple(fonts)
+
+
+def _font_signature(family: str) -> bytes:
+    """渲染取样文字作为字体指纹。
+
+    系统会把同一字体的中英文名各登记一次，例如「宋体」和「SimSun」；
+    二者指向同一字体文件，渲染结果完全相同，据此可以合并为一项。
+    """
+    font = QFont(family)
+    font.setPixelSize(16)
+    image = QImage(72, 22, QImage.Format.Format_Grayscale8)
+    image.fill(Qt.GlobalColor.white)
+    painter = QPainter(image)
+    painter.setFont(font)
+    painter.drawText(image.rect(), Qt.AlignmentFlag.AlignLeft, FONT_PROBE_TEXT)
+    painter.end()
+    return image.constBits().tobytes()
+
+
+def _font_names(aliases: list) -> tuple:
+    """在同一字体的多个名称中选出持久化用名和显示用名。
+
+    英文名在任何语言的系统上都能解析，用于持久化；中文名更易辨认，用于显示。
+    """
+    ordered = sorted(aliases, key=lambda name: (len(name), name))
+    latin = [name for name in ordered if name.isascii()]
+    localized = [name for name in ordered if not name.isascii()]
+    value = latin[0] if latin else ordered[0]
+    return value, (localized[0] if localized else value)
+
+
+def label_for_font(value: str) -> str:
+    """将持久化字体名转换为显示文本，列表外的字体直接显示其字体名。"""
+    for family, label in available_fonts():
+        if family == value:
+            return label
+    return str(value) or DEFAULT_FONT_LABEL
+
+
+def font_for_label(label: str) -> str:
+    """将显示文本转换为持久化字体名，列表外的文本按字体名处理。"""
+    for family, text in available_fonts():
+        if text == label:
+            return family
+    return label
+
+
+def normalize_font(value: str) -> str:
+    """规范化字体名，未安装的字体回退为系统默认。"""
+    text = str(value or '').strip()
+    if text and text in QFontDatabase.families():
+        return text
+    return ''
+
+
+def font_families(value: str) -> tuple:
+    """返回所选字体及其回退字体的完整顺序。"""
+    family = normalize_font(value)
+    return (family, *FALLBACK_FONTS) if family else FALLBACK_FONTS
 
 
 def normalize_color(value: str) -> str:
@@ -95,6 +244,36 @@ def apply_theme(mode: str, color: str):
     _apply_native_widget_style()
     _patch_widgets()
     icons.refresh_all()
+
+
+def apply_font(value: str):
+    """应用界面字体，使其同时作用于样式表、新建控件和已创建控件。"""
+    families = list(font_families(value))
+    setFontFamilies(families, save=False)
+    updateStyleSheet()
+    _apply_widget_fonts(families)
+
+
+def _apply_widget_fonts(families: list):
+    """把字体族写入应用默认字体和已创建的控件，各控件的字号与字重保持不变。
+
+    qfluentwidgets 组件在构造时就固定了自己的字体，仅改配置只能影响此后新建的控件。
+    """
+    app = QApplication.instance()
+    if app is None:
+        return
+
+    font = app.font()
+    font.setFamilies(families)
+    app.setFont(font)
+
+    # 应用默认字体只覆盖未显式设置字体的控件，其余逐个改写字体族。
+    for widget in app.allWidgets():
+        widget_font = widget.font()
+        if widget_font.families() == families:
+            continue
+        widget_font.setFamilies(families)
+        widget.setFont(widget_font)
 
 
 def _apply_native_widget_style():
@@ -163,14 +342,27 @@ def apply_title_bar_theme(widget):
             break
 
 
+HELP_ICON_SIZE = 14
+HELP_ICON_MARGIN = 4
+
+
+class _HelpIcon(IconWidget):
+    """在控件内部留出绘制边距，容纳分数缩放下的抗锯齿边缘。"""
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHints(QPainter.RenderHint.Antialiasing |
+                               QPainter.RenderHint.SmoothPixmapTransform)
+        margin = HELP_ICON_MARGIN
+        rect = QRectF(self.rect()).adjusted(margin, margin, -margin, -margin)
+        drawIcon(self._icon, painter, rect)
+
+
 def make_help_icon(text: str = '', parent=None) -> QWidget:
     """创建悬停时显示说明的信息图标；没有说明时隐藏。"""
-    holder = QWidget(parent)
-    holder.setFixedSize(22, 22)
-    icon = IconWidget(FluentIcon.INFO, holder)
-    icon.setFixedSize(14, 14)
-    icon.move(4, 4)
-    icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    holder = _HelpIcon(FluentIcon.INFO, parent)
+    extent = HELP_ICON_SIZE + HELP_ICON_MARGIN * 2
+    holder.setFixedSize(extent, extent)
     holder.installEventFilter(ToolTipFilter(holder, 300, ToolTipPosition.TOP))
     set_help_text(holder, text)
     return holder

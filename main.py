@@ -9,7 +9,7 @@ from app.window import Window
 from tts_engine import TTSEngine
 
 
-VERSION = '1.6.0'
+VERSION = '1.6.1'
 
 
 def main():
@@ -21,6 +21,7 @@ def main():
         print(f'[更新] 已更新至 {updated_to}')
 
     app = QApplication(sys.argv)
+    logging_setup.log_display()
     paths.ensure_runtime_dirs()
 
     context = AppContext(
@@ -32,6 +33,7 @@ def main():
     context.config.load()
     theme.apply_theme(context.app_settings.get('theme_mode'),
                       context.app_settings.get('theme_color'))
+    theme.apply_font(context.app_settings.get('ui_font'))
 
 
     window = Window(context)

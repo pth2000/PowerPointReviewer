@@ -10,11 +10,6 @@
     <height>720</height>
    </rect>
   </property>
-  <property name="font">
-   <font>
-    <family>Microsoft YaHei UI</family>
-   </font>
-  </property>
   <property name="windowTitle">
    <string>Form</string>
   </property>
@@ -196,7 +191,8 @@
                <item>
                 <widget class="QLabel" name="notesPathLabel_5">
                  <property name="styleSheet">
-                  <string notr="true">font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
+                  <string notr="true">font-weight: 700;
+font-size: 10pt;</string>
                  </property>
                  <property name="text">
                   <string>页内分隔符设置</string>
@@ -301,7 +297,8 @@
                <item>
                 <widget class="QLabel" name="notesPathShowLabel">
                  <property name="styleSheet">
-                  <string notr="true">font: 700 9pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
+                  <string notr="true">font-weight: 700;
+font-size: 9pt;</string>
                  </property>
                  <property name="text">
                   <string>文件路径</string>
@@ -818,7 +815,8 @@
                 <item>
                  <widget class="QLabel" name="currentLabel">
                   <property name="styleSheet">
-                   <string notr="true">font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
+                   <string notr="true">font-weight: 700;
+font-size: 10pt;</string>
                   </property>
                   <property name="text">
                    <string>倒计时播放</string>
@@ -887,7 +885,8 @@
                 <item>
                  <widget class="QLabel" name="currentLabel_2">
                   <property name="styleSheet">
-                   <string notr="true">font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
+                   <string notr="true">font-weight: 700;
+font-size: 10pt;</string>
                   </property>
                   <property name="text">
                    <string>时长设置</string>

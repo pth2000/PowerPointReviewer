@@ -59,7 +59,7 @@ class Ui_toolsInterface(object):
 
         self.verticalLayout.addWidget(self.importWidget)
 
-        self.verticalSpacer = QSpacerItem(20, 353, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+        self.verticalSpacer = QSpacerItem(20, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
         self.verticalLayout.addItem(self.verticalSpacer)
 

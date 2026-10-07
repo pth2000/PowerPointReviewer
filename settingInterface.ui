@@ -107,7 +107,8 @@
                <item>
                 <widget class="QLabel" name="engineSelectPathLabel">
                  <property name="styleSheet">
-                  <string notr="true">font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
+                  <string notr="true">font-weight: 700;
+font-size: 10pt;</string>
                  </property>
                  <property name="text">
                   <string>引擎选择</string>
@@ -178,7 +179,8 @@
                <item>
                 <widget class="QLabel" name="savePathLabel">
                  <property name="styleSheet">
-                  <string notr="true">font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
+                  <string notr="true">font-weight: 700;
+font-size: 10pt;</string>
                  </property>
                  <property name="text">
                   <string>保存设置</string>
@@ -329,7 +331,8 @@
               <item>
                <widget class="QLabel" name="versionShowLabel">
                 <property name="styleSheet">
-                 <string notr="true">font: 700 9pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
+                 <string notr="true">font-weight: 700;
+font-size: 9pt;</string>
                 </property>
                 <property name="text">
                  <string>当前版本</string>
@@ -421,7 +424,8 @@
               <item>
                <widget class="QLabel" name="copyrightShowLabel">
                 <property name="styleSheet">
-                 <string notr="true">font: 700 9pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';</string>
+                 <string notr="true">font-weight: 700;
+font-size: 9pt;</string>
                 </property>
                 <property name="text">
                  <string>版权</string>
@@ -454,7 +458,7 @@
            <property name="sizeHint" stdset="0">
             <size>
              <width>20</width>
-             <height>40</height>
+             <height>0</height>
             </size>
            </property>
           </spacer>

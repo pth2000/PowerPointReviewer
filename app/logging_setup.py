@@ -4,6 +4,7 @@
 本模块接管标准输出与未捕获异常，统一写入滚动日志文件。
 """
 
+import ctypes
 import logging
 import sys
 import threading
@@ -125,6 +126,32 @@ def _install_excepthooks() -> None:
 
     sys.excepthook = handle_main
     threading.excepthook = handle_thread
+
+
+def log_display():
+    """记录屏幕缩放与进程的 DPI 感知等级，用于排查高分屏显示问题。
+
+    需在 QApplication 创建之后调用。
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    logger = get_logger()
+    banner = {'source': '启动'}
+    for screen in QGuiApplication.screens():
+        size = screen.geometry()
+        logger.info('屏幕 %s %dx%d 逻辑DPI %.0f 缩放 %.2f', screen.name(), size.width(),
+                    size.height(), screen.logicalDotsPerInch(), screen.devicePixelRatio(),
+                    extra=banner)
+    if sys.platform != 'win32':
+        return
+    try:
+        user32 = ctypes.windll.user32
+        context = user32.GetThreadDpiAwarenessContext()
+        level = user32.GetAwarenessFromDpiAwarenessContext(context)
+        per_monitor_v2 = bool(user32.AreDpiAwarenessContextsEqual(context, ctypes.c_void_p(-4)))
+        logger.info('DPI 感知等级 %s，每显示器 V2 %s', level, per_monitor_v2, extra=banner)
+    except Exception as e:
+        logger.info('DPI 感知等级读取失败：%s', e, extra=banner)
 
 
 def setup(version: str = '', *, max_bytes: int = 1024 * 1024, backup_count: int = 3):

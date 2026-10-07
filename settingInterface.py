@@ -64,7 +64,8 @@ class Ui_settingInterface(object):
         self.verticalLayout_11.setObjectName(u"verticalLayout_11")
         self.engineSelectPathLabel = QLabel(self.CardWidget_5)
         self.engineSelectPathLabel.setObjectName(u"engineSelectPathLabel")
-        self.engineSelectPathLabel.setStyleSheet(u"font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';")
+        self.engineSelectPathLabel.setStyleSheet(u"font-weight: 700;\n"
+"font-size: 10pt;")
 
         self.verticalLayout_11.addWidget(self.engineSelectPathLabel)
 
@@ -100,7 +101,8 @@ class Ui_settingInterface(object):
         self.verticalLayout_12.setObjectName(u"verticalLayout_12")
         self.savePathLabel = QLabel(self.CardWidget_4)
         self.savePathLabel.setObjectName(u"savePathLabel")
-        self.savePathLabel.setStyleSheet(u"font: 700 10pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';")
+        self.savePathLabel.setStyleSheet(u"font-weight: 700;\n"
+"font-size: 10pt;")
 
         self.verticalLayout_12.addWidget(self.savePathLabel)
 
@@ -166,7 +168,8 @@ class Ui_settingInterface(object):
         self.verticalLayout_3.setObjectName(u"verticalLayout_3")
         self.versionShowLabel = QLabel(self.importCardWidget_2)
         self.versionShowLabel.setObjectName(u"versionShowLabel")
-        self.versionShowLabel.setStyleSheet(u"font: 700 9pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';")
+        self.versionShowLabel.setStyleSheet(u"font-weight: 700;\n"
+"font-size: 9pt;")
 
         self.verticalLayout_3.addWidget(self.versionShowLabel)
 
@@ -208,7 +211,8 @@ class Ui_settingInterface(object):
         self.verticalLayout.setObjectName(u"verticalLayout")
         self.copyrightShowLabel = QLabel(self.importCardWidget)
         self.copyrightShowLabel.setObjectName(u"copyrightShowLabel")
-        self.copyrightShowLabel.setStyleSheet(u"font: 700 9pt 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';")
+        self.copyrightShowLabel.setStyleSheet(u"font-weight: 700;\n"
+"font-size: 9pt;")
 
         self.verticalLayout.addWidget(self.copyrightShowLabel)
 
@@ -233,7 +237,7 @@ class Ui_settingInterface(object):
 
         self.verticalLayout_6.addWidget(self.importCardWidget)
 
-        self.verticalSpacer = QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+        self.verticalSpacer = QSpacerItem(20, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
 
         self.verticalLayout_6.addItem(self.verticalSpacer)
 

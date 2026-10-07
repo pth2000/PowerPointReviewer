@@ -6,9 +6,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt, QUrl
+from PySide6.QtCore import QEvent, QObject, QTimer, Qt, QUrl
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtWidgets import QFileDialog, QWidget
+from PySide6.QtWidgets import QFileDialog, QSizePolicy, QWidget
 from qfluentwidgets import (
     Action,
     FluentIcon,
@@ -41,6 +41,41 @@ def _press_page_down():
     user32.keybd_event(_VK_NEXT, 0, _KEYEVENTF_KEYUP, 0)
 
 
+class ElidedLabelText(QObject):
+    """按标签的可用宽度省略显示，完整内容放入悬停提示。
+
+    标签不再按文字长度撑开布局，窗口变窄时同行的其它控件不会被挤出可视区域。
+    """
+
+    def __init__(self, label):
+        super().__init__(label)
+        self.label = label
+        self.text = ''
+        label.setWordWrap(False)
+        label.setSizePolicy(QSizePolicy.Policy.Ignored, label.sizePolicy().verticalPolicy())
+        label.installEventFilter(self)
+
+    def set_text(self, text: str):
+        """设置完整文本并刷新显示。"""
+        self.text = text
+        self.label.setToolTip(text)
+        self.refresh()
+
+    def refresh(self):
+        """按当前宽度重新计算省略后的文本。"""
+        width = max(self.label.width(), 80)
+        self.label.setText(self.label.fontMetrics().elidedText(
+            self.text, Qt.TextElideMode.ElideMiddle, width))
+
+    # 字体变化会改变文字度量，省略位置需要同步重算。
+    WATCHED = (QEvent.Type.Resize, QEvent.Type.FontChange)
+
+    def eventFilter(self, obj, event):
+        if event.type() in self.WATCHED:
+            self.refresh()
+        return False
+
+
 class PPTReviewer(QWidget, Ui_mainwindow):
     """协调讲稿导入、分段、音频生成、会话恢复和连续播放。"""
 
@@ -61,6 +96,8 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             '开启同步翻页后，每读完一段发送一次翻页，用于触发幻灯片中的下一个动画。默认分隔符为 ●。')
         self.CaptionLabel_4.setText('开始朗读前先播放一段倒计时')
         self.CaptionLabel_6.setText('设置倒计时持续的秒数')
+        self.notes_path_text = ElidedLabelText(self.notesPathLabel)
+        self.notes_path_text.set_text(self.notesPathLabel.text())
 
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
@@ -442,7 +479,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.mark = data.mark
             self.persist_preferences()
 
-        self.notesPathLabel.setText(str(path))
+        self.notes_path_text.set_text(str(path))
         if data.report:
             self.create_success_info_bar('导入完成', ' / '.join(data.report))
 
@@ -788,7 +825,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         if self.notes_list:
             self.set_current_label_text()
 
-        self.notesPathLabel.setText(f'历史记录：{record_path.name}')
+        self.notes_path_text.set_text(f'历史记录：{record_path.name}')
         self.create_success_info_bar('加载成功', '历史记录已恢复，可直接播放')
 
 

@@ -20,6 +20,8 @@ class Window(FluentWindow):
         super().__init__()
         self.context = context
         self.resize(850, 750)
+        # 页面内容最宽的一屏约需 680，加上导航栏与边距即为可用下限
+        self.setMinimumSize(QSize(760, 560))
         self.setWindowTitle('PowerPointReviewer')
         self.setWindowIcon(QIcon(':/image/image/ppt_ico.svg'))
 

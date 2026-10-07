@@ -145,12 +145,12 @@ def artifacts(version: str, required: bool = True) -> list:
     return files
 
 
-def collect_problems(version: str, tag: str, notes: Path,
-                     allow_dirty: bool = False, need_tokens: bool = True) -> list:
+def collect_problems(version: str, tag: str, notes: Path, allow_dirty: bool = False,
+                     need_tokens: bool = True, skip_gitee: bool = False) -> list:
     """返回发布前检查发现的问题，空列表表示可以发布。"""
     problems = []
     branch = git('rev-parse', '--abbrev-ref', 'HEAD')
-    args = argparse.Namespace(allow_dirty=allow_dirty, dry_run=not need_tokens)
+    args = argparse.Namespace(allow_dirty=allow_dirty, dry_run=not need_tokens, skip_gitee=skip_gitee)
 
     if not args.allow_dirty and git('status', '--porcelain'):
         problems.append('工作区有未提交的改动，提交后再发布，或使用 --allow-dirty')
@@ -207,7 +207,7 @@ def collect_problems(version: str, tag: str, notes: Path,
         problems.append(f'{SETUP_NAME} 为 {human(setup.stat().st_size)}，超过 Gitee 单文件上限')
 
     token = os.environ.get('GITEE_TOKEN', '')
-    if token or args.dry_run:
+    if not getattr(args, 'skip_gitee', False) and (token or args.dry_run):
         existing = [r for r in gitee_releases(token) if r.get('tag_name') == tag]
         if existing:
             problems.append(f'Gitee 上已存在 {tag} 的发行版，请先在网页删除')
@@ -217,7 +217,8 @@ def collect_problems(version: str, tag: str, notes: Path,
 
 def preflight(version: str, tag: str, notes: Path, args) -> str:
     """检查发布前提，未通过时终止，返回当前分支名。"""
-    problems = collect_problems(version, tag, notes, args.allow_dirty, not args.dry_run)
+    problems = collect_problems(version, tag, notes, args.allow_dirty, not args.dry_run,
+                                getattr(args, 'skip_gitee', False))
     if problems:
         print('发布前检查未通过：')
         for item in problems:
@@ -250,26 +251,29 @@ def publish_gitee(version: str, tag: str, notes_text: str, branch: str, dry_run:
     print(f'[Gitee] 完成：{release.get("html_url") or tag}')
 
 
-def publish_github(version: str, tag: str, notes: Path, dry_run: bool):
-    """用 vpk 在 GitHub 创建发行版并上传全部产物。"""
+def publish_github(version: str, tag: str, dry_run: bool):
+    """用 vpk 在 GitHub 创建发行版并上传全部产物。
+
+    更新说明在打包时已写入更新包，上传命令不单独接收。
+    令牌通过环境变量传入，避免出现在命令行与报错信息中。
+    """
     command = [
         build.find_vpk(), 'upload', 'github',
         '--repoUrl', GITHUB_REPO_URL,
-        '--token', os.environ.get('GITHUB_TOKEN', ''),
         '--outputDir', str(RELEASES_DIR),
         '--tag', tag,
         '--releaseName', f'{PACK_ID} {tag}',
         '--publish',
     ]
-    if notes:
-        command += ['--releaseNotes', str(Path(notes).resolve())]
     print(f'[GitHub] 发行版 {tag}')
     if dry_run:
-        printable = list(command)
-        printable[printable.index('--token') + 1] = '***'
-        print('        将执行：', ' '.join(printable))
+        print('        将执行：', ' '.join(command))
         return
-    subprocess.run(command, cwd=ROOT, check=True, env=build.dotnet_env())
+    env = build.dotnet_env()
+    env['VPK_TOKEN'] = os.environ.get('GITHUB_TOKEN', '')
+    result = subprocess.run(command, cwd=ROOT, env=env)
+    if result.returncode != 0:
+        sys.exit(f'[GitHub] 上传失败，退出码 {result.returncode}')
     print('[GitHub] 完成')
 
 
@@ -399,6 +403,8 @@ def main():
     parser.add_argument('--notes', type=Path, help='更新说明（Markdown 文件）')
     parser.add_argument('--dry-run', action='store_true', help='只检查与打印，不做任何写入')
     parser.add_argument('--skip-build', action='store_true', help='跳过构建，直接发布现有产物')
+    parser.add_argument('--skip-gitee', action='store_true', help='跳过 Gitee 发布')
+    parser.add_argument('--skip-github', action='store_true', help='跳过 GitHub 发布')
     parser.add_argument('--prune', action='store_true', help='按保留策略清理 Gitee 附件')
     parser.add_argument('--drop-tags', default='', metavar='TAGS',
                         help='删除这些版本的全部附件，逗号分隔，用于一次性清理历史版本')
@@ -425,8 +431,14 @@ def main():
         build.build(version, args.notes)
 
     notes_text = Path(args.notes).read_text(encoding='utf-8-sig')
-    publish_gitee(version, tag, notes_text, branch, args.dry_run)
-    publish_github(version, tag, args.notes, args.dry_run)
+    if args.skip_gitee:
+        print('[Gitee] 已跳过')
+    else:
+        publish_gitee(version, tag, notes_text, branch, args.dry_run)
+    if args.skip_github:
+        print('[GitHub] 已跳过')
+    else:
+        publish_github(version, tag, args.dry_run)
     if not args.dry_run:
         verify(version, tag)
     if args.prune:

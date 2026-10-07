@@ -357,7 +357,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         return label
 
     def setup_appearance_cards(self):
-        """创建即时生效的主题模式和主题色卡片。"""
+        """创建即时生效的主题模式、主题色和界面字体卡片。"""
         mode_card = self._make_appearance_card(
             '主题模式', '切换界面的浅色或深色外观',
             help_text='选择「跟随系统」时，随 Windows 的深浅色设置自动切换。')
@@ -390,6 +390,23 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
         self.refresh_color_dots()
 
+        font_card = self._make_appearance_card(
+            '界面字体', '设置界面文字的显示字体',
+            help_text='只影响软件界面，不改变导出文档与字幕的字体。'
+                      '可选项为本机已安装的字体。')
+        fonts = theme.available_fonts()
+        current = theme.normalize_font(self.ctx.app_settings.get('ui_font'))
+        labels = [label for _family, label in fonts]
+        # 配置里的字体可能不在列表中，补一项避免当前选择显示不出来。
+        if current and current not in [family for family, _label in fonts]:
+            labels.append(theme.label_for_font(current))
+        self.ui_font_combo = ComboBox(font_card)
+        self.ui_font_combo.setMinimumSize(QSize(180, 33))
+        self.ui_font_combo.setMaximumSize(QSize(180, 33))
+        self.ui_font_combo.addItems(labels)
+        self.ui_font_combo.setCurrentText(theme.label_for_font(current))
+        self.ui_font_combo.currentTextChanged.connect(self.on_ui_font_changed)
+        font_card.layout().addWidget(self.ui_font_combo)
 
     def _make_appearance_card(self, title: str, caption: str, help_text: str = ''):
         """创建外观设置卡片骨架，并返回可追加控件的布局。"""
@@ -442,6 +459,12 @@ class SettingInterface(QWidget, Ui_settingInterface):
         """应用所选明暗模式并立即持久化。"""
         self.ctx.app_settings.set('theme_mode', theme.mode_for_label(label))
         self.apply_current_theme()
+
+    def on_ui_font_changed(self, label: str):
+        """应用所选界面字体并立即持久化。"""
+        self.ctx.app_settings.set('ui_font', theme.font_for_label(label))
+        theme.apply_font(self.ctx.app_settings.get('ui_font'))
+        self.ctx.config.save_later()
 
     def pick_theme_color(self):
         """打开取色器，并在确认后应用自定义主题色。"""

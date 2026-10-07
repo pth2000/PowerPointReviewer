@@ -39,6 +39,8 @@ COUNTDOWN_CACHE_DIR = DATA_DIR / 'cache' / 'countdown'
 SESSION_DIR = DATA_DIR / 'sessions'
 # Edge 音色目录缓存在数据区，设置页无需每次打开都访问网络。
 EDGE_VOICE_CACHE = DATA_DIR / 'cache' / 'edge_voices.json'
+# 字体枚举需要逐个加载字体文件，耗时随安装字体数量增长，同样缓存在数据区。
+FONT_CACHE = DATA_DIR / 'cache' / 'fonts.json'
 
 LOG_DIR = DATA_DIR / 'logs'
 LOG_FILE = LOG_DIR / 'app.log'
