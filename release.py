@@ -128,8 +128,11 @@ def gitee_delete_attachment(release_id: int, attachment_id: int, token: str):
     gitee('DELETE', f'/releases/{release_id}/attach_files/{attachment_id}', token)
 
 
-def artifacts(version: str) -> list:
-    """返回需要发布的产物，更新索引排在最后。"""
+def artifacts(version: str, required: bool = True) -> list:
+    """返回需要发布的产物，更新索引排在最后。
+
+    required 为假时只返回已存在的文件，供构建前的配额预估使用。
+    """
     names = [SETUP_NAME, PORTABLE_NAME, f'{PACK_ID}-{version}-full.nupkg',
              f'{PACK_ID}-{version}-delta.nupkg', FEED_NAME]
     files = []
@@ -137,7 +140,7 @@ def artifacts(version: str) -> list:
         path = RELEASES_DIR / name
         if path.is_file():
             files.append(path)
-        elif 'delta' not in name:
+        elif required and 'delta' not in name:
             sys.exit(f'缺少产物：{path}')
     return files
 
@@ -184,20 +187,20 @@ def collect_problems(version: str, tag: str, notes: Path,
         if not os.environ.get('GITHUB_TOKEN'):
             problems.append('未设置环境变量 GITHUB_TOKEN')
 
-    try:
-        planned = sum(path.stat().st_size for path in artifacts(version))
-        usage = gitee_usage(os.environ.get('GITEE_TOKEN', ''))
-        if usage + planned > TOTAL_LIMIT:
-            problems.append(
-                f'Gitee 附件已占用 {human(usage)}，本次还需 {human(planned)}，将超过 {human(TOTAL_LIMIT)} 上限。'
-                f'先执行：python release.py --prune')
-        elif usage + planned > TOTAL_LIMIT * 0.9:
-            print(f'[配额] 发布后 Gitee 附件约占 {human(usage + planned)} / {human(TOTAL_LIMIT)}，'
-                  f'建议随后执行：python release.py --prune')
-    except SystemExit:
-        raise
-    except Exception as e:
-        print(f'[配额] 预估失败，跳过检查：{e}')
+    built = artifacts(version, required=False)
+    if built:
+        try:
+            planned = sum(path.stat().st_size for path in built)
+            usage = gitee_usage(os.environ.get('GITEE_TOKEN', ''))
+            if usage + planned > TOTAL_LIMIT:
+                problems.append(
+                    f'Gitee 附件已占用 {human(usage)}，本次还需 {human(planned)}，将超过 {human(TOTAL_LIMIT)} 上限。'
+                    f'先执行：python release.py --prune')
+            elif usage + planned > TOTAL_LIMIT * 0.9:
+                print(f'[配额] 发布后 Gitee 附件约占 {human(usage + planned)} / {human(TOTAL_LIMIT)}，'
+                      f'建议随后执行：python release.py --prune')
+        except Exception as e:
+            print(f'[配额] 预估失败，跳过检查：{e}')
 
     setup = RELEASES_DIR / SETUP_NAME
     if setup.is_file() and setup.stat().st_size > FILE_LIMIT:
@@ -226,12 +229,14 @@ def preflight(version: str, tag: str, notes: Path, args) -> str:
 def publish_gitee(version: str, tag: str, notes_text: str, branch: str, dry_run: bool):
     """在 Gitee 创建发行版并上传全部产物。"""
     token = os.environ.get('GITEE_TOKEN', '')
-    files = artifacts(version)
+    files = artifacts(version, required=not dry_run)
     total = sum(path.stat().st_size for path in files)
     print(f'[Gitee] 发行版 {tag}，共 {len(files)} 个附件，合计 {human(total)}')
     if dry_run:
         for path in files:
             print(f'        将上传 {path.name}（{human(path.stat().st_size)}）')
+        if not files:
+            print('        产物尚未构建，正式发布时会上传安装器、便携包、更新包与更新索引')
         return
 
     release = gitee_create_release(tag, f'{PACK_ID} {tag}', notes_text, branch, token)
@@ -414,7 +419,9 @@ def main():
 
     print(f'准备发布 {tag}')
     branch = preflight(version, tag, args.notes, args)
-    if not args.skip_build:
+    if args.dry_run:
+        print('预演不执行构建')
+    elif not args.skip_build:
         build.build(version, args.notes)
 
     notes_text = Path(args.notes).read_text(encoding='utf-8-sig')
