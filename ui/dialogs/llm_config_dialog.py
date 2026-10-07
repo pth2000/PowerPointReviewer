@@ -31,7 +31,7 @@ class LLMConfigMessageBox(MessageBoxBase):
 
         self.titleLabel = SubtitleLabel('接口配置', self)
         self.hintLabel = CaptionLabel(
-            '适用于 OpenAI 兼容接口，例如 OpenAI、DeepSeek或本地 Ollama 等', self)
+            '支持 OpenAI 兼容接口', self)
         self.hintLabel.setWordWrap(True)
 
         self.base_url_edit = LineEdit(self)
@@ -40,7 +40,7 @@ class LLMConfigMessageBox(MessageBoxBase):
 
         self.api_key_edit = LineEdit(self)
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_edit.setPlaceholderText('sk-...，本地部署的服务可留空')
+        self.api_key_edit.setPlaceholderText('sk-…（本地服务可留空）')
         self.api_key_edit.setText(str(app_settings.get('llm_api_key') or ''))
 
         self.model_edit = LineEdit(self)
@@ -67,7 +67,7 @@ class LLMConfigMessageBox(MessageBoxBase):
         grid.addWidget(BodyLabel('模型', form), 2, 0)
         grid.addWidget(self.model_edit, 2, 1)
         grid.addWidget(self.test_button, 2, 2)
-        grid.addWidget(BodyLabel('请求超时(秒)', form), 3, 0)
+        grid.addWidget(BodyLabel('请求超时（秒）', form), 3, 0)
         grid.addWidget(self.timeout_spin, 3, 1)
         grid.setColumnStretch(1, 1)
 
@@ -100,11 +100,11 @@ class LLMConfigMessageBox(MessageBoxBase):
         """校验必填项并启动后台连通性测试。"""
         config = self.current_config()
         if not config['base_url'] or not config['model']:
-            self._info('warning', '配置不完整', '请先填写服务地址与模型名称。')
+            self._info('warning', '配置不完整', '填写服务地址与模型名称')
             return
 
         self.test_button.setEnabled(False)
-        self.test_button.setText('测试中...')
+        self.test_button.setText('测试中…')
 
         self.test_thread = LLMTestTask(config, self)
         self.test_thread.signal_finish.connect(self.on_test_finish)

@@ -7,7 +7,6 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QDialog,
     QHBoxLayout,
     QHeaderView,
     QTableWidget,
@@ -25,9 +24,10 @@ from qfluentwidgets import (
 
 from app import icons, audio_cache
 from ui.dialogs.delete_record_dialog import DeleteRecordMessageBox
+from ui.dialogs.base import ThemedDialog
 
 
-class SessionHistoryDialog(QDialog):
+class SessionHistoryDialog(ThemedDialog):
     """列出历史会话，并集中处理加载、批量删除和缓存清理。"""
 
     def __init__(self, session_root_path: Path, parent=None):
@@ -218,7 +218,7 @@ class SessionHistoryDialog(QDialog):
         record_paths = [path for path in self.selected_record_paths() if path.exists()]
         if not record_paths:
             self.reload_records()
-            self._show_warning('未选择记录', '请先在列表中选中要删除的历史记录')
+            self._show_warning('未选择记录', '在列表中选中要删除的记录')
             return
 
         # 仅统计目标记录独占缓存，避免破坏仍保留记录的音频引用。

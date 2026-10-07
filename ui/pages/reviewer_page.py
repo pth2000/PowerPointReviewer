@@ -20,7 +20,7 @@ from qfluentwidgets import (
 )
 
 from Ui_mainwindow import Ui_mainwindow
-from app import icons, paths, project_package, script_io
+from app import hotkeys, icons, paths, project_package, script_io, slideshow, theme, window_target
 from app.app_context import AppContext
 from app.playback import AudioOutputWatcher
 from tasks.audio_generation_task import AudioGenerationTask
@@ -55,6 +55,12 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         super().__init__(parent=parent)
         self.ctx = context
         self.setupUi(self)
+        self.CaptionLabel_5.setText('将一页讲稿分为多段，与幻灯片的点击动画对应')
+        theme.wrap_title_with_help(
+            self.verticalLayout_7, self.notesPathLabel_5,
+            '开启同步翻页后，每读完一段发送一次翻页，用于触发幻灯片中的下一个动画。默认分隔符为 ●。')
+        self.CaptionLabel_4.setText('开始朗读前先播放一段倒计时')
+        self.CaptionLabel_6.setText('设置倒计时持续的秒数')
 
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
@@ -252,11 +258,93 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.next_timer.stop()
         if self.is_play_notes:
             if self.scrollEnableSwitch.isChecked():
-                _press_page_down()
+                self.send_page_down()
             self.current_index += 1
         else:
             self.wait_current_index += 1
         self.play_audio()
+
+    def send_page_down(self):
+        """发送翻页键。
+
+        非前台方式在目标不可用时回退到前台按键，避免翻页整体失效。
+        """
+        mode = str(self.ctx.app_settings.get('page_turn_mode') or 'foreground')
+        if mode == 'com':
+            if slideshow.advance():
+                return
+            self._notify_page_turn_fallback('未检测到正在进行的放映')
+        elif mode == 'window':
+            hwnd = window_target.resolve(self.ctx.app_settings.get('page_turn_window'))
+            if window_target.send_scroll(hwnd):
+                return
+            self._notify_page_turn_fallback('指定的窗口已失效')
+        _press_page_down()
+
+    def _notify_page_turn_fallback(self, reason: str):
+        """回退到前台按键时给出可见提示，每次播放只提示一次。"""
+        print(f'[翻页] {reason}，本次改用前台按键')
+        if getattr(self, '_page_turn_notified', False):
+            return
+        self._page_turn_notified = True
+        self.create_warning_info_bar('翻页已改用前台按键', reason)
+
+    # 全局热键
+
+    def hotkey_ready(self) -> bool:
+        """讲稿与音频就绪且不在生成中时才响应全局热键。"""
+        return bool(self.notes_list) and bool(self.media_list) and not self.is_busy()
+
+    def handle_hotkey(self, action: str):
+        """执行全局热键对应的播放动作。"""
+        if not self.hotkey_ready():
+            return
+        handler = {
+            'play_pause': self.toggle_play,
+            'stop': self.stop_audio,
+            'prev_segment': self.prev_segment,
+            'next_segment': self.next_segment,
+            'restart_segment': self.restart_segment,
+        }.get(action)
+        if handler is not None:
+            handler()
+
+    def toggle_play(self):
+        """在播放与停止之间切换。"""
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.stop_audio()
+        else:
+            self.init_play()
+
+    def _seek_segment(self, offset: int):
+        """按偏移移动正文索引，并从该段开始播放。"""
+        self.stop_audio()
+        self.is_play_notes = True
+        limit = len(self.media_list) - 1
+        self.current_index = min(max(self.current_index + offset, 0), limit)
+        self.set_current_label_text()
+        self.play_audio()
+
+    def prev_segment(self):
+        """回到上一段并播放。"""
+        self._seek_segment(-1)
+
+    def next_segment(self):
+        """前进到下一段并播放。"""
+        self._seek_segment(1)
+
+    def restart_segment(self):
+        """重播当前段。"""
+        self._seek_segment(0)
+
+    def refresh_hotkeys(self):
+        """按当前配置与就绪状态重新注册全局热键。"""
+        manager = self.ctx.hotkeys
+        settings = self.ctx.app_settings
+        if not (settings.get('hotkeys_enabled') and self.hotkey_ready()):
+            manager.clear()
+            return {}
+        return manager.apply(hotkeys.normalize_bindings(settings.get('hotkeys')))
 
     def is_busy(self) -> bool:
         """返回音频生成任务是否仍在运行。"""
@@ -265,17 +353,16 @@ class PPTReviewer(QWidget, Ui_mainwindow):
     def force_regenerate(self):
         """确认后绕过缓存，重新合成当前讲稿的全部音频。"""
         if not self.notes:
-            self.create_warning_info_bar('尚未导入讲稿', '请先导入 PowerPoint 或 Word 文件。')
+            self.create_warning_info_bar('尚未导入讲稿', '请先导入 PowerPoint 或 Word 文件')
             return
 
         if self.is_busy():
-            self.create_warning_info_bar('正在生成音频', '请等待当前转换完成后再试。')
+            self.create_warning_info_bar('正在生成音频', '等待当前转换完成后再试')
             return
 
         box = MessageBox(
             '重新生成音频',
-            '将跳过音频缓存，按当前引擎设置重新合成全部语句。\n'
-            '在线引擎可能需要一些时间，并会产生相应的调用开销。\n\n确定继续吗？',
+            '将跳过缓存，按当前引擎设置重新合成全部语句；在线引擎会产生调用开销',
             self,
         )
         box.yesButton.setText('重新生成')
@@ -334,7 +421,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         selected, _ = QFileDialog.getOpenFileName(
             self, title, '', f'{file_filter};;{script_io.SCRIPT_FILTER};;所有文件 (*.*)')
         if not selected:
-            self.create_warning_info_bar('导入已取消', '未选择文件。')
+            self.create_warning_info_bar('导入已取消', '未选择文件')
             return False
 
         path = Path(selected)
@@ -365,7 +452,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
     def import_package(self):
         """导入工程包，并复用历史记录加载路径恢复讲稿和音频。"""
         if self.is_busy():
-            self.create_warning_info_bar('正在生成音频', '请等待当前转换完成后再试。')
+            self.create_warning_info_bar('正在生成音频', '等待当前转换完成后再试')
             return
 
         selected, _ = QFileDialog.getOpenFileName(
@@ -382,7 +469,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         if not result['has_audio']:
             self.create_warning_info_bar(
-                '工程包不含音频', '该工程包仅包含讲稿与配置，需在本机重新合成。')
+                '工程包不含音频', '工程包仅包含讲稿与配置，需在本机重新合成')
 
         try:
             self.load_session_record(result['record_path'])
@@ -495,6 +582,8 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.getFileButton.setEnabled(True)
         self.is_import = False
         self.check_import()
+        self.refresh_hotkeys()
+        self.refresh_slideshow_watch()
         self.create_error_info_bar('语音转换失败', f'详情：{message}')
 
     def thread_save_finish(self, result):
@@ -521,6 +610,8 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.check_import()
         if self.notes_list:
             self.set_current_label_text()
+        self.refresh_hotkeys()
+        self.refresh_slideshow_watch()
         self.pageJumpSpinBox.setMaximum(len(self.notes))
 
     def save_session_record(self):
@@ -599,7 +690,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         record_path = dialog.get_selected_record_path()
         if not record_path:
-            self.create_warning_info_bar('未选择记录', '请在历史记录列表中选择一条记录。')
+            self.create_warning_info_bar('未选择记录', '在历史记录中选择一条记录')
             return
 
         try:
@@ -703,6 +794,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
     def init_play(self):
         """从当前索引开始新的倒计时或正文播放流程。"""
+        self._page_turn_notified = False
         self.ctx.playback_bus.request_stop(self)
         if self.currentSwitch.isChecked():
             self.play_wait()
@@ -715,7 +807,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.wait_current_index = 0
         self.load_wait_audio_files()
         if not self.wait_media_list:
-            self.create_warning_info_bar('倒计时音频缺失', '未找到可用倒计时音频文件，请检查 data/cache/countdown 目录')
+            self.create_warning_info_bar('倒计时音频缺失', '未找到倒计时音频文件（data/cache/countdown）')
             return
         print('已导入倒计时')
         self.play_audio()
@@ -749,13 +841,53 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         print('倒计时列表载入完成')
 
     def jump_page(self):
-        """将播放索引定位到用户输入页码的第一段。"""
+        """将播放索引定位到用户输入页码的第一段。
+
+        使用演示软件接口时同步驱动放映跳页，其余方式只调整软件内部索引。
+        """
         self.stop_audio()
-        index = self.get_index_from_page(self.pageJumpSpinBox.value())
+        page = self.pageJumpSpinBox.value()
+        index = self.get_index_from_page(page)
         if index > -1:
             self.current_index = index
         if self.notes_list:
             self.set_current_label_text()
+        if self.ctx.app_settings.get('page_turn_mode') == 'com':
+            slideshow.goto(page)
+
+    # 放映进度跟随
+
+    def refresh_slideshow_watch(self):
+        """按翻页方式与讲稿状态决定是否订阅放映事件。
+
+        没有讲稿时无从跟随，此时不订阅，启动阶段也就不必加载 COM 依赖。
+        """
+        watcher = self.ctx.slideshow_watcher
+        if self.ctx.app_settings.get('page_turn_mode') == 'com' and self.notes_list:
+            watcher.start()
+        else:
+            watcher.stop()
+
+    def on_slideshow_slide_changed(self, page: int):
+        """放映页码变化时对齐播放索引。
+
+        用户在演示软件里手动翻页后，软件不再按自己的计数继续，避免两边错位。
+        正在播放正文时从新页重新开始，否则当前音频放完会在新索引上再前进一段。
+        """
+        if not self.notes_list or self.is_busy():
+            return
+        index = self.get_index_from_page(int(page))
+        if index < 0 or index == self.current_index:
+            return
+
+        playing = (self.is_play_notes
+                   and self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState)
+        self.current_index = index
+        self.set_current_label_text()
+        if playing:
+            self.next_timer.stop()
+            self.player.stop()
+            self.play_audio()
 
     def create_success_info_bar(self, title, text):
         """在主页顶部显示短暂的成功提示。"""
@@ -829,7 +961,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         if len(self.notes_duration_list) != len(self.notes_list):
             self.refresh_notes_duration_list()
         if not self.notes_duration_list or not self.notes_list:
-            self.create_warning_info_bar('暂无统计信息', '请先导入并生成音频后再查看统计。')
+            self.create_warning_info_bar('暂无统计信息', '导入并生成音频后可查看统计')
             return
 
         words_count = self.count_words()

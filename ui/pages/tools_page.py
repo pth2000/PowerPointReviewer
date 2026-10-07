@@ -54,7 +54,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         return label, caption_label
 
     def add_card(self, title: str, caption: str, controls,
-                 primary_first: bool = False, button_width: int = 120):
+                 primary_first: bool = False, button_width: int = 120, help_text: str = ''):
         """追加操作卡片；``controls`` 提供按钮文本与槽函数。"""
         card = CardWidget(self.importWidget)
         h_layout = QHBoxLayout(card)
@@ -63,8 +63,8 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         info_layout = QVBoxLayout()
         info_layout.setSpacing(0)
 
-        title_label = theme.make_card_title(title, card)
-        info_layout.addWidget(title_label)
+        title_row, _icon = theme.make_title_row(theme.make_card_title(title, card), help_text)
+        info_layout.addLayout(title_row)
 
         caption_label = CaptionLabel(card)
         caption_label.setText(caption)
@@ -89,42 +89,47 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         """将 Designer 骨架重排为讲稿处理和导出两个分区。"""
         # 复用 .ui 中的静态标题，避免运行期重建造成样式差异。
         self.SubtitleLabel.setText('讲稿处理')
-        self.CaptionLabel_4.setText('对已导入的讲稿进行加工')
+        self.CaptionLabel_4.setText('处理已导入的讲稿')
 
         self.processing_cards.append(self.add_card(
             'AI 优化',
-            '通过 OpenAI 兼容接口逐页优化讲稿',
+            '借助大语言模型逐页改写讲稿',
             [('前往优化', self.open_rewrite_dialog)],
             primary_first=True,
+            help_text='支持 OpenAI 兼容接口，例如 DeepSeek 或本地部署的 Ollama。'
+                      '首次使用需在「接口配置」中填写服务地址与模型名称。改写结果经确认后才会写回讲稿。',
         ))
 
         self.add_section('导出')
 
         self.export_cards.append(self.add_card(
             '讲稿文档',
-            '写回 PowerPoint 备注，或导出为其他格式的讲稿文档',
+            '导出为文档或写回 PPT 备注',
             [
                 ('PPT 备注', self.write_to_ppt),
                 ('Word', self.write_to_word),
                 ('Markdown', self.write_to_markdown),
                 ('JSON', self.write_to_json),
             ],
+            help_text='写回 PowerPoint 时另存为新文件，不覆盖原文件。Word 与 JSON 文件修改后可重新导入。',
         ))
 
         self.export_cards.append(self.add_card(
             '工程包',
-            '将讲稿、音频与生成配置打包为单个文件，可在其它设备导入播放',
+            '将讲稿、音频与配置打包为单个文件',
             [('导出工程包', self.export_project_package)],
+            help_text='在其他设备导入后可直接播放，无需重新合成。',
         ))
 
         self.export_cards.append(self.add_card(
             '字幕与音频',
-            '导出字幕文件与已合成的语音音频，可选择逐条或合并为单个文件',
+            '导出 SRT 字幕与合成的语音',
             [
                 ('SRT 字幕', self.write_to_srt),
                 ('逐条音频', self.export_audio_files),
                 ('合并音频', self.export_merged_audio),
             ],
+            help_text='SRT 字幕的时间轴按各语句的音频时长生成。合并音频将全部语句依次拼接为一个文件。',
         ))
 
 
@@ -161,7 +166,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
         applied = page.apply_rewritten_notes(dialog.get_applied())
         if applied <= 0:
-            self.create_warning_info_bar('未写回任何内容', '改写结果为空或页码不匹配。')
+            self.create_warning_info_bar('未写回任何内容', '改写结果为空或页码不匹配')
             return
 
         self.goto_reviewer(f'已更新 {applied} 页讲稿，正在重新合成受影响的音频')
@@ -178,14 +183,14 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
     def require_notes(self) -> bool:
         """检查讲稿是否已导入，未就绪时在当前页提示。"""
         if not self.reviewer_page.notes:
-            self.create_warning_info_bar('演讲稿未导入', '请先在主页导入演讲稿。')
+            self.create_warning_info_bar('尚未导入讲稿', '请先在主页导入讲稿')
             return False
         return True
 
     def require_idle(self) -> bool:
         """检查音频生成任务是否空闲。"""
         if self.reviewer_page.is_busy():
-            self.create_warning_info_bar('正在生成音频', '请等待当前转换完成后再试。')
+            self.create_warning_info_bar('正在生成音频', '等待当前转换完成后再试')
             return False
         return True
 
@@ -193,7 +198,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         """检查所有讲稿段是否已有对应的时长数据。"""
         page = self.reviewer_page
         if not page.notes_list or len(page.notes_duration_list) != len(page.notes_list):
-            self.create_warning_info_bar('音频尚未就绪', '请先完成语音转换后再导出。')
+            self.create_warning_info_bar('音频尚未就绪', '完成语音转换后可导出')
             return False
         return True
 
@@ -241,7 +246,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
         ppt_path = self.get_ppt_path()
         if not ppt_path:
-            self.create_warning_info_bar('已取消', '未选择要写入备注的 PowerPoint 文件。')
+            self.create_warning_info_bar('已取消', '未选择 PowerPoint 文件')
             return
 
         dir_path = self.choose_export_dir()
@@ -357,7 +362,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         if not self.require_notes():
             return
         if not page.media_list:
-            self.create_warning_info_bar('音频尚未就绪', '请先完成语音转换后再导出工程包。')
+            self.create_warning_info_bar('音频尚未就绪', '完成语音转换后可导出工程包')
             return
 
         items = project_package.build_items(
@@ -367,9 +372,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
         box = MessageBox(
             '导出工程包',
-            f'将打包 {len(items)} 条语句及对应音频，音频约占 '
-            f'{audio_cache.format_size(audio_size)}。'
-            f'\n再次导入可直接播放，无需额外配置。',
+            f'将打包 {len(items)} 条语句及对应音频，约 {audio_cache.format_size(audio_size)}',
             self,
         )
         box.yesButton.setText('选择保存位置')
@@ -415,7 +418,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         page = self.reviewer_page
         content = exporters.build_srt(page.notes_list, page.notes_duration_list)
         if not content.strip():
-            self.create_warning_info_bar('没有可导出的字幕', '当前讲稿没有有效的语句时长。')
+            self.create_warning_info_bar('没有可导出的字幕', '当前讲稿没有有效的语句时长')
             return
 
         file_path = self.unique_path(dir_path / f'{page.note_file_name}_Notes.srt')
@@ -432,7 +435,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         """将每条讲稿音频复制为带顺序和页码的独立文件。"""
         page = self.reviewer_page
         if not page.media_list:
-            self.create_warning_info_bar('音频尚未就绪', '请先完成语音转换后再导出。')
+            self.create_warning_info_bar('音频尚未就绪', '完成语音转换后可导出')
             return
 
         dir_path = self.choose_export_dir()
@@ -453,7 +456,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         """将格式兼容的全部讲稿音频合并为单个文件。"""
         page = self.reviewer_page
         if not page.media_list:
-            self.create_warning_info_bar('音频尚未就绪', '请先完成语音转换后再导出。')
+            self.create_warning_info_bar('音频尚未就绪', '完成语音转换后可导出')
             return
 
         dir_path = self.choose_export_dir()

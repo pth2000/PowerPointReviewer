@@ -1,147 +1,49 @@
-"""在后台查询 Gitee 或 GitHub 的最新发行版。"""
+"""在后台检查并下载新版本。"""
 
-import re
-import requests
 from PySide6.QtCore import QThread, Signal
 
+from app import updater
 
-class UpdateTask(QThread):
-    """在后台查询最新发行版，并生成设置页可直接展示的结果。"""
 
-    signal_finish = Signal(list)
+class UpdateCheckTask(QThread):
+    """按优先级依次查询各发布源上的最新版本。"""
 
-    def __init__(self, version: str, parent=None):
-        super().__init__(parent)
-        self.version = version
+    # 状态为 unmanaged、latest、available 或 error，附带更新信息或错误详情
+    checked = Signal(str, object)
 
     def run(self):
-        """执行更新查询。"""
-        self.get_update()
-
-    def get_update(self):
-        """优先查询 Gitee，失败后回退 GitHub，并发出统一结果。"""
-        latest = None
         errors = []
-
-        try:
-            latest = self._fetch_latest_from_gitee()
-        except Exception as e:
-            print(e)
-            errors.append(f'Gitee: {e}')
-
-        if latest is None:
+        for index in range(updater.source_count()):
+            manager = updater.create_manager(index)
+            if manager is None:
+                self.checked.emit('unmanaged', None)
+                return
             try:
-                latest = self._fetch_latest_from_github()
+                info = manager.check_for_updates()
             except Exception as e:
-                print(e)
-                errors.append(f'GitHub: {e}')
+                errors.append(f'{updater.source_name(index)}：{e}')
+                continue
+            updater.use_source(index)
+            self.checked.emit('available' if info else 'latest', info)
+            return
+        self.checked.emit('error', '；'.join(errors) or '未知错误')
 
-        if latest is None:
-            error_msg = '；'.join(errors) if errors else '未知错误'
-            self.signal_finish.emit([2, '获取更新失败', f'详情：{error_msg}'])
-            return False
 
-        latest_version = latest['version']
-        latest_version_name = latest['name']
-        latest_version_time = latest['time']
-        latest_version_download_url = latest['download_url']
-        latest_source = latest['source']
+class UpdateDownloadTask(QThread):
+    """下载更新包并报告进度。"""
 
-        if self.compare_versions(self.version, latest_version):
-            info = (
-                f'当前版本为最新版\n'
-                f'服务器版本：{latest_version}\n'
-                f'更新时间：{latest_version_time}\n'
-                f'来源：{latest_source}'
-            )
-            self.signal_finish.emit([0, '获取更新成功', info])
-        else:
-            info = (
-                f"发现新版本！{self.version} --> {latest_version}\n"
-                f"更新内容：{latest_version_name}\n"
-                f"更新时间：{latest_version_time}\n"
-                f"来源：{latest_source}"
-            )
-            self.signal_finish.emit([1, '获取更新成功', info, latest_version_download_url])
+    progress = Signal(int)
+    downloaded = Signal(object, str)
 
-        return True
+    def __init__(self, info, parent=None):
+        super().__init__(parent)
+        self.info = info
 
-    def _fetch_latest_from_gitee(self) -> dict:
-        """读取 Gitee 最新发行版并规范化为内部字段。"""
-        url = 'https://gitee.com/api/v5/repos/pth2000/PowerPointReviewer/releases/latest'
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        assets = data.get('assets') or []
-        download_url = ''
-        if assets and isinstance(assets[0], dict):
-            download_url = str(assets[0].get('browser_download_url', '')).strip()
-        if not download_url:
-            download_url = str(data.get('html_url', '')).strip()
-
-        return {
-            'source': 'Gitee',
-            'version': self.normalize_version(str(data.get('tag_name', ''))),
-            'name': str(data.get('name', '')).strip() or '无更新说明',
-            'time': str(data.get('created_at', '')).strip() or '-',
-            'download_url': download_url,
-        }
-
-    def _fetch_latest_from_github(self) -> dict:
-        """读取 GitHub 最新发行版并规范化为内部字段。"""
-        url = 'https://api.github.com/repos/pth2000/PowerPointReviewer/releases/latest'
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        assets = data.get('assets') or []
-        download_url = ''
-        if assets and isinstance(assets[0], dict):
-            download_url = str(assets[0].get('browser_download_url', '')).strip()
-        if not download_url:
-            download_url = str(data.get('html_url', '')).strip()
-
-        return {
-            'source': 'GitHub',
-            'version': self.normalize_version(str(data.get('tag_name', ''))),
-            'name': str(data.get('name', '')).strip() or '无更新说明',
-            'time': str(data.get('published_at', '')).strip() or str(data.get('created_at', '')).strip() or '-',
-            'download_url': download_url,
-        }
-
-    @staticmethod
-    def normalize_version(version: str) -> str:
-        """从标签中提取点分数字版本；无法识别时返回 ``0.0.0``。"""
-        text = version.strip()
-        text = text.lstrip('vV')
-        match = re.search(r'\d+(?:\.\d+)*', text)
-        if match:
-            return match.group(0)
-        return '0.0.0'
-
-    @staticmethod
-    def compare_versions(version1, version2):
-        """按数字段比较版本号，返回 ``version1 >= version2``。"""
-        parts1 = [int(p) for p in str(version1).split('.') if p.isdigit()]
-        parts2 = [int(p) for p in str(version2).split('.') if p.isdigit()]
-
-        if not parts1:
-            parts1 = [0]
-        if not parts2:
-            parts2 = [0]
-
-        min_length = min(len(parts1), len(parts2))
-
-        for i in range(min_length):
-            if parts1[i] < parts2[i]:
-                return False
-            if parts1[i] > parts2[i]:
-                return True
-
-        if len(parts1) < len(parts2):
-            return False
-        if len(parts1) > len(parts2):
-            return True
-
-        return True
+    def run(self):
+        try:
+            updater.create_manager().download_updates(
+                self.info, lambda value: self.progress.emit(int(value)))
+        except Exception as e:
+            self.downloaded.emit(self.info, str(e))
+            return
+        self.downloaded.emit(self.info, '')

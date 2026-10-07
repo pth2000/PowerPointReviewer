@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 
 from app import paths
+from app.hotkeys import HotkeyManager
+from app.slideshow import SlideshowWatcher
 from app.playback import PlaybackBus
 from app.settings_store import AppSettings, ConfigStore
 from tts_engine import TTSEngine
@@ -16,6 +18,10 @@ class AppContext:
     tts_engine: TTSEngine
     app_settings: AppSettings = field(default_factory=AppSettings)
     playback_bus: PlaybackBus = field(default_factory=PlaybackBus)
+    hotkeys: HotkeyManager = field(default_factory=HotkeyManager)
+    slideshow_watcher: SlideshowWatcher = field(default_factory=SlideshowWatcher)
+    # 由 Velopack 更新后重启时为新版本号
+    updated_to: str = ''
     config: ConfigStore = field(init=False)
 
     def __post_init__(self):

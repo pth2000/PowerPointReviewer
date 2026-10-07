@@ -13,16 +13,16 @@ class DeleteRecordMessageBox(MessageBoxBase):
         super().__init__(parent)
 
         self.titleLabel = SubtitleLabel('删除历史记录', self)
-        self.infoLabel = BodyLabel(f'确定删除{target_text}吗？此操作不可恢复。', self)
+        self.infoLabel = BodyLabel(f'删除{target_text}，此操作无法撤销', self)
         self.infoLabel.setWordWrap(True)
 
         self.audioCheckBox = CheckBox(self)
         self.audioCheckBox.setMinimumHeight(24)
         if audio_count > 0:
-            self.audioCheckBox.setText(f'同时删除独占的音频缓存（{audio_count} 条 / {audio_size}）')
+            self.audioCheckBox.setText(f'同时删除仅被所选记录使用的音频（{audio_count} 条，{audio_size}）')
             self.audioCheckBox.setChecked(True)
         else:
-            self.audioCheckBox.setText('无可一并删除的音频：相关音频仍被其它记录引用')
+            self.audioCheckBox.setText('音频仍被其他记录使用，不会删除')
             self.audioCheckBox.setEnabled(False)
 
         self.viewLayout.addWidget(self.titleLabel)

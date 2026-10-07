@@ -3,7 +3,6 @@
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QDialog,
     QHBoxLayout,
     QListWidgetItem,
     QSplitter,
@@ -29,6 +28,7 @@ from app import rewrite
 from tasks.rewrite_task import RewriteTask
 from ui.dialogs.llm_config_dialog import LLMConfigMessageBox
 from ui.dialogs.style_manager_dialog import StyleManagerDialog
+from ui.dialogs.base import ThemedDialog
 
 STATUS_PENDING = '待改写'
 STATUS_DONE = '已改写'
@@ -37,7 +37,7 @@ STATUS_FAILED = '失败'
 STATUS_BLANK = '空白页'
 
 
-class RewriteDialog(QDialog):
+class RewriteDialog(ThemedDialog):
     """逐页展示原文和候选结果，并由用户明确选择处理与写回范围。
 
     模型输出不会自动覆盖讲稿；分隔符结构变化的页面会额外警告。
@@ -63,7 +63,7 @@ class RewriteDialog(QDialog):
         root.setSpacing(10)
 
         caption = CaptionLabel(
-            '左侧勾选需处理的页后可进行批量处理。模型生成的候选结果可在手动编辑后再应用。', self)
+            '勾选要改写的页', self)
         caption.setWordWrap(True)
         root.addWidget(caption)
 
@@ -316,12 +316,12 @@ class RewriteDialog(QDialog):
         """启动当前勾选页的改写，并保留未勾选页的已有结果。"""
         pages = self.pending_pages()
         if not pages:
-            self._info_warning('没有可改写的页', '请先在左侧勾选要改写的页。')
+            self._info_warning('没有可改写的页', '在左侧勾选要改写的页')
             return
 
         llm_config = self.current_llm_config()
         if not llm_config['base_url'] or not llm_config['model']:
-            self._info_warning('尚未配置接口', '请先点击"接口配置"填写服务地址与模型名称。')
+            self._info_warning('尚未配置接口', '在"接口配置"中填写服务地址与模型名称')
             return
 
         self.app_settings.set('llm_style', self.style_combo.currentText())
@@ -387,11 +387,11 @@ class RewriteDialog(QDialog):
         failed = sum(1 for r in self.results.values() if r.get('error'))
 
         if failed and succeeded:
-            self._info_warning('部分完成', f'成功 {succeeded} 页，失败 {failed} 页，可对失败页重试。')
+            self._info_warning('部分完成', f'成功 {succeeded} 页，失败 {failed} 页')
         elif failed:
-            self._info_error('改写失败', '所有页面均未成功，请检查服务地址、API Key 与模型名称。')
+            self._info_error('改写失败', '所有页面均未成功，请检查服务地址、API Key 与模型名称')
         else:
-            self._info_success('改写完成', f'已生成 {succeeded} 页候选文本，请逐页确认后应用。')
+            self._info_success('改写完成', f'已生成 {succeeded} 页候选文本')
 
     # 采用
 
@@ -418,15 +418,14 @@ class RewriteDialog(QDialog):
                     risky.append(page)
 
         if not applied:
-            self._info_warning('没有可应用的结果', '请勾选至少一页已改写的内容。')
+            self._info_warning('没有可应用的结果', '至少勾选一页已改写的内容')
             return
 
         if risky:
             pages_text = '、'.join(f'第 {p} 页' for p in risky[:8])
             box = MessageBox(
                 '存在结构变化',
-                f'{pages_text} 的页内分隔符数量与原文不一致，写回后点击节奏会改变。'
-                f'\n\n仍要应用吗？',
+                f'{pages_text} 的分隔符数量与原文不一致，写回后点击节奏会改变',
                 self)
             box.yesButton.setText('仍要应用')
             box.cancelButton.setText('返回检查')

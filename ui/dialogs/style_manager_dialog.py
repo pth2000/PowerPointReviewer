@@ -4,7 +4,6 @@ import copy
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
-    QDialog,
     QHBoxLayout,
     QListWidgetItem,
     QStackedWidget,
@@ -26,9 +25,10 @@ from qfluentwidgets import (
 )
 
 from app import rewrite
+from ui.dialogs.base import ThemedDialog
 
 
-class StyleManagerDialog(QDialog):
+class StyleManagerDialog(ThemedDialog):
     """管理改写风格和提示词模板，并实时预览最终请求。
 
     编辑先作用于本地副本，只有确认后才写回配置；用户模板必须保留 ``{text}``，
@@ -116,7 +116,7 @@ class StyleManagerDialog(QDialog):
         name_row = QHBoxLayout()
         name_row.addWidget(BodyLabel('名称', page))
         self.name_edit = LineEdit(page)
-        self.name_edit.setPlaceholderText('显示在改写窗口的风格下拉框里')
+        self.name_edit.setPlaceholderText('风格名称')
         self.name_edit.textChanged.connect(self.on_name_edited)
         name_row.addWidget(self.name_edit, 1)
         right.addLayout(name_row)
@@ -146,7 +146,7 @@ class StyleManagerDialog(QDialog):
         header = QHBoxLayout()
         hint = CaptionLabel(
             '占位符：{instruction} 改写要求 / {text} 讲稿原文 / {mark} 分隔符 / '
-            '{segment_count} 分隔符数量 / {segment_rule} 分隔条件规则。', page)
+            '{segment_count} 分隔符数量 / {segment_rule} 分隔条件规则', page)
         hint.setWordWrap(True)
         header.addWidget(hint, 1)
         self.reset_templates_button = PushButton('恢复默认模板', page)
@@ -198,7 +198,7 @@ class StyleManagerDialog(QDialog):
 
     def reset_templates(self):
         """确认后用内置值覆盖当前模板副本。"""
-        box = MessageBox('恢复默认模板', '将丢弃当前全部提示词模板改动，确定继续吗？', self)
+        box = MessageBox('恢复默认模板', '将丢弃对提示词模板的全部改动', self)
         box.yesButton.setText('恢复')
         box.cancelButton.setText('取消')
         if not box.exec():
@@ -299,11 +299,11 @@ class StyleManagerDialog(QDialog):
         if not (0 <= self._current_index < len(self.styles)):
             return
         if len(self.styles) <= 1:
-            self._info('warning', '无法删除', '至少需要保留一个改写风格。')
+            self._info('warning', '无法删除', '至少保留一个改写风格')
             return
 
         name = self.styles[self._current_index]['name']
-        box = MessageBox('删除风格', f'确定删除"{name}"吗？', self)
+        box = MessageBox('删除风格', f'将删除风格"{name}"', self)
         box.yesButton.setText('删除')
         box.cancelButton.setText('取消')
         if not box.exec():
@@ -317,7 +317,7 @@ class StyleManagerDialog(QDialog):
         """确认后以全部内置风格替换当前副本。"""
         box = MessageBox(
             '恢复默认风格',
-            '将丢弃当前全部风格（含自定义），恢复为内置的几种。\n此操作不可恢复，确定继续吗？',
+            '将丢弃全部风格（含自定义），恢复为内置风格，此操作无法撤销',
             self,
         )
         box.yesButton.setText('恢复')
@@ -338,26 +338,25 @@ class StyleManagerDialog(QDialog):
         seen = set()
         for index, style in enumerate(self.styles, start=1):
             if not style['name']:
-                self._info('warning', '名称为空', f'第 {index} 个风格还没有名称。')
+                self._info('warning', '名称为空', f'第 {index} 个风格没有名称')
                 return
             if not style['instruction']:
-                self._info('warning', '改写要求为空', f'"{style["name"]}"还没有填写改写要求。')
+                self._info('warning', '改写要求为空', f'"{style["name"]}"没有改写要求')
                 return
             if style['name'] in seen:
-                self._info('warning', '名称重复', f'存在两个名为"{style["name"]}"的风格。')
+                self._info('warning', '名称重复', f'存在两个名为"{style["name"]}"的风格')
                 return
             seen.add(style['name'])
 
         templates = self.current_templates()
         if not templates['user_template'].strip():
-            self._info('warning', '模板为空', '用户提示词模板不能为空。')
+            self._info('warning', '模板为空', '用户提示词模板不能为空')
             self.pivot.setCurrentItem('templates')
             self.stack.setCurrentIndex(1)
             return
         if rewrite.REQUIRED_PLACEHOLDER not in templates['user_template']:
             self._info('warning', '缺少占位符',
-                       f'用户提示词模板必须包含 {rewrite.REQUIRED_PLACEHOLDER}，'
-                       f'否则讲稿正文不会被发送给模型。')
+                       f'用户提示词模板必须包含 {rewrite.REQUIRED_PLACEHOLDER}')
             self.pivot.setCurrentItem('templates')
             self.stack.setCurrentIndex(1)
             return

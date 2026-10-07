@@ -8,6 +8,7 @@
 # 打包产物
 /build/
 /dist/
+/releases/
 
 # Python
 __pycache__/
@@ -17,3 +18,5 @@ __pycache__/
 /.venv/
 .idea/
 .vscode/
+# 本地维护文档，不随仓库发布
+/RELEASING.md

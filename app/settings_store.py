@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer
 
-from app import rewrite, theme
+from app import hotkeys, rewrite, theme
 
 
 class AppSettings:
@@ -25,6 +25,12 @@ class AppSettings:
         'countdown_enabled': True,
         'countdown_seconds': 5,
         'scroll_enabled': False,
+        # 全局热键
+        'hotkeys_enabled': False,
+        # 翻页方式：foreground 前台按键，com 演示软件接口，window 指定窗口
+        'page_turn_mode': 'foreground',
+        'page_turn_window': {},
+        'hotkeys': dict(hotkeys.DEFAULT_BINDINGS),
         # 试听
         'preview_text': '这是一个试听音频，用于测试当前的语音设置',
         # 导出

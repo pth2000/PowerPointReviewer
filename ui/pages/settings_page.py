@@ -5,7 +5,7 @@ import webbrowser
 from functools import partial
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout, QWidget
 from qfluentwidgets import (
@@ -14,7 +14,9 @@ from qfluentwidgets import (
     ComboBox,
     DoubleSpinBox,
     FluentIcon,
+    IconWidget,
     InfoBadge,
+    InfoLevel,
     InfoBar,
     InfoBarPosition,
     LineEdit,
@@ -23,17 +25,20 @@ from qfluentwidgets import (
     PushButton,
     SpinBox,
     SubtitleLabel,
+    SwitchButton,
     ToolButton,
     isDarkTheme,
 )
 
-from app import icons, paths, theme
+from app import audio_cache, icons, paths, slideshow, theme, updater, window_target
 from app.app_context import AppContext
 from app.playback import AudioOutputWatcher
 from settingInterface import Ui_settingInterface
 from tasks.preview_task import PreviewTask
 from tasks.voice_catalog_task import VoiceCatalogTask
+from ui.dialogs.hotkey_dialog import HotkeyDialog
 from ui.dialogs.preview_text_dialog import PreviewTextMessageBox
+from ui.dialogs.window_target_dialog import WindowTargetDialog
 from ui.dialogs.qwen_clone_voice_dialog import QwenCloneVoiceDialog
 
 
@@ -42,6 +47,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
     # 设置页只发出重新生成意图，主窗口负责将其转接给主页。
     regenerate_requested = Signal()
+    hotkeys_changed = Signal()
+    page_turn_mode_changed = Signal()
 
     # 这些字段与语音设置一起参加脏状态比较；其它偏好由其所属页面即时保存。
     OWNED_APP_KEYS = ('preview_text',)
@@ -79,8 +86,16 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.can_regenerate_check = lambda: False
 
         # 语音设置显式保存；保存栏同时承担脏状态提示。
-        self.saveCaptionLabel.setText('保存后生效，已生成的音频不受影响')
+        self.saveCaptionLabel.setText('将修改应用到之后的语音合成')
         self.saveCaptionLabel.setWordWrap(False)
+
+        theme.wrap_title_with_help(
+            self.verticalLayout_12, self.savePathLabel,
+            '试听使用尚未保存的设置，可在保存前比较效果。'
+            '已生成的音频不随保存更新，已导入讲稿时可选择重新合成。')
+        # 引擎说明随所选引擎更新
+        _row, self.engine_help_icon = theme.wrap_title_with_help(
+            self.verticalLayout_11, self.engineSelectPathLabel)
         self.unsaved_badge = InfoBadge.warning('未保存', self.CardWidget_4)
         self.horizontalLayout_15.insertWidget(
             self.horizontalLayout_15.indexOf(self.savePushButton), self.unsaved_badge)
@@ -221,7 +236,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         try:
             box = MessageBox(
                 '未保存的设置更改',
-                '设置已修改但尚未保存，放弃后将恢复为上次保存的配置。',
+                '放弃后将恢复为上次保存的配置',
                 self.window(),
             )
             box.yesButton.setText('保存')
@@ -253,7 +268,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
             text = str(self.ctx.app_settings.get('preview_text')).strip()
             if not text:
-                self.create_warning_info_bar('试听文字为空', '请先在"试听文字"中填写要朗读的内容。')
+                self.create_warning_info_bar('试听文字为空', '在"试听文字"中填写要朗读的内容')
                 return
             # 试听文件必须与主页扫描的 TEMP_DIR 根目录隔离。
             paths.PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
@@ -262,7 +277,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
             preview_path = paths.PREVIEW_DIR / f'preview_{int(time.time())}.{preview_ext}'
 
             self.previewButton.setEnabled(False)
-            self.previewButton.setText('正在生成...')
+            self.previewButton.setText('正在生成…')
 
             self.preview_thread = PreviewTask(self.ctx.tts_engine, text, str(preview_path), self)
             self.preview_thread.signal_finish.connect(self.on_preview_generated)
@@ -344,7 +359,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def setup_appearance_cards(self):
         """创建即时生效的主题模式和主题色卡片。"""
         mode_card = self._make_appearance_card(
-            '主题模式', '界面明暗；跟随系统时随 Windows 的深色设置切换')
+            '主题模式', '切换界面的浅色或深色外观',
+            help_text='选择「跟随系统」时，随 Windows 的深浅色设置自动切换。')
         self.theme_mode_combo = ComboBox(mode_card)
         self.theme_mode_combo.setMinimumSize(QSize(180, 33))
         self.theme_mode_combo.setMaximumSize(QSize(180, 33))
@@ -354,7 +370,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.theme_mode_combo.currentTextChanged.connect(self.on_theme_mode_changed)
         mode_card.layout().addWidget(self.theme_mode_combo)
 
-        color_card = self._make_appearance_card('主题色', '按钮、选中态等强调色')
+        color_card = self._make_appearance_card('主题色', '设置按钮、选中项等处的强调色')
         self._color_dots = []
         for value, name in theme.PRESET_COLORS:
             dot = QPushButton(color_card)
@@ -375,7 +391,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.refresh_color_dots()
 
 
-    def _make_appearance_card(self, title: str, caption: str):
+    def _make_appearance_card(self, title: str, caption: str, help_text: str = ''):
         """创建外观设置卡片骨架，并返回可追加控件的布局。"""
         card = CardWidget(self.importWidget)
         h_layout = QHBoxLayout(card)
@@ -384,8 +400,9 @@ class SettingInterface(QWidget, Ui_settingInterface):
         info_layout = QVBoxLayout()
         info_layout.setSpacing(0)
 
-        title_label = theme.make_card_title(title, card)
-        info_layout.addWidget(title_label)
+        title_row, card.help_icon = theme.make_title_row(
+            theme.make_card_title(title, card), help_text)
+        info_layout.addLayout(title_row)
 
         caption_label = CaptionLabel(card)
         caption_label.setText(caption)
@@ -395,8 +412,20 @@ class SettingInterface(QWidget, Ui_settingInterface):
         h_layout.addLayout(info_layout, stretch=1)
         h_layout.addSpacing(20)
 
+        card.title_row = title_row
         self.verticalLayout_2.addWidget(card)
         return card
+
+    def _set_card_badge(self, card, text: str, level=InfoLevel.INFOAMTION):
+        """在卡片标题右侧显示状态标签；说明文字保持静态，状态只体现在标签上。"""
+        badge = getattr(card, 'status_badge', None)
+        if badge is None:
+            badge = InfoBadge.make('', card, level=level)
+            card.title_row.insertWidget(1, badge)
+            card.status_badge = badge
+        badge.setText(text)
+        badge.setLevel(level)
+        badge.setVisible(bool(text))
 
     def refresh_color_dots(self):
         """刷新主题色按钮，并用描边标记当前颜色。"""
@@ -436,8 +465,187 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def build_persistent_tail(self):
         """构建不随引擎切换重建的固定设置区块。"""
         self.setup_preview_text_card()
+        self.add_section_label('放映控制', append=True)
+        self.setup_page_turn_card()
+        self.setup_hotkey_card()
         self.add_section_label('外观', append=True)
         self.setup_appearance_cards()
+        self.setup_log_card()
+
+    PAGE_TURN_MODES = (('foreground', '前台按键'), ('com', '演示软件接口'), ('window', '指定窗口'))
+
+    def setup_page_turn_card(self):
+        """创建翻页方式卡片。"""
+        card = self._make_appearance_card('翻页方式', '')
+        self.page_turn_card = card
+        self.page_turn_caption = card.findChildren(CaptionLabel)[0]
+        self.page_turn_combo = ComboBox(card)
+        self.page_turn_combo.setMinimumSize(QSize(180, 33))
+        self.page_turn_combo.setMaximumSize(QSize(180, 33))
+        self.page_turn_combo.addItems([label for _mode, label in self.PAGE_TURN_MODES])
+        current = str(self.ctx.app_settings.get('page_turn_mode') or 'foreground')
+        labels = dict(self.PAGE_TURN_MODES)
+        self.page_turn_combo.setCurrentText(labels.get(current, labels['foreground']))
+        self.page_turn_combo.currentTextChanged.connect(self.on_page_turn_mode_changed)
+        card.layout().addWidget(self.page_turn_combo)
+
+        self.page_turn_pick_button = PushButton('选择窗口', card)
+        self.page_turn_pick_button.setMinimumSize(QSize(110, 33))
+        self.page_turn_pick_button.setMaximumSize(QSize(110, 33))
+        self.page_turn_pick_button.clicked.connect(self.open_window_target_dialog)
+        card.layout().addWidget(self.page_turn_pick_button)
+        # 构造阶段不探测放映状态，避免为此在启动时加载 COM 依赖
+        self.refresh_page_turn_status(probe=False)
+
+    def open_window_target_dialog(self):
+        """打开窗口选择器，确认后立即保存。"""
+        dialog = WindowTargetDialog(self.ctx.app_settings.get('page_turn_window'), self)
+        if dialog.exec():
+            self.ctx.app_settings.set('page_turn_window', dialog.selected)
+            self.ctx.config.save_later()
+            self.refresh_page_turn_status()
+
+    def on_page_turn_mode_changed(self, label: str):
+        """切换翻页方式并立即落盘。"""
+        mode = next((m for m, text in self.PAGE_TURN_MODES if text == label), 'foreground')
+        self.ctx.app_settings.set('page_turn_mode', mode)
+        self.ctx.config.save_later()
+        self.refresh_page_turn_status()
+        self.page_turn_mode_changed.emit()
+
+    def showEvent(self, event):
+        """每次切回本页时重新检测放映状态。"""
+        super().showEvent(event)
+        if getattr(self, 'page_turn_caption', None) is not None:
+            self.refresh_page_turn_status()
+
+    PAGE_TURN_CAPTIONS = {
+        'foreground': '模拟按下键盘上的翻页键',
+        'com': '通过 PowerPoint 或 WPS 演示的接口翻页',
+        'window': '向选定的放映窗口发送翻页',
+    }
+    PAGE_TURN_HELP = {
+        'foreground': '翻页键发送到当前处于前台的窗口，放映时需保持放映窗口在前台。',
+        'com': '直接控制 PowerPoint 或 WPS 演示的放映，不受前台窗口影响，需先开始放映。'
+               '放映中手动翻页时，朗读位置随之调整；在本程序中跳转页码时，放映同步跳转。',
+        'window': '向选定窗口发送滚轮翻页，切换到其他程序后仍然有效。'
+                  '放映开始后，点击「选择窗口」指定放映窗口。',
+    }
+
+    def refresh_page_turn_status(self, probe: bool = True):
+        """按所选翻页方式设置说明文字，并用状态标签反映目标是否可用。
+
+        probe 为假时跳过对演示软件的探测，供构造阶段使用。
+        """
+        mode = str(self.ctx.app_settings.get('page_turn_mode') or 'foreground')
+        if getattr(self, 'page_turn_pick_button', None) is not None:
+            self.page_turn_pick_button.setVisible(mode == 'window')
+        if mode not in self.PAGE_TURN_CAPTIONS:
+            mode = 'foreground'
+        self.page_turn_caption.setText(self.PAGE_TURN_CAPTIONS[mode])
+        theme.set_help_text(self.page_turn_card.help_icon, self.PAGE_TURN_HELP[mode])
+
+        if mode == 'com':
+            if not probe:
+                self._set_card_badge(self.page_turn_card, '')
+                return
+            detected = slideshow.describe()
+            if detected:
+                self._set_card_badge(self.page_turn_card, detected, InfoLevel.SUCCESS)
+            else:
+                self._set_card_badge(self.page_turn_card, '未检测到放映', InfoLevel.WARNING)
+        elif mode == 'window':
+            target = self.ctx.app_settings.get('page_turn_window')
+            if target and window_target.describe(target):
+                self._set_card_badge(self.page_turn_card, '窗口有效', InfoLevel.SUCCESS)
+            elif target:
+                self._set_card_badge(self.page_turn_card, '窗口已关闭', InfoLevel.WARNING)
+            else:
+                self._set_card_badge(self.page_turn_card, '未选择窗口', InfoLevel.INFOAMTION)
+        else:
+            self._set_card_badge(self.page_turn_card, '')
+
+    def setup_hotkey_card(self):
+        """创建全局热键配置入口卡片。"""
+        card = self._make_appearance_card(
+            '快捷键', '在其他程序处于前台时控制朗读',
+            help_text='讲稿合成完成后生效。可设置播放、停止、上一段、下一段与重播当前段的组合键。')
+        self.hotkey_card = card
+        self.hotkey_button = PushButton('配置', card)
+        self.hotkey_button.setMinimumSize(QSize(120, 33))
+        self.hotkey_button.setMaximumSize(QSize(120, 33))
+        self.hotkey_button.clicked.connect(self.open_hotkey_dialog)
+        card.layout().addWidget(self.hotkey_button)
+        self.refresh_hotkey_status()
+
+    def refresh_hotkey_status(self):
+        """用状态标签反映全局热键是否启用。"""
+        enabled = bool(self.ctx.app_settings.get('hotkeys_enabled'))
+        self._set_card_badge(
+            self.hotkey_card,
+            '已启用' if enabled else '未启用',
+            InfoLevel.SUCCESS if enabled else InfoLevel.INFOAMTION)
+
+    def open_hotkey_dialog(self):
+        """打开热键配置，确认后立即按新配置重新注册。"""
+        dialog = HotkeyDialog(self.ctx.app_settings, self.ctx.hotkeys, self)
+        accepted = bool(dialog.exec())
+        if accepted:
+            self.ctx.config.save_later()
+        # 对话框会试注册以检测系统占用，结束后需按最终配置重新注册
+        self.hotkeys_changed.emit()
+        self.refresh_hotkey_status()
+        if accepted:
+            self.create_success_info_bar('已保存', '全局热键配置已更新')
+
+    def setup_log_card(self):
+        """在“关于”区块末尾追加运行日志入口。"""
+        card = CardWidget(self.scrollAreaWidgetContents)
+        card.setMinimumSize(QSize(0, 80))
+        card.setMaximumSize(QSize(16777215, 80))
+        h_layout = QHBoxLayout(card)
+        h_layout.setContentsMargins(20, 20, 20, 20)
+
+        icon = IconWidget(card)
+        icon.setMinimumSize(QSize(20, 20))
+        icon.setMaximumSize(QSize(20, 20))
+        icons.apply(icon, ':/image/image/info.svg')
+        h_layout.addWidget(icon)
+        h_layout.addSpacing(12)
+
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(0)
+        log_title_row, _icon = theme.make_title_row(
+            theme.make_card_title('运行日志', card),
+            '反馈问题时可附上日志目录中的文件。单个日志超过 1 MB 后自动轮换，最多保留 4 个文件。')
+        info_layout.addLayout(log_title_row)
+        caption = CaptionLabel(card)
+        caption.setText('记录运行过程与错误信息')
+        caption.setWordWrap(True)
+        info_layout.addWidget(caption)
+        h_layout.addLayout(info_layout, stretch=1)
+        h_layout.addSpacing(20)
+
+        open_button = PushButton('打开目录', card)
+        open_button.setMinimumSize(QSize(120, 33))
+        open_button.setMaximumSize(QSize(120, 33))
+        open_button.clicked.connect(self.open_log_dir)
+        h_layout.addWidget(open_button)
+
+        # 版权卡之后、底部弹簧之前
+        self.verticalLayout_6.insertWidget(
+            self.verticalLayout_6.indexOf(self.importCardWidget) + 1, card)
+
+    def open_log_dir(self):
+        """在文件管理器中打开日志目录。"""
+        try:
+            paths.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self.create_error_info_bar('无法打开日志目录', f'详情：{e}')
+            return
+
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.LOG_DIR))):
+            self.create_error_info_bar('无法打开日志目录', f'路径：{paths.LOG_DIR}')
 
     def setup_preview_text_card(self):
         """创建可编辑试听文字卡片。
@@ -455,7 +663,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         info_layout.addWidget(title_lbl)
 
         cap_lbl = CaptionLabel(card)
-        cap_lbl.setText('试听时朗读的文本内容')
+        cap_lbl.setText('编辑试听时朗读的内容')
         cap_lbl.setWordWrap(True)
         info_layout.addWidget(cap_lbl)
 
@@ -496,8 +704,11 @@ class SettingInterface(QWidget, Ui_settingInterface):
         info_layout = QVBoxLayout()
         info_layout.setSpacing(0)
 
-        title_label = theme.make_card_title(option_schema.get('label', option_schema.get('key', '配置项')), card)
-        info_layout.addWidget(title_label)
+        title = option_schema.get('label', option_schema.get('key', '配置项'))
+        title_row, card.help_icon = theme.make_title_row(
+            theme.make_card_title(title, card), option_schema.get('help', ''))
+        info_layout.addLayout(title_row)
+        card.title_row = title_row
 
         desc_label = CaptionLabel(card)
         desc_label.setText(option_schema.get('description', ''))
@@ -563,6 +774,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
         engine_def = self.ctx.tts_engine.get_current_engine_definition()
         self.engineSelectCaptionLabel.setText(engine_def.get('description', ''))
+        theme.set_help_text(self.engine_help_icon, engine_def.get('help', ''))
 
         rendered = []
         for item in schema_list:
@@ -657,7 +869,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         info_layout.addWidget(title_lbl)
 
         cap_lbl = CaptionLabel(card)
-        cap_lbl.setText('选择当前引擎的发音人')
+        cap_lbl.setText('选择合成语音时使用的音色')
         cap_lbl.setWordWrap(True)
         info_layout.addWidget(cap_lbl)
 
@@ -752,11 +964,13 @@ class SettingInterface(QWidget, Ui_settingInterface):
         info_layout = QVBoxLayout()
         info_layout.setSpacing(0)
 
-        title_lbl = theme.make_card_title('复刻音色管理', card)
-        info_layout.addWidget(title_lbl)
+        title_row, _icon = theme.make_title_row(
+            theme.make_card_title('复刻音色管理', card),
+            '可上传参考音频创建音色，或删除不再使用的音色。选中音色并设为当前后，即可用于合成。')
+        info_layout.addLayout(title_row)
 
         cap_lbl = CaptionLabel(card)
-        cap_lbl.setText('创建、刷新、删除复刻音色，并指定当前使用的音色')
+        cap_lbl.setText('管理保存在云端的复刻音色')
         cap_lbl.setWordWrap(True)
         info_layout.addWidget(cap_lbl)
 
@@ -797,25 +1011,32 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.mark_dirty()
 
     def get_update(self):
-        """启动后台发行版检查。"""
-        if self.update_thread is None:
-            from tasks.update_task import UpdateTask
+        """在后台检查新版本。"""
+        if self.update_thread is not None and self.update_thread.isRunning():
+            return
+        from tasks.update_task import UpdateCheckTask
 
-            self.update_thread = UpdateTask(self.ctx.version, self)
-            self.update_thread.signal_finish.connect(self.thread_get_update_finish)
-
-        self.versionPrimaryPushButton.setEnabled(False)
+        self.update_thread = UpdateCheckTask(self)
+        self.update_thread.checked.connect(self.on_update_checked)
+        self.set_update_button('正在检查…', False)
         self.update_thread.start()
 
-    def thread_get_update_finish(self, data_list):
-        """根据统一结果码展示更新状态或下载入口。"""
-        self.versionPrimaryPushButton.setEnabled(True)
-        if data_list[0] == 0:
-            self.create_success_info_bar(data_list[1], data_list[2])
-        elif data_list[0] == 1:
-            self.show_update_dialog(data_list[1], data_list[2], data_list[3])
+    def set_update_button(self, text: str = '检查更新', enabled: bool = True):
+        """同步版本卡片按钮的文字与可用状态。"""
+        self.versionPrimaryPushButton.setText(text)
+        self.versionPrimaryPushButton.setEnabled(enabled)
+
+    def on_update_checked(self, status: str, payload):
+        """根据检查结果提示用户，有新版本时询问是否安装。"""
+        self.set_update_button()
+        if status == 'unmanaged':
+            self.create_warning_info_bar('无法自动更新', '仅安装版与便携版支持自动更新')
+        elif status == 'latest':
+            self.create_success_info_bar('已是最新版本', f'当前版本 {self.ctx.version}')
+        elif status == 'error':
+            self.create_error_info_bar('检查更新失败', payload)
         else:
-            self.create_error_info_bar(data_list[1], data_list[2])
+            self.show_update_dialog(payload)
 
     @staticmethod
     def open_github_url():
@@ -826,11 +1047,6 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def open_gitee_url():
         """在系统浏览器打开项目 Gitee 主页。"""
         webbrowser.open('https://gitee.com/pth2000')
-
-    @staticmethod
-    def open_update_url(url):
-        """在系统浏览器打开更新下载地址。"""
-        webbrowser.open(url)
 
     def create_success_info_bar(self, title, text):
         """在设置页顶部显示短暂的成功提示。"""
@@ -868,10 +1084,39 @@ class SettingInterface(QWidget, Ui_settingInterface):
             parent=self
         )
 
-    def show_update_dialog(self, title, content, url):
-        """显示新版本说明，并在确认后打开下载地址。"""
-        dialog = MessageBox(title, content, self)
-        dialog.yesButton.setText('获取更新')
-        dialog.cancelButton.setText('取消')
+    def show_update_dialog(self, info):
+        """展示新版本说明，确认后开始下载。"""
+        content = f'下载大小 {audio_cache.format_size(updater.download_size(info))}'
+        notes = updater.release_notes(info)
+        if notes:
+            content += f'\n\n{notes}'
+        dialog = MessageBox(f'新版本 {info.TargetFullRelease.Version}', content, self)
+        dialog.yesButton.setText('下载并重启')
+        dialog.cancelButton.setText('稍后')
         if dialog.exec():
-            self.open_update_url(url)
+            self.download_update(info)
+
+    def download_update(self, info):
+        """在后台下载更新包，并在按钮上显示进度。"""
+        from tasks.update_task import UpdateDownloadTask
+
+        self.update_thread = UpdateDownloadTask(info, self)
+        self.update_thread.progress.connect(
+            lambda value: self.set_update_button(f'正在下载 {value}%', False))
+        self.update_thread.downloaded.connect(self.on_update_downloaded)
+        self.set_update_button('正在下载…', False)
+        self.update_thread.start()
+
+    def on_update_downloaded(self, info, error: str):
+        """下载完成后交由 Velopack 在退出时安装，并关闭主窗口。"""
+        if not error:
+            try:
+                updater.create_manager().wait_exit_then_apply_updates(info)
+            except Exception as e:
+                error = str(e)
+        if error:
+            self.set_update_button()
+            self.create_error_info_bar('更新失败', error)
+            return
+        self.set_update_button('正在重启…', False)
+        self.window().close()

@@ -21,6 +21,12 @@ from tts_engine import TTSEngine
 SILENCE_SECONDS = 0.4
 SILENCE_FRAMERATE = 22050
 
+# MPEG-1 Layer III 单声道 32 kbps / 44.1 kHz 的帧头，其余字节置零即为一帧静音。
+# 项目没有音频编码依赖，靠拼接这种帧得到与在线引擎同格式的静音占位。
+MP3_SILENCE_HEADER = bytes((0xFF, 0xFB, 0x10, 0xC4))
+MP3_FRAME_BYTES = 144 * 32000 // 44100
+MP3_FRAME_SECONDS = 1152 / 44100
+
 
 @dataclass
 class GenerationResult:
@@ -77,9 +83,17 @@ class AudioGenerationTask(QThread):
     # 单条音频生成
 
     @staticmethod
-    def _write_silence_wav(path: Path, seconds: float = SILENCE_SECONDS,
-                           framerate: int = SILENCE_FRAMERATE):
-        """写入单声道 16 位静音 WAV，作为空白讲稿占位。"""
+    def _write_silence(path: Path, output_ext: str, seconds: float = SILENCE_SECONDS,
+                       framerate: int = SILENCE_FRAMERATE):
+        """按当前引擎的输出格式写入静音占位。
+
+        占位与正文音频同格式，合并导出时不会出现 wav 与 mp3 混用。
+        """
+        if output_ext == 'mp3':
+            frame = MP3_SILENCE_HEADER + bytes(MP3_FRAME_BYTES - len(MP3_SILENCE_HEADER))
+            path.write_bytes(frame * max(1, round(seconds / MP3_FRAME_SECONDS)))
+            return
+
         with wave.open(str(path), 'wb') as wav_file:
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
@@ -93,7 +107,7 @@ class AudioGenerationTask(QThread):
             if text.strip():
                 self.tts_engine.save_file(text, str(temp_path))
             else:
-                self._write_silence_wav(temp_path)
+                self._write_silence(temp_path, output_ext)
 
             if not temp_path.exists() or temp_path.stat().st_size == 0:
                 raise RuntimeError('语音引擎返回了空音频文件')
@@ -109,8 +123,7 @@ class AudioGenerationTask(QThread):
     def _save_one_note_wav(self, index, note_dict, generation_profile):
         """生成或复用单条音频，并返回可按输入索引归位的结果元组。"""
         text = note_dict['text']
-        # 静音由 wave 模块生成，扩展名必须保持 WAV，不能伪装成在线引擎的 MP3。
-        output_ext = 'wav' if not text.strip() else self.tts_engine.get_output_extension()
+        output_ext = self.tts_engine.get_output_extension()
         cache_key = self.tts_engine.build_audio_cache_key(text, generation_profile)
         cache_path = self.audio_cache_path / f'{cache_key}.{output_ext}'
         path = self.output_path / f'{note_dict["page"]}_{index + 1}.{output_ext}'

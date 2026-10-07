@@ -15,7 +15,7 @@ class PreviewTextMessageBox(MessageBoxBase):
 
         self.titleLabel = SubtitleLabel('试听文字', self)
         self.hintLabel = CaptionLabel(
-            '使用自定义文字，进行音色、语速等配置的微调', self)
+            '试听时朗读的内容', self)
         self.hintLabel.setWordWrap(True)
 
         self.textEdit = PlainTextEdit(self)

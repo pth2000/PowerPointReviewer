@@ -218,7 +218,12 @@ def merge_audio(media_paths, target_path: Path) -> None:
         params = None
         with wave.open(str(target_path), 'wb') as writer:
             for path in sources:
-                with wave.open(str(path), 'rb') as reader:
+                try:
+                    reader = wave.open(str(path), 'rb')
+                except wave.Error as e:
+                    raise RuntimeError(
+                        f'{path.name} 不是有效的 WAV 音频（{e}），请改用多文件导出。') from e
+                with reader:
                     current = reader.getparams()
                     if params is None:
                         params = current

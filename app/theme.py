@@ -3,11 +3,16 @@
 主题不影响语音生成，因此由设置页即时应用和持久化，不参与语音参数的显式保存流程。
 """
 
-from PySide6.QtCore import QEvent, QObject
+import ctypes
+import sys
+
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QToolButton, QWidget
 from qfluentwidgets import (
     ColorDialog,
+    FluentIcon,
+    IconWidget,
     PrimaryDropDownPushButton,
     PrimaryDropDownToolButton,
     PrimaryPushButton,
@@ -16,6 +21,8 @@ from qfluentwidgets import (
     PrimaryToolButton,
     StrongBodyLabel,
     Theme,
+    ToolTipFilter,
+    ToolTipPosition,
     isDarkTheme,
     setTheme,
     setThemeColor,
@@ -85,21 +92,23 @@ def apply_theme(mode: str, color: str):
     disable_dark_color_boost()
     setTheme(_MODE_MAP.get(str(mode), Theme.AUTO), save=False)
     setThemeColor(normalize_color(color), save=False)
-    _apply_plain_label_color()
-    _patch_accent_buttons()
+    _apply_native_widget_style()
+    _patch_widgets()
     icons.refresh_all()
 
 
-def _apply_plain_label_color():
-    """为 Qt Designer 生成的原生 QLabel 补充主题文字色。
+def _apply_native_widget_style():
+    """让 qfluentwidgets 未覆盖的原生控件跟随主题。
 
-    qfluentwidgets 只更新自带标签；应用级规则优先级低于控件自身样式，不会覆盖其组件。
+    原生 QLabel 补充主题文字色，QSplitter 分隔条改为透明以融入背景。
+    应用级规则优先级低于控件自身样式，不会覆盖 qfluentwidgets 组件。
     """
     app = QApplication.instance()
     if app is None:
         return
     color = '#FFFFFF' if isDarkTheme() else '#000000'
-    app.setStyleSheet(f'QLabel {{ color: {color}; }}')
+    app.setStyleSheet(f'QLabel {{ color: {color}; }}\n'
+                      'QSplitter::handle { background: transparent; }')
 
 
 def create_color_dialog(color, parent, title: str = '选择主题色'):
@@ -132,6 +141,67 @@ def make_card_title(text: str, parent=None) -> StrongBodyLabel:
     return label
 
 
+# DWMWA_USE_IMMERSIVE_DARK_MODE 在 Windows 10 20H1 起为 20，更早的版本为 19
+_DARK_TITLE_BAR_ATTRIBUTES = (20, 19)
+
+
+def window_background() -> QColor:
+    """返回与当前主题匹配的窗口背景色。"""
+    return QColor(32, 32, 32) if isDarkTheme() else QColor(243, 243, 243)
+
+
+def apply_title_bar_theme(widget):
+    """设置系统标题栏的明暗；不支持的系统上保持默认外观。"""
+    if sys.platform != 'win32':
+        return
+    value = ctypes.c_int(1 if isDarkTheme() else 0)
+    hwnd = int(widget.winId())
+    for attribute in _DARK_TITLE_BAR_ATTRIBUTES:
+        result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value))
+        if result == 0:
+            break
+
+
+def make_help_icon(text: str = '', parent=None) -> QWidget:
+    """创建悬停时显示说明的信息图标；没有说明时隐藏。"""
+    holder = QWidget(parent)
+    holder.setFixedSize(22, 22)
+    icon = IconWidget(FluentIcon.INFO, holder)
+    icon.setFixedSize(14, 14)
+    icon.move(4, 4)
+    icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    holder.installEventFilter(ToolTipFilter(holder, 300, ToolTipPosition.TOP))
+    set_help_text(holder, text)
+    return holder
+
+
+def set_help_text(icon: QWidget, text: str):
+    """更新说明图标的内容；没有说明时隐藏图标。"""
+    icon.setToolTip(text or '')
+    icon.setVisible(bool(text))
+
+
+def make_title_row(title: QWidget, help_text: str = ''):
+    """把标题与说明图标排成一行，返回行布局与说明图标。"""
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    row.addWidget(title)
+    icon = make_help_icon(help_text, title.parentWidget())
+    row.addWidget(icon)
+    row.addStretch(1)
+    return row, icon
+
+
+def wrap_title_with_help(layout, title: QWidget, help_text: str = ''):
+    """把布局中已有的标题替换为带说明图标的标题行。"""
+    index = layout.indexOf(title)
+    layout.removeWidget(title)
+    row, icon = make_title_row(title, help_text)
+    layout.insertLayout(index, row)
+    return row, icon
+
+
 # 深色模式会把强调色按钮文字改黑；应用统一使用白字以保持对比度。
 ACCENT_BUTTON_TYPES = (
     PrimaryPushButton, PrimarySplitPushButton, PrimaryToolButton,
@@ -148,7 +218,7 @@ _ACCENT_TEXT_RULE = '\n'.join((
     '',
 ))
 
-_accent_patcher = None
+_widget_patcher = None
 
 
 def _patch_accent_button(widget):
@@ -162,32 +232,55 @@ def _patch_accent_button(widget):
     widget.setStyleSheet(style + _ACCENT_TEXT_RULE)
 
 
-class _AccentTextPatcher(QObject):
-    """在控件完成样式装配时为新建的强调色按钮补白字规则。"""
+def _use_point_font(widget):
+    """把控件的像素字号换算为等效的点数字号。
+
+    Qt 样式表引擎处理工具按钮的悬停状态时会读取字体的点数，像素字体读到的是 -1，
+    在缩放比例与主屏不同的屏幕上会因此输出 QFont::setPointSize 警告。
+    """
+    font = widget.font()
+    if font.pixelSize() <= 0:
+        return
+    font.setPointSizeF(font.pixelSize() * 72 / widget.logicalDpiY())
+    widget.setFont(font)
+
+
+def _patch_widget(widget):
+    """对单个控件应用全部修正。"""
+    if isinstance(widget, ACCENT_BUTTON_TYPES):
+        _patch_accent_button(widget)
+    if isinstance(widget, QToolButton):
+        _use_point_font(widget)
+
+
+class _WidgetPatcher(QObject):
+    """在控件完成样式装配或字体变化时，为新建控件补充应用级修正。"""
 
     WATCHED = (QEvent.Type.Polish, QEvent.Type.StyleChange)
 
     def eventFilter(self, obj, event):
-        if event.type() in self.WATCHED and isinstance(obj, ACCENT_BUTTON_TYPES):
-            _patch_accent_button(obj)
+        event_type = event.type()
+        if event_type in self.WATCHED:
+            _patch_widget(obj)
+        elif event_type == QEvent.Type.FontChange and isinstance(obj, QToolButton):
+            _use_point_font(obj)
         return False
 
 
-def _patch_accent_buttons():
-    """修正现有强调色按钮，并安装过滤器覆盖后续创建的按钮。"""
-    global _accent_patcher
+def _patch_widgets():
+    """修正现有控件，并安装过滤器覆盖后续创建的控件。"""
+    global _widget_patcher
 
     app = QApplication.instance()
     if app is None:
         return
 
     for widget in app.allWidgets():
-        if isinstance(widget, ACCENT_BUTTON_TYPES):
-            _patch_accent_button(widget)
+        _patch_widget(widget)
 
-    if _accent_patcher is None:
-        _accent_patcher = _AccentTextPatcher()
-        app.installEventFilter(_accent_patcher)
+    if _widget_patcher is None:
+        _widget_patcher = _WidgetPatcher()
+        app.installEventFilter(_widget_patcher)
 
 # 强调色派生规则
 

@@ -1,9 +1,11 @@
 ﻿"""装配主窗口导航，并协调页面之间的少量跨页事件。"""
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
-from qfluentwidgets import FluentIcon, FluentWindow, NavigationItemPosition, SplashScreen
+from qfluentwidgets import (
+    FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, SplashScreen,
+)
 
 from app.app_context import AppContext
 from ui.pages.reviewer_page import PPTReviewer
@@ -41,11 +43,28 @@ class Window(FluentWindow):
             lambda: bool(self.ppt_r.notes) and not self.ppt_r.is_busy())
         self.setting_interface.regenerate_requested.connect(self.ppt_r.regenerate)
 
+        self.context.hotkeys.triggered.connect(self.ppt_r.handle_hotkey)
+        self.context.slideshow_watcher.slide_changed.connect(
+            self.ppt_r.on_slideshow_slide_changed)
+        self.setting_interface.page_turn_mode_changed.connect(
+            self.ppt_r.refresh_slideshow_watch)
+        self.ppt_r.refresh_slideshow_watch()
+        self.setting_interface.hotkeys_changed.connect(self.ppt_r.refresh_hotkeys)
+
         self.splashScreen.finish()
+        if self.context.updated_to:
+            QTimer.singleShot(300, self.show_updated_tip)
+
+    def show_updated_tip(self):
+        """更新后首次启动时提示新版本号。"""
+        InfoBar.success('已更新', f'当前版本 {self.context.updated_to}', isClosable=True,
+                        position=InfoBarPosition.TOP, duration=5000, parent=self.ppt_r)
 
     def closeEvent(self, event):
         """处理未保存设置，并在退出前清空延迟写入队列。"""
         # 窗口即将关闭，此时重新生成音频没有可见收益。
         self.setting_interface.prompt_unsaved_changes(allow_regenerate=False)
+        self.context.hotkeys.clear()
+        self.context.slideshow_watcher.stop()
         self.context.config.flush()
         super().closeEvent(event)

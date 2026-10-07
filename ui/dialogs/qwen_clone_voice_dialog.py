@@ -4,7 +4,6 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog,
     QFileDialog,
     QHeaderView,
     QHBoxLayout,
@@ -24,8 +23,10 @@ from qfluentwidgets import (
     TableWidget,
 )
 
+from ui.dialogs.base import ThemedDialog
 
-class QwenCloneVoiceDialog(QDialog):
+
+class QwenCloneVoiceDialog(ThemedDialog):
     """集中完成参考音频选择、音色创建、刷新、删除和当前音色选择。"""
 
     def __init__(self, tts_engine, parent=None):
@@ -40,14 +41,14 @@ class QwenCloneVoiceDialog(QDialog):
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(12)
 
-        self.tip_label = BodyLabel('说明：创建音色后会保存在云端，后续直接复用，无需重复上传参考音频。', self)
+        self.tip_label = BodyLabel('音色创建后保存在云端，可直接复用', self)
         main_layout.addWidget(self.tip_label)
 
         # 参考音频
         ref_row = QHBoxLayout()
         ref_row.addWidget(QLabel('参考音频', self))
         self.reference_audio_edit = LineEdit(self)
-        self.reference_audio_edit.setPlaceholderText('请选择 .mp3/.wav/.m4a 音频文件')
+        self.reference_audio_edit.setPlaceholderText('.mp3 / .wav / .m4a')
         ref_row.addWidget(self.reference_audio_edit, 1)
         self.choose_audio_button = PushButton('选择文件', self)
         self.choose_audio_button.clicked.connect(self.choose_reference_audio)
@@ -58,10 +59,10 @@ class QwenCloneVoiceDialog(QDialog):
         param_row = QHBoxLayout()
         param_row.addWidget(QLabel('音色名称', self))
         self.preferred_name_edit = LineEdit(self)
-        self.preferred_name_edit.setPlaceholderText('建议字母/数字/下划线，最长16字符')
+        self.preferred_name_edit.setPlaceholderText('字母、数字、下划线，最多 16 位')
         param_row.addWidget(self.preferred_name_edit)
 
-        param_row.addWidget(QLabel('参考音频MIME', self))
+        param_row.addWidget(QLabel('参考音频类型', self))
         self.mime_combo = ComboBox(self)
         self.mime_combo.addItems(['audio/mpeg', 'audio/wav', 'audio/mp4'])
         param_row.addWidget(self.mime_combo)
@@ -89,21 +90,21 @@ class QwenCloneVoiceDialog(QDialog):
 
         # 音色操作
         action_row = QHBoxLayout()
-        self.refresh_button = PushButton('刷新列表', self)
+        self.refresh_button = PushButton('刷新', self)
         self.refresh_button.clicked.connect(self.refresh_list)
         action_row.addWidget(self.refresh_button)
 
-        self.create_button = PrimaryPushButton('创建音色', self)
+        self.create_button = PrimaryPushButton('创建', self)
         self.create_button.clicked.connect(self.create_voice)
         action_row.addWidget(self.create_button)
 
-        self.delete_button = PushButton('删除选中音色', self)
+        self.delete_button = PushButton('删除', self)
         self.delete_button.clicked.connect(self.delete_selected_voice)
         action_row.addWidget(self.delete_button)
 
         action_row.addStretch(1)
 
-        self.use_button = PrimaryPushButton('设为当前音色', self)
+        self.use_button = PrimaryPushButton('设为当前', self)
         self.use_button.clicked.connect(self.use_selected_voice)
         action_row.addWidget(self.use_button)
 
@@ -159,9 +160,9 @@ class QwenCloneVoiceDialog(QDialog):
             idx = self.mime_combo.findText(inferred)
             if idx >= 0:
                 self.mime_combo.setCurrentIndex(idx)
-            self._info_success('已识别音频格式', f'MIME 已自动设置为 {inferred}')
+            self._info_success('已识别音频格式', f'已识别为 {inferred}')
         else:
-            self._info_warning('无法自动识别', '请手动确认 MIME 类型')
+            self._info_warning('无法自动识别', '请手动选择音频类型')
 
     def _current_row_voice(self) -> str:
         """返回音色列表当前行的服务端音色 ID。"""
@@ -220,11 +221,11 @@ class QwenCloneVoiceDialog(QDialog):
         mime = self.mime_combo.currentText().strip() or 'audio/mpeg'
 
         if not reference_path:
-            self._info_warning('缺少参考音频', '请先选择参考音频文件')
+            self._info_warning('缺少参考音频', '未选择参考音频文件')
             return
 
         if not Path(reference_path).exists():
-            self._info_warning('文件不存在', '请选择有效的参考音频文件')
+            self._info_warning('文件不存在', '参考音频文件不存在')
             return
 
         # 先同步表单，确保设置页随后保存的是实际用于创建的参数。
@@ -247,7 +248,7 @@ class QwenCloneVoiceDialog(QDialog):
         """确认后删除当前云端音色，并刷新列表。"""
         voice = self._current_row_voice()
         if not voice:
-            self._info_warning('未选择音色', '请先在列表中选中一个音色')
+            self._info_warning('未选择音色', '在列表中选中一个音色')
             return
 
         try:
@@ -270,7 +271,7 @@ class QwenCloneVoiceDialog(QDialog):
                 break
 
         if still_exists:
-            self._info_warning('删除已提交', '音色仍在列表中，可能是云端同步延迟，稍后再刷新')
+            self._info_warning('删除已提交', '音色仍在列表中，稍后刷新')
         else:
             self._info_success('删除成功', f'已删除音色：{voice}')
 
@@ -278,7 +279,7 @@ class QwenCloneVoiceDialog(QDialog):
         """将列表当前音色写入引擎设置，但保持弹窗打开。"""
         voice = self._current_row_voice()
         if not voice:
-            self._info_warning('未选择音色', '请先在列表中选中一个音色')
+            self._info_warning('未选择音色', '在列表中选中一个音色')
             return
 
         self.selected_voice = voice
