@@ -8,11 +8,13 @@
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -69,19 +71,46 @@ def check_runtime_dirs():
 
 def pack(version: str, notes: Path = None):
     """用 Velopack 打包当前产物。"""
-    command = [
-        find_vpk(), 'pack',
-        '--packId', PACK_ID,
-        '--packVersion', version,
-        '--packTitle', PACK_ID,
-        '--packDir', str(DIST_DIR),
-        '--mainExe', MAIN_EXE,
-        '--icon', str(ROOT / 'image' / 'ppt_ico.ico'),
-        '--outputDir', str(RELEASES_DIR),
-    ]
-    if notes:
-        command += ['--releaseNotes', str(Path(notes).resolve())]
-    subprocess.run(command, cwd=ROOT, check=True, env=dotnet_env())
+    # Velopack 拒绝重复版本；临时目录仅带入其它版本，成功后再替换本地产物。
+    build_dir = ROOT / 'build'
+    build_dir.mkdir(parents=True, exist_ok=True)
+    RELEASES_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='release-', dir=build_dir) as folder:
+        output_dir = Path(folder)
+        current_packages = {f'{PACK_ID}-{version}-{kind}.nupkg' for kind in ('full', 'delta')}
+        previous_packages = set()
+        for path in RELEASES_DIR.glob('*.nupkg'):
+            if path.name not in current_packages:
+                shutil.copy2(path, output_dir / path.name)
+                previous_packages.add(path.name)
+        feed_path = RELEASES_DIR / FEED_NAME
+        if feed_path.is_file():
+            feed = json.loads(feed_path.read_text(encoding='utf-8-sig'))
+            feed['Assets'] = [item for item in feed['Assets'] if item['Version'] != version]
+            (output_dir / FEED_NAME).write_text(json.dumps(feed), encoding='utf-8')
+
+        command = [
+            find_vpk(), 'pack',
+            '--packId', PACK_ID,
+            '--packVersion', version,
+            '--packTitle', PACK_ID,
+            '--packDir', str(DIST_DIR),
+            '--mainExe', MAIN_EXE,
+            '--icon', str(ROOT / 'image' / 'ppt_ico.ico'),
+            '--outputDir', str(output_dir),
+        ]
+        if notes:
+            command += ['--releaseNotes', str(Path(notes).resolve())]
+        subprocess.run(command, cwd=ROOT, check=True, env=dotnet_env())
+        generated = [path for path in output_dir.iterdir()
+                     if path.is_file() and path.name not in previous_packages]
+        generated_names = {path.name for path in generated}
+        for path in generated:
+            path.replace(RELEASES_DIR / path.name)
+        # 若本次未生成增量包，移除同版本旧构建的增量附件。
+        delta = RELEASES_DIR / f'{PACK_ID}-{version}-delta.nupkg'
+        if delta.is_file() and delta.name not in generated_names:
+            delta.unlink()
 
 
 def build(version: str, notes: Path = None):

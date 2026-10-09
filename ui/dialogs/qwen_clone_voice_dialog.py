@@ -24,6 +24,7 @@ from qfluentwidgets import (
 )
 
 from ui.dialogs.base import ThemedDialog
+from engines.qwen_clone import is_audio_tts
 
 
 class QwenCloneVoiceDialog(ThemedDialog):
@@ -41,7 +42,11 @@ class QwenCloneVoiceDialog(ThemedDialog):
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(12)
 
-        self.tip_label = BodyLabel('音色创建后保存在云端，可直接复用', self)
+        settings = self.tts_engine.get_current_option_values()
+        audio_tts = is_audio_tts(settings.get('model', ''))
+        self.tip_label = BodyLabel(
+            f"当前模型：{settings.get('model', '')}。音色与模型绑定，切换模型后需重新复刻或选择对应音色。", self)
+        self.tip_label.setWordWrap(True)
         main_layout.addWidget(self.tip_label)
 
         # 参考音频
@@ -59,7 +64,8 @@ class QwenCloneVoiceDialog(ThemedDialog):
         param_row = QHBoxLayout()
         param_row.addWidget(QLabel('音色名称', self))
         self.preferred_name_edit = LineEdit(self)
-        self.preferred_name_edit.setPlaceholderText('字母、数字、下划线，最多 16 位')
+        self.preferred_name_edit.setPlaceholderText(
+            '小写字母、数字，最多 9 位' if audio_tts else '字母、数字、下划线，最多 16 位')
         param_row.addWidget(self.preferred_name_edit)
 
         param_row.addWidget(QLabel('参考音频类型', self))

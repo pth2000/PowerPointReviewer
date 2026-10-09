@@ -64,6 +64,9 @@ class Window(FluentWindow):
 
     def closeEvent(self, event):
         """处理未保存设置，并在退出前清空延迟写入队列。"""
+        if not self.setting_interface.finish_service_check_before_close():
+            event.ignore()
+            return
         # 窗口即将关闭，此时重新生成音频没有可见收益。
         self.setting_interface.prompt_unsaved_changes(allow_regenerate=False)
         self.context.hotkeys.clear()

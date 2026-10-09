@@ -4,13 +4,17 @@ import time
 import traceback
 import hashlib
 import json
+from pathlib import Path
+import tempfile
 from typing import Optional
 
+from app import audio_processing
 from engines import defs
 from engines import pyttsx3 as pyttsx3_engine
 from engines import edge_tts as edge_tts_engine
 from engines import bailian
 from engines import qwen_clone as qwen_clone_engine
+from engines import qwentts as qwentts_engine
 
 
 class TTSEngine:
@@ -32,6 +36,7 @@ class TTSEngine:
         # 音色列表会随地区或模型整体变化。名称按作用域保存，避免裸索引指向另一种音色，
         # 也避免同一引擎下不同地区的选择互相覆盖。
         self._voice_name_map: dict[str, str] = {}
+        self._qwentts_service_info = None
         for engine_def in self._engine_defs:
             eid = engine_def['id']
             self._engine_settings[eid] = {
@@ -109,6 +114,11 @@ class TTSEngine:
             except Exception as e:
                 print(f'[TTS] 动态选项 {provider} 获取失败，使用静态列表：{e}')
 
+        if provider == 'qwen_languages':
+            model = self._engine_settings.get('qwen_clone', {}).get('model', '')
+            return list(qwen_clone_engine.AUDIO_LANGUAGE_TYPES if qwen_clone_engine.is_audio_tts(model)
+                        else qwen_clone_engine.VC_LANGUAGE_TYPES)
+
         return [str(item) for item in option_schema.get('choices', [])]
 
     def option_default(self, engine_id: str, key: str, fallback=''):
@@ -135,6 +145,21 @@ class TTSEngine:
         mode = self.get_mode()
         if mode not in self._engine_settings:
             return
+        settings = self._engine_settings[mode]
+        if mode == 'qwentts' and key == 'base_url' and settings.get(key) != value:
+            self._voice_name_map[self.get_voice_scope()] = str(settings.get('voice', '')).strip()
+            settings[key] = value
+            settings['model'] = ''
+            settings['voice'] = ''
+            self._qwentts_service_info = None
+            return
+        if mode == 'qwen_clone' and key in ('model', 'region', 'workspace_id') and settings.get(key) != value:
+            # 更换模型或账户作用域前保存选择，新作用域没有选择时清空旧音色。
+            old_scope = self.get_voice_scope()
+            self._voice_name_map[old_scope] = str(settings.get('voice', '')).strip()
+            settings[key] = value
+            settings['voice'] = self._voice_name_map.get(self.get_voice_scope(), '')
+            return
         self._engine_settings[mode][key] = value
 
     def apply_current_options(self, option_values):
@@ -157,6 +182,8 @@ class TTSEngine:
         """按注册表白名单恢复引擎状态，并忽略未知或损坏字段。"""
         if not isinstance(state, dict):
             return False
+
+        self._qwentts_service_info = None
 
         engine_settings = state.get('engine_settings', {})
         if isinstance(engine_settings, dict):
@@ -204,6 +231,9 @@ class TTSEngine:
     def get_voices_list(self):
         """返回当前引擎和作用域下的可用音色名称。"""
         mode = self.get_mode()
+        if mode == 'qwentts':
+            info = self.get_qwentts_service_info()
+            return list(info['voices']) if info else []
         if mode == 'local':
             return self._ensure_local_voices()[1]
         if mode == 'edge':
@@ -222,6 +252,7 @@ class TTSEngine:
                     page_size=100,
                     page_index=0,
                     target_model=settings.get('model', ''),
+                    workspace_id=settings.get('workspace_id', ''),
                 )
                 voices = [item.get('voice', '') for item in voice_items if item.get('voice', '')]
                 if voices:
@@ -232,6 +263,37 @@ class TTSEngine:
             fallback_voice = str(settings.get('voice', '')).strip()
             return [fallback_voice] if fallback_voice else []
         return []
+
+    def get_qwentts_service_info(self):
+        """设置页只读取已查询的目录，不在 GUI 线程访问服务。"""
+        return self._qwentts_service_info
+
+    def apply_qwentts_service_info(self, info: dict) -> bool:
+        """应用连接结果并恢复该服务、模型下的音色；忽略地址已变的旧结果。"""
+        settings = self._engine_settings['qwentts']
+        if qwentts_engine.normalize_base_url(settings['base_url']) != info['base_url']:
+            return False
+        old_scope = self._qwentts_voice_scope(settings)
+        self._voice_name_map[old_scope] = str(settings.get('voice', '')).strip()
+        settings['model'] = info['model']
+        scope = self._qwentts_voice_scope(settings)
+        voice = self._voice_name_map.get(scope, '')
+        if voice not in info['voices']:
+            voice = info['voices'][0] if info['voices'] else ''
+        settings['voice'] = voice
+        self._voice_name_map[scope] = voice
+        self._voice_index_map['qwentts'] = info['voices'].index(voice) if voice else 0
+        self._qwentts_service_info = dict(info, voices=list(info['voices']))
+        return True
+
+    @staticmethod
+    def _qwentts_voice_scope(settings):
+        address = str(settings.get('base_url', '')).strip().rstrip('/')
+        try:
+            address = qwentts_engine.normalize_base_url(address)
+        except (RuntimeError, ValueError):
+            pass  # 用户输入中的不完整地址不应打断界面编辑。
+        return f"qwentts:{address}:{settings.get('model', '')}"
 
     def get_voice_scope(self) -> str:
         """返回当前音色选择的持久化作用域。
@@ -244,9 +306,12 @@ class TTSEngine:
             return f"edge:{settings.get('locale', edge_tts_engine.DEFAULT_LOCALE)}"
         if mode == 'bailian':
             return f"bailian:{settings.get('model', '')}"
+        if mode == 'qwentts':
+            return self._qwentts_voice_scope(settings)
         if mode == 'qwen_clone':
-            # 复刻音色与 target_model 绑定，换模型后原音色不可用，需分开记录
-            return f"qwen_clone:{settings.get('model', '')}"
+            # 复刻音色按地域、工作空间与模型分开记录。
+            return (f"qwen_clone:{settings.get('region', 'cn-beijing')}:"
+                    f"{settings.get('workspace_id', '')}:{settings.get('model', '')}")
         return mode
 
     def set_voice(self, index, name: Optional[str] = None):
@@ -255,6 +320,8 @@ class TTSEngine:
         self._voice_index_map[mode] = int(index)
         if name is not None:
             self._voice_name_map[self.get_voice_scope()] = str(name).strip()
+            if mode == 'qwentts':
+                self._engine_settings[mode]['voice'] = str(name).strip()
 
     def get_selected_voice_index(self):
         """返回当前引擎保存的音色索引。"""
@@ -279,7 +346,7 @@ class TTSEngine:
         settings = self._engine_settings.get(mode, {})
 
         # 千问音色列表需要联网，而该方法会在 GUI 线程保存会话时调用；直接读取配置可避免卡顿。
-        if mode == 'qwen_clone':
+        if mode in ('qwen_clone', 'qwentts'):
             return str(settings.get('voice', '')).strip()
 
         voices = self.get_voices_list()
@@ -288,24 +355,41 @@ class TTSEngine:
 
         return str(voices[self.resolve_voice_index(voices)])
 
+    def validate_generation_settings(self):
+        """后台生成前核验服务模型，避免换模型后复用旧缓存。"""
+        mode = self.get_mode()
+        if mode == 'qwentts':
+            settings = self._engine_settings[mode]
+            qwentts_engine.check_model(settings.get('base_url', ''), settings.get('model', ''))
+
     def get_generation_profile(self):
         """返回参与缓存键计算的完整生成配置快照。
 
         同一索引会因地区、模型或系统音色变化而指向不同对象，因此快照必须包含音色名称。
         """
         mode = self.get_mode()
-        return {
+        profile = {
             'mode': mode,
             'options': self._engine_settings.get(mode, {}).copy(),
             'voice_index': int(self._voice_index_map.get(mode, 0)),
             'voice_name': self._voice_name_map.get(self.get_voice_scope(), ''),
         }
+        if mode == 'qwentts':
+            profile['audio_processing'] = audio_processing.PROCESSING_VERSION
+        elif any(profile['options'].get(key, 0) for key in ('leading_silence_ms', 'trailing_silence_ms')):
+            profile['audio_processing'] = 'minimum-silence-v1'
+        else:
+            # 默认关闭时沿用其他模式原来的缓存身份。
+            profile['options'].pop('leading_silence_ms', None)
+            profile['options'].pop('trailing_silence_ms', None)
+        return profile
 
     def get_output_extension(self, mode: Optional[str] = None) -> str:
         """返回指定或当前引擎的默认输出扩展名，不含点号。"""
         target_mode = mode or self.get_mode()
         if target_mode == 'edge':
-            return 'mp3'
+            settings = self._engine_settings.get(target_mode, {})
+            return 'wav' if any(settings.get(key, 0) for key in ('leading_silence_ms', 'trailing_silence_ms')) else 'mp3'
         return 'wav'
 
     def create_qwen_clone_voice(self, reference_audio_path: str, *, preferred_name: Optional[str] = None) -> str:
@@ -324,7 +408,7 @@ class TTSEngine:
             audio_mime_type=audio_mime_type,
             api_key=api_key,
             region=region,
-            language=str(settings.get('language_type', '')),
+            workspace_id=str(settings.get('workspace_id', '')),
         )
         self._engine_settings['qwen_clone']['voice'] = voice
         return voice
@@ -337,6 +421,7 @@ class TTSEngine:
             api_key=str(settings.get('api_key', '')),
             region=str(settings.get('region', 'cn-beijing')),
             target_model=str(settings.get('model', '')),
+            workspace_id=str(settings.get('workspace_id', '')),
         )
 
     def list_qwen_clone_voice_items(self) -> list[dict]:
@@ -348,6 +433,7 @@ class TTSEngine:
             page_size=100,
             page_index=0,
             target_model=str(settings.get('model', '')),
+            workspace_id=str(settings.get('workspace_id', '')),
         )
 
     @staticmethod
@@ -370,11 +456,38 @@ class TTSEngine:
 
     def save_file_by_mode(self, mode: str, text: str, path: str,
                           rate=None, volume=None, voice_index=None, **kwargs) -> None:
+        """按模式合成，再统一补足可选的最低头尾留白。"""
+        settings = self._engine_settings.get(mode, {})
+        leading = kwargs.get('leading_silence_ms', settings.get('leading_silence_ms', 0))
+        trailing = kwargs.get('trailing_silence_ms', settings.get('trailing_silence_ms', 0))
+        audio_processing.validate_options(1.0, leading, trailing)
+        if not leading and not trailing:
+            self._synthesize_file_by_mode(mode, text, path, rate, volume, voice_index, **kwargs)
+            return
+
+        target = Path(path)
+        if mode == 'edge':
+            from app.audio_decode import decode_edge_wav
+            if target.suffix.lower() != '.wav':
+                raise RuntimeError('Edge 启用留白后需要 WAV 输出，请使用 .wav 文件路径。')
+            with tempfile.TemporaryDirectory(prefix='ppt-edge-audio-') as folder:
+                source = Path(folder) / 'source.mp3'
+                self._synthesize_file_by_mode(mode, text, str(source), rate, volume, voice_index, **kwargs)
+                content = decode_edge_wav(source)
+        else:
+            self._synthesize_file_by_mode(mode, text, path, rate, volume, voice_index, **kwargs)
+            content = target.read_bytes()
+        content = audio_processing.process_wav(content, leading_silence_ms=leading, trailing_silence_ms=trailing)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+
+    def _synthesize_file_by_mode(self, mode: str, text: str, path: str,
+                                 rate=None, volume=None, voice_index=None, **kwargs) -> None:
         """按指定引擎合成音频，并执行该引擎注册的重试策略。
 
         显式参数优先于已保存设置；值为 ``None`` 时回退到对应引擎的当前设置。
         """
-        if mode not in ('local', 'edge', 'bailian', 'qwen_clone'):
+        if mode not in ('local', 'edge', 'bailian', 'qwen_clone', 'qwentts'):
             raise RuntimeError(f'不支持的引擎模式：{mode}')
 
         # 调用方可以临时覆盖注册表中的重试策略，用于特定批处理任务。
@@ -420,6 +533,21 @@ class TTSEngine:
                         ws_url=kwargs.get('ws_url', settings.get(
                             'ws_url', 'wss://dashscope.aliyuncs.com/api-ws/v1/inference')),
                     )
+                elif mode == 'qwentts':
+                    qwentts_engine.save(
+                        text, path,
+                        base_url=str(kwargs.get('base_url', settings.get('base_url', qwentts_engine.DEFAULT_BASE_URL))),
+                        model=str(kwargs.get('model', settings.get('model', ''))),
+                        voice=str(kwargs.get('voice', settings.get('voice', ''))),
+                        instructions=str(kwargs.get('instructions', settings.get('instructions', ''))),
+                        request_timeout=int(kwargs.get('request_timeout', settings.get('request_timeout', 300))),
+                        seed=int(kwargs.get('seed', settings.get('seed', qwentts_engine.DEFAULT_SEED))),
+                        temperature=float(kwargs.get('temperature', settings.get(
+                            'temperature', qwentts_engine.DEFAULT_TEMPERATURE))),
+                        speed=float(kwargs.get('speed', settings.get('speed', 1.0))),
+                        leading_silence_ms=0,
+                        trailing_silence_ms=0,
+                    )
                 elif mode == 'qwen_clone':
                     selected_voice = str(settings.get('voice', '')).strip()
                     if not selected_voice:
@@ -441,6 +569,9 @@ class TTSEngine:
                         api_key=str(kwargs.get('api_key', settings.get('api_key', ''))),
                         region=str(kwargs.get('region', settings.get('region', 'cn-beijing'))),
                         workspace_id=str(kwargs.get('workspace_id', settings.get('workspace_id', ''))),
+                        rate=kwargs.get('rate', r_rate if r_rate is not None else 1.0),
+                        volume=kwargs.get('volume', r_volume if r_volume is not None else 50),
+                        pitch=kwargs.get('pitch', settings.get('pitch', 1.0)),
                         request_timeout=int(kwargs.get('request_timeout', settings.get('request_timeout', 60))),
                     )
                 return
@@ -464,7 +595,8 @@ class TTSEngine:
     def save_file_for_stable_local(self, text: str, path: str,
                                    rate=None, volume=None, voice_index=None) -> None:
         """强制使用本地引擎，供倒计时等不应依赖网络的短音频使用。"""
-        self.save_file_by_mode('local', text, path, rate=rate, volume=volume, voice_index=voice_index)
+        self.save_file_by_mode('local', text, path, rate=rate, volume=volume, voice_index=voice_index,
+                               leading_silence_ms=0, trailing_silence_ms=0)
 
 
 if __name__ == '__main__':

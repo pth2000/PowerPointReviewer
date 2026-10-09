@@ -13,7 +13,7 @@ from mutagen.mp3 import MP3
 
 from PySide6.QtCore import QThread, Signal
 
-from app import paths
+from app import audio_processing, paths
 from tts_engine import TTSEngine
 
 # 空白讲稿仍需占据一个播放槽位，才能维持“讲稿段—音频—翻页动作”的一一对应；
@@ -107,7 +107,17 @@ class AudioGenerationTask(QThread):
             if text.strip():
                 self.tts_engine.save_file(text, str(temp_path))
             else:
-                self._write_silence(temp_path, output_ext)
+                # Edge 启用留白后为 24 kHz WAV，空讲稿占位也必须匹配。
+                framerate = 24000 if self.tts_engine.get_mode() == 'edge' and output_ext == 'wav' else SILENCE_FRAMERATE
+                self._write_silence(temp_path, output_ext, framerate=framerate)
+                options = self.tts_engine.get_current_option_values()
+                leading = options.get('leading_silence_ms', 0)
+                trailing = options.get('trailing_silence_ms', 0)
+                if leading or trailing:
+                    content = audio_processing.process_wav(temp_path.read_bytes(),
+                                                           leading_silence_ms=leading,
+                                                           trailing_silence_ms=trailing)
+                    temp_path.write_bytes(content)
 
             if not temp_path.exists() or temp_path.stat().st_size == 0:
                 raise RuntimeError('语音引擎返回了空音频文件')
@@ -169,6 +179,7 @@ class AudioGenerationTask(QThread):
             cache_keys=[''] * total,
             cache_exts=[''] * total,
         )
+        self.tts_engine.validate_generation_settings()
         generation_profile = self.tts_engine.get_generation_profile()
 
         def collect(item):

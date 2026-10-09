@@ -4,16 +4,19 @@
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=[('third_party\\signalsmith\\SignalsmithStretch_x64.dll', 'third_party/signalsmith')],
     datas=[('.venv\\\\Lib\\\\site-packages\\\\pptx\\\\templates\\\\*', '.\\\\pptx\\\\templates'),
-           ('engines\\edge_voices.json', 'engines')],
+           ('engines\\edge_voices.json', 'engines'),
+           ('third_party\\signalsmith\\LICENSE-stretch.txt', 'third_party/signalsmith'),
+           ('third_party\\signalsmith\\LICENSE-linear.txt', 'third_party/signalsmith')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     # 这些包不再被引用，排除后可缩减产物体积与首次启动的磁盘读取量。
     excludes=['tkinter', 'pyautogui', 'pyscreeze', 'pygetwindow',
-              'pymsgbox', 'mouseinfo', 'pytweening'],
+              'pymsgbox', 'mouseinfo', 'pytweening', 'imageio_ffmpeg',
+              'numpy', 'python_stretch'],
     noarchive=False,
     optimize=0,
 )

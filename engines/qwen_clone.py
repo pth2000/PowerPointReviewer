@@ -1,4 +1,4 @@
-"""千问声音复刻引擎：customization 接口管理音色，MultiModalConversation 接口合成语音"""
+"""千问声音复刻：按模型系列选择音色管理与非实时合成接口。"""
 
 import base64
 import os
@@ -18,24 +18,57 @@ _REGION_HTTP_BASE = {
 
 # 千问复刻分为两个模型系列，注册与合成接口互不通用：
 # - Qwen3-TTS-VC：qwen-voice-enrollment 注册（参考音频内联为 base64），
-#   MultiModalConversation 合成，走 dashscope 公共端点，支持北京与新加坡。
+#   MultiModalConversation 合成，支持工作空间端点与旧公共端点、北京与新加坡。
 # - Qwen-Audio-TTS：voice-enrollment 注册（参考音频只收 URL，本地文件先传 OSS），
-#   SpeechSynthesizer 合成，走工作空间专属的 MaaS 端点，仅北京地域。
-AUDIO_TTS_MODELS = ('qwen-audio-3.0-tts-plus', 'qwen-audio-3.0-tts-flash')
+#   SpeechSynthesizer 合成，走工作空间专属的 MaaS 端点，非实时合成仅北京地域。
+AUDIO_TTS_MODELS = ('qwen-audio-3.1-tts-flash', 'qwen-audio-3.0-tts-plus',
+                    'qwen-audio-3.0-tts-flash')
 
 VC_MODELS = ('qwen3-tts-vc-2026-01-22',)
+
+VC_LANGUAGE_TYPES = ('Auto', 'Chinese', 'English', 'German', 'Italian', 'Portuguese',
+                     'Spanish', 'Japanese', 'Korean', 'French', 'Russian')
+LANGUAGE_CODES = dict(zip(VC_LANGUAGE_TYPES[1:],
+                          ('zh', 'en', 'de', 'it', 'pt', 'es', 'ja', 'ko', 'fr', 'ru')))
+LANGUAGE_CODES.update({'Thai': 'th', 'Indonesian': 'id', 'Vietnamese': 'vi',
+                       'Malay': 'ms', 'Filipino': 'fil', 'Arabic': 'ar'})
+AUDIO_LANGUAGE_TYPES = ('Auto', *LANGUAGE_CODES)
+
+
+def _language_code(language: str) -> str:
+    value = str(language or '').strip()
+    if not value or value.lower() == 'auto':
+        return ''
+    if value in LANGUAGE_CODES.values():
+        return value
+    if value not in LANGUAGE_CODES:
+        raise RuntimeError(f'不支持的语言：{value}')
+    return LANGUAGE_CODES[value]
+
 
 def is_audio_tts(model: str) -> bool:
     """判断模型是否属于 Qwen-Audio-TTS 系列"""
     return str(model or '').strip() in AUDIO_TTS_MODELS
 
 
-def _maas_base(workspace_id: str) -> str:
-    """Qwen-Audio-TTS 的合成端点按工作空间划分，且仅在北京地域提供"""
+def _maas_base(workspace_id: str, region: str = 'cn-beijing') -> str:
+    """返回地域与工作空间对应的专属端点。"""
     workspace = str(workspace_id or '').strip()
     if not workspace:
         raise RuntimeError('使用 Qwen-Audio-TTS 需要填写工作空间 ID，请在设置页填写后重试。')
-    return f'https://{workspace}.cn-beijing.maas.aliyuncs.com/api/v1'
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*', workspace):
+        raise RuntimeError('工作空间 ID 格式不正确，请填写 ID，而非完整服务地址。')
+    regions = {'cn-beijing': 'cn-beijing', 'intl-singapore': 'ap-southeast-1'}
+    if region not in regions:
+        raise RuntimeError(f'不支持的千问服务地域：{region}')
+    return f'https://{workspace}.{regions[region]}.maas.aliyuncs.com/api/v1'
+
+
+def _service_base(model: str, region: str, workspace_id: str) -> str:
+    # 新系列必须使用工作空间地址；旧 VC 配置没有工作空间时继续使用公共端点。
+    if is_audio_tts(model) or str(workspace_id or '').strip():
+        return _maas_base(workspace_id, region)
+    return _http_base(region)
 
 
 def _http_base(region: str) -> str:
@@ -159,7 +192,9 @@ def _parse_voice_list(payload: Any) -> list[dict[str, str]]:
             continue
         result.append({
             'voice': voice,
-            'target_model': str(item.get('target_model', '')).strip(),
+            # voice-enrollment 的列表不带 target_model，但音色 ID 以模型名开头。
+            'target_model': str(item.get('target_model') or next(
+                (model for model in AUDIO_TTS_MODELS if voice.startswith(model + '-')), '')).strip(),
             'gmt_create': str(item.get('gmt_create', '')).strip(),
             'status': str(item.get('status', '')).strip(),
         })
@@ -167,17 +202,18 @@ def _parse_voice_list(payload: Any) -> list[dict[str, str]]:
 
 
 def list_voices(*, api_key: str = '', region: str = 'cn-beijing', page_size: int = 100,
-                page_index: int = 0, target_model: str = '') -> list[dict[str, str]]:
+                page_index: int = 0, target_model: str = '',
+                workspace_id: str = '') -> list[dict[str, str]]:
     """分页查询指定地域下当前账户创建的复刻音色。
 
     两个系列的音色分别登记在各自的注册服务中，因此按 target_model 决定查询哪一边。
-    voice-enrollment 的返回项未必带 target_model，缺少该字段时不做过滤。
+    voice-enrollment 的模型绑定从音色 ID 恢复，避免跨模型选择旧音色。
     """
     import requests
 
 
     key = _get_api_key(api_key)
-    url = f"{_http_base(region)}/services/audio/tts/customization"
+    url = f"{_service_base(target_model, region, workspace_id)}/services/audio/tts/customization"
 
     if is_audio_tts(target_model):
         payload = {
@@ -215,13 +251,16 @@ def list_voices(*, api_key: str = '', region: str = 'cn-beijing', page_size: int
     items = _parse_voice_list(data)
     wanted = str(target_model or '').strip()
     if wanted:
+        if is_audio_tts(wanted):
+            return [item for item in items if item['target_model'] == wanted]
         tagged = [item for item in items if item['target_model']]
         if tagged:
             return [item for item in tagged if item['target_model'] == wanted]
     return items
 
 
-def _upload_reference_audio(file_path: str, *, model: str, api_key: str) -> str:
+def _upload_reference_audio(file_path: str, *, model: str, api_key: str,
+                            base_url: str) -> str:
     """把本地参考音频上传到百炼的临时 OSS，返回 oss:// 形式的地址。
 
     voice-enrollment 只接受 URL 形式的参考音频，而桌面端选中的是本地文件，
@@ -234,7 +273,8 @@ def _upload_reference_audio(file_path: str, *, model: str, api_key: str) -> str:
     from dashscope.utils.oss_utils import OssUtils
 
     try:
-        url, _certificate = OssUtils.upload(model=model, file_path=str(path), api_key=api_key)
+        url, _certificate = OssUtils.upload(
+            model=model, file_path=str(path), api_key=api_key, base_address=base_url)
     except Exception as e:
         raise RuntimeError(f'参考音频上传失败：{e}') from e
 
@@ -244,13 +284,15 @@ def _upload_reference_audio(file_path: str, *, model: str, api_key: str) -> str:
 
 
 def _create_voice_audio_tts(*, reference_audio_path, target_model, preferred_name,
-
-                            api_key, region, language) -> str:
+                            api_key, region, workspace_id, language) -> str:
     """Qwen-Audio-TTS 系列的音色注册"""
     import requests
 
     key = _get_api_key(api_key)
-    audio_url = _upload_reference_audio(reference_audio_path, model='voice-enrollment', api_key=key)
+    base_url = _maas_base(workspace_id, region)
+    language_code = _language_code(language)
+    audio_url = _upload_reference_audio(
+        reference_audio_path, model='voice-enrollment', api_key=key, base_url=base_url)
 
     body_input: dict[str, Any] = {
         'action': 'create_voice',
@@ -258,11 +300,11 @@ def _create_voice_audio_tts(*, reference_audio_path, target_model, preferred_nam
         'prefix': _sanitize_prefix(preferred_name),
         'url': audio_url,
     }
-    if language.strip() and language.strip() != 'Auto':
-        body_input['language_hints'] = [language.strip()]
+    if language_code:
+        body_input['language_hints'] = [language_code]
 
     resp = requests.post(
-        f"{_http_base(region)}/services/audio/tts/customization",
+        f"{base_url}/services/audio/tts/customization",
         json={'model': 'voice-enrollment', 'input': body_input},
         headers={
             'Authorization': f'Bearer {key}',
@@ -293,6 +335,7 @@ def create_voice(*,
                  audio_mime_type: str,
                  api_key: str = '',
                  region: str = 'cn-beijing',
+                 workspace_id: str = '',
                  text: str = '',
                  language: str = '') -> str:
     """上传参考音频创建复刻音色，并返回服务端分配的音色 ID。
@@ -309,11 +352,12 @@ def create_voice(*,
             preferred_name=preferred_name,
             api_key=api_key,
             region=region,
+            workspace_id=workspace_id,
             language=language,
         )
 
     key = _get_api_key(api_key)
-    url = f"{_http_base(region)}/services/audio/tts/customization"
+    url = f"{_service_base(target_model, region, workspace_id)}/services/audio/tts/customization"
 
     data_uri = _read_audio_data_uri(reference_audio_path, audio_mime_type)
     body_input: dict[str, Any] = {
@@ -324,8 +368,9 @@ def create_voice(*,
     }
     if text.strip():
         body_input['text'] = text.strip()
-    if language.strip():
-        body_input['language'] = language.strip()
+    language_code = _language_code(language)
+    if language_code:
+        body_input['language'] = language_code
 
     payload = {
         'model': 'qwen-voice-enrollment',
@@ -353,8 +398,7 @@ def create_voice(*,
 
 
 def delete_voice(*, voice: str, api_key: str = '', region: str = 'cn-beijing',
-
-                 target_model: str = '') -> None:
+                 target_model: str = '', workspace_id: str = '') -> None:
     """删除指定地域下的复刻音色；空音色 ID 直接拒绝。"""
     import requests
 
@@ -363,7 +407,7 @@ def delete_voice(*, voice: str, api_key: str = '', region: str = 'cn-beijing',
     if not target_voice:
         raise RuntimeError('删除音色失败：voice 不能为空')
 
-    url = f"{_http_base(region)}/services/audio/tts/customization"
+    url = f"{_service_base(target_model, region, workspace_id)}/services/audio/tts/customization"
     if is_audio_tts(target_model):
         payload = {
             'model': 'voice-enrollment',
@@ -404,8 +448,8 @@ def _extract_audio_url(response: Any) -> str:
 
 
 def _save_audio_tts(text: str, path: str, *, model: str, voice: str, workspace_id: str,
-
-                    api_key: str, instructions: str, request_timeout: int) -> None:
+                    region: str, api_key: str, language_type: str, instructions: str,
+                    rate: float, volume: int, pitch: float, request_timeout: int) -> None:
     """Qwen-Audio-TTS 系列的非实时合成。
 
     该系列走工作空间专属的 MaaS 端点，与 Qwen3-TTS-VC 的公共端点不通用；
@@ -413,16 +457,24 @@ def _save_audio_tts(text: str, path: str, *, model: str, voice: str, workspace_i
     """
     import requests
 
-    url = f'{_maas_base(workspace_id)}/services/audio/tts/SpeechSynthesizer'
+    if region != 'cn-beijing':
+        raise RuntimeError('Qwen-Audio-TTS 非实时合成仅支持北京地域，请选择 cn-beijing 并使用对应的 API Key。')
+    url = f'{_maas_base(workspace_id, region)}/services/audio/tts/SpeechSynthesizer'
     body_input: dict[str, Any] = {
         'text': text,
         'voice': voice,
         # 应用侧统一按 wav 落盘，这里直接指定，避免拿到与扩展名不符的音频
         'format': 'wav',
         'sample_rate': 24000,
+        'rate': float(rate),
+        'volume': int(volume),
+        'pitch': float(pitch),
     }
+    language_code = _language_code(language_type)
+    if language_code:
+        body_input['language_hints'] = [language_code]
     if instructions.strip():
-        body_input['instructions'] = instructions.strip()
+        body_input['instruction'] = instructions.strip()
 
     resp = requests.post(
         url,
@@ -459,7 +511,7 @@ def _download_audio(audio_url: str, path: str, *, request_timeout: int) -> None:
 def save(text: str,
          path: str,
          *,
-         model: str = 'qwen3-tts-vc-2026-01-22',
+         model: str = AUDIO_TTS_MODELS[0],
          voice: str = '',
          language_type: str = 'Chinese',
          instructions: str = '',
@@ -467,6 +519,9 @@ def save(text: str,
          api_key: str = '',
          region: str = 'cn-beijing',
          workspace_id: str = '',
+         rate: float = 1.0,
+         volume: int = 50,
+         pitch: float = 1.0,
          request_timeout: int = 60) -> None:
     """使用已复刻音色合成语音，并将临时下载结果保存到本地。"""
     key = _get_api_key(api_key)
@@ -478,13 +533,13 @@ def save(text: str,
         _save_audio_tts(
             text, path,
             model=model, voice=target_voice, workspace_id=workspace_id,
-            api_key=key, instructions=instructions, request_timeout=request_timeout,
+            region=region, api_key=key, language_type=language_type,
+            instructions=instructions, rate=rate, volume=volume, pitch=pitch,
+            request_timeout=request_timeout,
         )
         return
 
     import dashscope
-
-    dashscope.base_http_api_url = _http_base(region)
 
     kwargs: dict[str, Any] = {
         'model': model,
@@ -492,13 +547,10 @@ def save(text: str,
         'text': text,
         'voice': target_voice,
         'stream': False,
+        'base_address': _service_base(model, region, workspace_id),
     }
     if language_type.strip() and language_type.strip() != 'Auto':
         kwargs['language_type'] = language_type.strip()
-
-    if instructions.strip():
-        kwargs['instructions'] = instructions.strip()
-        kwargs['optimize_instructions'] = bool(optimize_instructions)
 
     response = dashscope.MultiModalConversation.call(**kwargs)
     _download_audio(_extract_audio_url(response), path, request_timeout=request_timeout)

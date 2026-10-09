@@ -1,8 +1,9 @@
 """引擎注册表：包含所有引擎的 schema 定义和内置音色列表"""
 
-# 千问复刻支持的 language_type 取值，Auto 表示由模型自行判断。
-QWEN_LANGUAGE_TYPES = ('Auto', 'Chinese', 'English', 'German', 'Italian', 'Portuguese',
-                       'Spanish', 'Japanese', 'Korean', 'French', 'Russian')
+from engines.qwen_clone import AUDIO_LANGUAGE_TYPES, AUDIO_TTS_MODELS, VC_MODELS
+
+# Auto 表示由模型自行判断；旧 VC 模型在运行期使用较小的语言集合。
+QWEN_LANGUAGE_TYPES = AUDIO_LANGUAGE_TYPES
 
 # 注册表同时驱动 TTSEngine 的调度策略和设置页的动态表单。
 ENGINE_DEFS = [
@@ -133,27 +134,53 @@ ENGINE_DEFS = [
             {
                 'key': 'region', 'label': '地域', 'description': '选择百炼服务所在的地域',
                 'help': '需与 API Key 所属地域一致。',
-                'type': 'choice', 'choices': ['cn-beijing', 'intl-singapore'], 'default': 'cn-beijing'
+                'type': 'choice', 'choices': ['cn-beijing', 'intl-singapore'], 'default': 'cn-beijing',
+                'rebuild_voices': True
             },
             {
                 'key': 'model', 'label': '合成模型',
                 'description': '选择用于复刻与合成的千问模型',
-                'help': 'qwen-audio-3.0-tts 为推荐系列，需填写工作空间 ID，仅支持北京地域。音色与模型绑定，更换模型后需重新复刻。',
+                'help': '3.1 Flash 是新增版本，支持指令和情感标签。Qwen-Audio-TTS 非实时合成需填写工作空间 ID 并使用北京地域。音色与模型绑定，更换模型后需重新复刻或选择对应音色。',
                 'type': 'choice',
-                'choices': ['qwen-audio-3.0-tts-plus', 'qwen-audio-3.0-tts-flash', 'qwen3-tts-vc-2026-01-22'],
-                'default': 'qwen-audio-3.0-tts-plus'
+                'choices': list(AUDIO_TTS_MODELS + VC_MODELS),
+                'default': AUDIO_TTS_MODELS[0], 'rebuild_voices': True
             },
             {
                 'key': 'workspace_id', 'label': '工作空间 ID',
                 'description': '指定所使用的百炼业务空间',
-                'help': '仅 qwen-audio-3.0-tts 系列需要，可在百炼控制台的业务空间管理中查看。',
+                'help': 'Qwen-Audio-TTS 系列必填，可在百炼控制台的业务空间管理中查看。旧 Qwen3-TTS-VC 可留空。',
                 'type': 'text', 'default': ''
             },
             {
                 'key': 'language_type', 'label': '语言类型',
                 'description': '指定讲稿所使用的语言',
                 'help': '默认 Auto，由模型自动识别。指定与讲稿一致的语言可提高发音准确度。',
-                'type': 'choice', 'choices': list(QWEN_LANGUAGE_TYPES), 'default': 'Auto'
+                'type': 'choice', 'choices': list(QWEN_LANGUAGE_TYPES),
+                'choices_provider': 'qwen_languages', 'default': 'Auto'
+            },
+            {
+                'key': 'instructions', 'label': '语音风格指令',
+                'description': '用文字控制语气、情绪、方言和朗读风格',
+                'help': '例如「用自然、清晰的讲解语气，语速稍慢」。留空使用默认风格。也可在讲稿中使用 [excited]、[laughter] 等标签。',
+                'type': 'text', 'default': '', 'supported_models': AUDIO_TTS_MODELS
+            },
+            {
+                'key': 'rate', 'label': '语速倍率', 'description': '调整合成语音的快慢',
+                'help': '取值 0.5–2.0，默认 1.0。',
+                'type': 'float', 'min': 0.5, 'max': 2.0, 'step': 0.1, 'default': 1.0,
+                'supported_models': AUDIO_TTS_MODELS
+            },
+            {
+                'key': 'volume', 'label': '音量', 'description': '调整合成语音的音量',
+                'help': '取值 0–100，默认 50。',
+                'type': 'int', 'min': 0, 'max': 100, 'step': 1, 'default': 50,
+                'supported_models': AUDIO_TTS_MODELS
+            },
+            {
+                'key': 'pitch', 'label': '音调倍率', 'description': '调整合成语音的音调',
+                'help': '取值 0.5–2.0，默认 1.0。',
+                'type': 'float', 'min': 0.5, 'max': 2.0, 'step': 0.1, 'default': 1.0,
+                'supported_models': AUDIO_TTS_MODELS
             },
             {
                 'key': 'voice', 'label': '当前音色', 'description': '当前使用的复刻音色',
@@ -161,7 +188,7 @@ ENGINE_DEFS = [
             },
             {
                 'key': 'preferred_name', 'label': '默认音色名', 'description': '为新建的复刻音色命名',
-                'help': '仅限字母、数字和下划线，最多 16 个字符。',
+                'help': 'Qwen-Audio-TTS 使用小写字母和数字，最多 9 位；旧 Qwen3-TTS-VC 支持字母、数字和下划线，最多 16 位。',
                 'type': 'text', 'default': 'ppt_reviewer'
             },
             {
@@ -179,7 +206,76 @@ ENGINE_DEFS = [
                 'type': 'int', 'min': 10, 'max': 180, 'step': 5, 'default': 60
             }
         ]
+    },
+    {
+        'id': 'qwentts',
+        'name': '本地 · qwentts.cpp',
+        'description': '连接本机或局域网的 qwentts.cpp 服务，离线合成语音',
+        'help': '先在 qwentts.cpp 启动器中选择模型和语言并启动服务，再填写后端地址、测试连接和选择音色。兼容原始项目及 Panda-Panta Windows 便携版。复刻音色可在服务网页中创建，再刷新音色列表。',
+        'supports_voice': True,
+        'parallel_enabled': False,
+        'parallel_workers': 1,
+        'retry_times': 0,
+        'retry_delay': 0.0,
+        'options': [
+            {
+                'key': 'base_url', 'label': '服务地址',
+                'description': '填写本地 TTS 后端地址与端口',
+                'help': '默认 http://127.0.0.1:8080，也接受以 /v1 结尾的地址。填写后点击「测试连接」。',
+                'type': 'text', 'default': 'http://127.0.0.1:8080'
+            },
+            {
+                'key': 'model', 'label': '当前模型',
+                'type': 'text', 'default': ''
+            },
+            {
+                'key': 'voice', 'label': '当前音色',
+                'type': 'text', 'default': ''
+            },
+            {
+                'key': 'instructions', 'label': '语音风格指令',
+                'description': '为支持声音设计的模型提供朗读风格',
+                'help': '1.7B CustomVoice 可选填，0.6B CustomVoice 不支持指令控制。VoiceDesign 需要填写声音描述；Base 声音克隆模型请留空。语言在服务启动器中设置。风格指令不能保证不同讲稿段落的声音完全一致。',
+                'type': 'text', 'default': ''
+            },
+            {
+                'key': 'speed', 'label': '语速倍率',
+                'description': '调整生成音频的朗读速度，保持音高',
+                'help': '取值 0.5–2.0，默认 1.0。小于 1 放慢，大于 1 加快。试听、连播和导出使用相同语速。',
+                'type': 'float', 'min': 0.5, 'max': 2.0, 'step': 0.05, 'default': 1.0
+            },
+            {
+                'key': 'seed', 'label': '随机种子',
+                'description': '固定同一文本重复生成时的随机选择',
+                'help': '默认 42，相同文本、音色和参数重复生成可复现。-1 表示每次随机。固定种子不能保证不同文本的语调完全相同。',
+                'type': 'int', 'min': -1, 'max': 2147483647, 'step': 1, 'default': 42
+            },
+            {
+                'key': 'temperature', 'label': '采样随机性',
+                'description': '调整生成声音时的随机程度',
+                'help': '取值 0–2，默认 0.9。调低可减少采样随机性，但不一定改善音质；0 使用确定的最优候选。此项不是语速控制。',
+                'type': 'float', 'min': 0.0, 'max': 2.0, 'step': 0.1, 'default': 0.9
+            },
+            {
+                'key': 'request_timeout', 'label': '请求超时（秒）',
+                'description': '设置等待本地语音合成的最长时间',
+                'help': '默认 300 秒。CPU 或旧显卡生成较慢时可适当调大，最长 1800 秒。',
+                'type': 'int', 'min': 10, 'max': 1800, 'step': 10, 'default': 300
+            }
+        ]
     }
 ]
+
+# 所有模式共用留白定义，各模式分别保存参数；不覆盖已有配置。
+for engine in ENGINE_DEFS:
+    format_help = ' Edge 启用留白后输出 WAV，文件体积会增大。' if engine['id'] == 'edge' else ''
+    for key, label, position in (('leading_silence_ms', '开头留白（毫秒）', '开头'),
+                                 ('trailing_silence_ms', '结尾留白（毫秒）', '结尾')):
+        engine['options'].append({
+            'key': key, 'label': label,
+            'description': f'保证每段音频{position}至少保留这段停顿',
+            'help': '取值 0–3000，默认 0，不追加留白。已有足够停顿时不再追加；原有停顿会保留。' + format_help,
+            'type': 'int', 'min': 0, 'max': 3000, 'step': 50, 'default': 0,
+        })
 
 

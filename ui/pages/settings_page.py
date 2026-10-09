@@ -33,9 +33,12 @@ from qfluentwidgets import (
 from app import audio_cache, icons, paths, slideshow, theme, updater, window_target
 from app.app_context import AppContext
 from app.playback import AudioOutputWatcher
+from app.widget_state import set_enabled
 from settingInterface import Ui_settingInterface
 from tasks.preview_task import PreviewTask
 from tasks.voice_catalog_task import VoiceCatalogTask
+from tasks.local_tts_connect_task import LocalTtsConnectTask
+from engines import qwentts
 from ui.dialogs.hotkey_dialog import HotkeyDialog
 from ui.dialogs.preview_text_dialog import PreviewTextMessageBox
 from ui.dialogs.window_target_dialog import WindowTargetDialog
@@ -77,6 +80,14 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self._voice_combo = None
         self._voice_refresh_button = None
         self._catalog_thread = None
+        self._qwentts_task = None
+        self._qwentts_card = None
+        self._qwentts_status = None
+        self._qwentts_test_button = None
+        self._qwentts_refresh_button = None
+        self._qwentts_voice_combo = None
+        self._qwentts_error = ''
+        self._closing_after_service_check = False
         self._qwen_clone_manage_card = None
         self._preview_text_card = None
         self._preview_text_caption = None
@@ -166,7 +177,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         """根据脏状态更新徽标和保存按钮。"""
         dirty = self.is_dirty()
         self.unsaved_badge.setVisible(dirty)
-        self.savePushButton.setEnabled(dirty)
+        set_enabled(self.savePushButton, dirty)
 
     def save_settings(self, allow_regenerate: bool = True):
         """持久化当前设置并更新已保存基线。
@@ -276,7 +287,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
             preview_ext = self.ctx.tts_engine.get_output_extension()
             preview_path = paths.PREVIEW_DIR / f'preview_{int(time.time())}.{preview_ext}'
 
-            self.previewButton.setEnabled(False)
+            set_enabled(self.previewButton, False)
             self.previewButton.setText('正在生成…')
 
             self.preview_thread = PreviewTask(self.ctx.tts_engine, text, str(preview_path), self)
@@ -332,6 +343,16 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self.verticalLayout_2.removeWidget(self._qwen_clone_manage_card)
             self._qwen_clone_manage_card.deleteLater()
             self._qwen_clone_manage_card = None
+
+        self._voice_refresh_button = None
+        if self._qwentts_card is not None:
+            self.verticalLayout_2.removeWidget(self._qwentts_card)
+            self._qwentts_card.deleteLater()
+        self._qwentts_card = None
+        self._qwentts_status = None
+        self._qwentts_test_button = None
+        self._qwentts_refresh_button = None
+        self._qwentts_voice_combo = None
 
     def tail_index(self) -> int:
         """返回动态引擎卡片应插入的布局索引。
@@ -806,6 +827,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
             # 这些千问字段由音色管理弹窗统一编辑，主设置页不重复展示。
             if mode == 'qwen_clone' and key in ('voice', 'reference_audio_path', 'audio_mime_type'):
                 continue
+            if mode == 'qwentts' and key in ('model', 'voice'):
+                continue
 
             self.create_dynamic_option_card(item)
             control = self.dynamic_option_widgets.get(key)
@@ -831,6 +854,31 @@ class SettingInterface(QWidget, Ui_settingInterface):
         # 初值就位后再接信号，此后仅真实用户输入会更新引擎状态。
         for item, control in rendered:
             self.connect_option_control(item, control)
+        self.update_qwen_option_controls()
+
+    def update_qwen_option_controls(self):
+        """按千问模型显示有效参数和语言选项，不重建正在操作的模型控件。"""
+        if self.ctx.tts_engine.get_mode() != 'qwen_clone':
+            return
+        values = self.ctx.tts_engine.get_current_option_values()
+        for item in self.ctx.tts_engine.get_current_options_schema():
+            control = self.dynamic_option_widgets.get(item['key'])
+            if control is None:
+                continue
+            models = item.get('supported_models')
+            if models:
+                control.parentWidget().setVisible(values.get('model') in models)
+            if item['key'] == 'language_type':
+                choices = self.ctx.tts_engine.get_option_choices(item)
+                value = values.get('language_type', 'Auto')
+                if value not in choices:
+                    value = 'Auto'
+                    self.ctx.tts_engine.set_current_option('language_type', value)
+                control.blockSignals(True)
+                control.clear()
+                control.addItems(choices)
+                control.setCurrentText(value)
+                control.blockSignals(False)
 
     def connect_option_control(self, option_schema, control):
         """将配置控件连接到引擎状态和脏状态更新逻辑。"""
@@ -847,16 +895,27 @@ class SettingInterface(QWidget, Ui_settingInterface):
             control.currentTextChanged.connect(partial(self.on_option_changed, key, rebuild))
         elif isinstance(control, LineEdit):
             control.textChanged.connect(partial(self.on_option_changed, key, rebuild))
+            if self.ctx.tts_engine.get_mode() == 'qwen_clone' and key == 'workspace_id':
+                # 工作空间只在编辑完成后查询，避免每输入一个字符就发起请求。
+                control.editingFinished.connect(self.setup_voices_list)
 
     def on_option_changed(self, key, rebuild_voices, value):
         """将控件值写入当前引擎，并标记为未保存。"""
         self.ctx.tts_engine.set_current_option(key, value)
+        if self.ctx.tts_engine.get_mode() == 'qwentts' and key == 'base_url':
+            self._qwentts_error = ''
+            self.update_qwentts_service_card()
+        if key == 'model':
+            self.update_qwen_option_controls()
         if rebuild_voices:
             self.setup_voices_list()
         self.mark_dirty()
 
     def setup_voices_list(self):
         """按当前引擎、地区和模型重建音色选择卡片。"""
+        if self.ctx.tts_engine.get_mode() == 'qwentts':
+            self.setup_qwentts_service_card()
+            return
         if self._voice_card is not None:
             self.verticalLayout_2.removeWidget(self._voice_card)
             self._voice_card.deleteLater()
@@ -932,6 +991,150 @@ class SettingInterface(QWidget, Ui_settingInterface):
         # 重建后索引可能数值未变而信号不触发，必须主动同步名称以保证缓存身份正确。
         self._on_voice_combo_changed(combo.currentIndex())
 
+    def setup_qwentts_service_card(self):
+        """始终提供连接入口；尚无音色时允许使用 Base 模型的默认声音。"""
+        if self._qwentts_card is None:
+            card = CardWidget(self.importWidget)
+            layout = QVBoxLayout(card)
+            layout.setContentsMargins(20, 20, 20, 20)
+            layout.setSpacing(12)
+            row = QHBoxLayout()
+            info = QVBoxLayout()
+            title_row, card.help_icon = theme.make_title_row(
+                theme.make_card_title('本地服务连接', card),
+                '先启动 qwentts.cpp 服务，再测试连接。语言和模型在服务启动器中设置。'
+                '更换模型或创建复刻音色后，请刷新列表并重新生成旧音频。')
+            card.title_row = title_row
+            info.addLayout(title_row)
+            self._qwentts_status = CaptionLabel(card)
+            self._qwentts_status.setWordWrap(True)
+            info.addWidget(self._qwentts_status)
+            row.addLayout(info, 1)
+            self._qwentts_test_button = PrimaryPushButton('测试连接', card)
+            self._qwentts_test_button.clicked.connect(self.test_qwentts_connection)
+            row.addWidget(self._qwentts_test_button)
+            layout.addLayout(row)
+            voice_row = QHBoxLayout()
+            voice_row.addWidget(theme.make_card_title('发音人选择', card), 1)
+            self._qwentts_voice_combo = ComboBox(card)
+            self._qwentts_voice_combo.setFixedWidth(240)
+            self._qwentts_voice_combo.currentIndexChanged.connect(self.on_qwentts_voice_changed)
+            voice_row.addWidget(self._qwentts_voice_combo)
+            self._qwentts_refresh_button = ToolButton(FluentIcon.SYNC, card)
+            self._qwentts_refresh_button.setFixedSize(QSize(33, 33))
+            self._qwentts_refresh_button.setToolTip('重新连接并刷新模型与音色')
+            self._qwentts_refresh_button.clicked.connect(self.test_qwentts_connection)
+            voice_row.addWidget(self._qwentts_refresh_button)
+            layout.addLayout(voice_row)
+            self.verticalLayout_2.insertWidget(self.tail_index(), card)
+            self._qwentts_card = card
+        self.update_qwentts_service_card()
+
+    def update_qwentts_service_card(self):
+        if self._qwentts_card is None or self.ctx.tts_engine.get_mode() != 'qwentts':
+            return
+        values = self.ctx.tts_engine.get_current_option_values()
+        info = self.ctx.tts_engine.get_qwentts_service_info()
+        base_model = qwentts.is_base_model(values.get('model', ''))
+        instruction_control = self.dynamic_option_widgets.get('instructions')
+        if instruction_control is not None:
+            set_enabled(instruction_control, not base_model)
+        busy = self._qwentts_task is not None
+        if busy:
+            status = '正在测试连接…'
+        elif self._qwentts_error:
+            status = '连接失败：' + self._qwentts_error
+        elif info:
+            status = f"已连接 · 当前模型：{info['model']} · {len(info['voices'])} 个音色"
+            if not info['voices']:
+                status += '\n使用模型默认声音；复刻音色请在服务网页中创建后刷新。'
+        else:
+            status = '请先启动本地服务，然后点击「测试连接」'
+            if values.get('model'):
+                status += f"\n已保存模型：{values['model']}"
+        if base_model:
+            status += '\nBase 克隆由参考音频控制声音，风格指令将自动忽略。'
+        self._qwentts_status.setText(status)
+        voices = info['voices'] if info else []
+        combo = self._qwentts_voice_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(voices or [values.get('voice') or '模型默认声音'])
+        if values.get('voice') in voices:
+            combo.setCurrentText(values['voice'])
+        combo.blockSignals(False)
+        set_enabled(combo, bool(voices) and not busy)
+        set_enabled(self._qwentts_test_button, not busy)
+        set_enabled(self._qwentts_refresh_button, not busy)
+
+    def on_qwentts_voice_changed(self, index):
+        if self.ctx.tts_engine.get_mode() != 'qwentts' or index < 0:
+            return
+        voice = self._qwentts_voice_combo.currentText()
+        self.ctx.tts_engine.set_current_option('voice', voice)
+        self.ctx.tts_engine.set_voice(index, voice)
+        self.mark_dirty()
+
+    def test_qwentts_connection(self):
+        """后台读取服务目录，测试与刷新共用同一条只读流程。"""
+        if self.ctx.tts_engine.get_mode() != 'qwentts' or self._qwentts_task is not None:
+            return
+        address = self.ctx.tts_engine.get_current_option_values().get('base_url', '')
+        try:
+            address = qwentts.normalize_base_url(address)
+        except (RuntimeError, ValueError) as exc:
+            self._qwentts_error = str(exc)
+            self.update_qwentts_service_card()
+            self.create_error_info_bar('连接失败', str(exc))
+            return
+        self._qwentts_task = LocalTtsConnectTask(address, self)
+        self._qwentts_task.signal_finish.connect(self.on_qwentts_connected)
+        self._qwentts_task.signal_error.connect(self.on_qwentts_connection_error)
+        self._qwentts_task.finished.connect(self.finish_qwentts_connection)
+        self._qwentts_task.finished.connect(self._qwentts_task.deleteLater)
+        self._qwentts_error = ''
+        self.update_qwentts_service_card()
+        self._qwentts_task.start()
+
+    def qwentts_result_is_current(self):
+        if self.ctx.tts_engine.get_mode() != 'qwentts' or self._qwentts_task is None:
+            return False
+        address = self.ctx.tts_engine.get_current_option_values().get('base_url', '')
+        try:
+            return (not self._qwentts_task.isInterruptionRequested() and
+                    qwentts.normalize_base_url(address) == self._qwentts_task.base_url)
+        except (RuntimeError, ValueError):
+            return False
+
+    def on_qwentts_connected(self, info):
+        if not self.qwentts_result_is_current():
+            return
+        if self.ctx.tts_engine.apply_qwentts_service_info(info):
+            self._qwentts_error = ''
+            self.mark_dirty()
+            self.create_success_info_bar('已连接本地 TTS', '模型和音色已更新，可选择音色并试听')
+
+    def on_qwentts_connection_error(self, message):
+        if not self.qwentts_result_is_current():
+            return
+        self._qwentts_error = message
+        self.create_error_info_bar('连接失败', message)
+
+    def finish_qwentts_connection(self):
+        self._qwentts_task = None
+        self.update_qwentts_service_card()
+        if self._closing_after_service_check:
+            self._closing_after_service_check = False
+            self.window().close()
+
+    def finish_service_check_before_close(self):
+        """等当前短请求退出后再关窗，避免销毁仍运行的 QThread。"""
+        if self._qwentts_task is None or not self._qwentts_task.isRunning():
+            return True
+        self._closing_after_service_check = True
+        self._qwentts_task.requestInterruption()
+        return False
+
 
     def refresh_voice_catalog(self):
         """启动后台任务，强制刷新 Edge-TTS 音色目录。"""
@@ -939,7 +1142,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
             return
 
         if self._voice_refresh_button is not None:
-            self._voice_refresh_button.setEnabled(False)
+            set_enabled(self._voice_refresh_button, False)
 
         self._catalog_thread = VoiceCatalogTask(self)
         self._catalog_thread.signal_finish.connect(self.on_voice_catalog_refreshed)
@@ -1047,7 +1250,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def set_update_button(self, text: str = '检查更新', enabled: bool = True):
         """同步版本卡片按钮的文字与可用状态。"""
         self.versionPrimaryPushButton.setText(text)
-        self.versionPrimaryPushButton.setEnabled(enabled)
+        set_enabled(self.versionPrimaryPushButton, enabled)
 
     def on_update_checked(self, status: str, payload):
         """根据检查结果提示用户，有新版本时询问是否安装。"""

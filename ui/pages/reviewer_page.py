@@ -23,6 +23,7 @@ from Ui_mainwindow import Ui_mainwindow
 from app import hotkeys, icons, paths, project_package, script_io, slideshow, theme, window_target
 from app.app_context import AppContext
 from app.playback import AudioOutputWatcher
+from app.widget_state import set_enabled
 from tasks.audio_generation_task import AudioGenerationTask
 from ui.dialogs.edit_mark_dialog import EditMarkMessageBox
 from ui.dialogs.session_history_dialog import SessionHistoryDialog
@@ -186,7 +187,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.mark = str(settings.get('mark')).strip() or '●'
         self.currentSwitch.setChecked(bool(settings.get('countdown_enabled')))
         self.currentSpinBox.setValue(int(settings.get('countdown_seconds')))
-        self.currentSpinBox.setEnabled(self.currentSwitch.isChecked())
+        set_enabled(self.currentSpinBox, self.currentSwitch.isChecked())
         self.scrollEnableSwitch.setChecked(bool(settings.get('scroll_enabled')))
 
         # 初值设置完成后再接信号，避免把恢复动作误当成用户修改。
@@ -215,9 +216,9 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.IconInfoBadge.setIcon(FluentIcon.ACCEPT_MEDIUM)
             self.regenerate_action.setEnabled(True)
         else:
-            self.playCardWidget.setEnabled(False)
-            self.playCardWidget_2.setEnabled(False)
-            self.playCardWidget_3.setEnabled(False)
+            set_enabled(self.playCardWidget, False)
+            set_enabled(self.playCardWidget_2, False)
+            set_enabled(self.playCardWidget_3, False)
             self.statusLabel.setText('未导入')
             self.IconInfoBadge.setLevel(InfoLevel.INFOAMTION)
             self.IconInfoBadge.setIcon(FluentIcon.ACCEPT_MEDIUM)
@@ -235,7 +236,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             if self.current_index < len(self.media_list):
                 self.player.setSource(QUrl.fromLocalFile(str(self.media_list[self.current_index])))
                 self.player.play()
-                self.playButton.setEnabled(False)
+                set_enabled(self.playButton, False)
                 self.currentStatusLabel.setText('播放')
                 self.set_current_label_text()
                 print(self.notes_list[self.current_index]['text'])
@@ -246,7 +247,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             if self.wait_current_index < len(self.wait_media_list):
                 self.player.setSource(QUrl.fromLocalFile(str(self.wait_media_list[self.wait_current_index])))
                 self.player.play()
-                self.playButton.setEnabled(False)
+                set_enabled(self.playButton, False)
                 temp_index = len(self.wait_media_list) - self.wait_current_index
                 self.currentStatusLabel.setText('倒计时')
                 self.currentPageLabel.setText(f'{temp_index}')
@@ -417,7 +418,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         if self.is_busy() or not self.notes:
             return False
 
-        self.getFileButton.setEnabled(False)
+        set_enabled(self.getFileButton, False)
         self.init_general_play(force_regenerate=force)
         return True
 
@@ -462,7 +463,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             return False
 
         path = Path(selected)
-        self.getFileButton.setEnabled(False)
+        set_enabled(self.getFileButton, False)
         try:
             data = script_io.load_script(path)
         except Exception as e:

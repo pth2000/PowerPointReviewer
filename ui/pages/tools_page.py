@@ -18,6 +18,7 @@ from qfluentwidgets import (
 
 from app import audio_cache, exporters, project_package, theme
 from app.app_context import AppContext
+from app.widget_state import set_enabled
 from toolsInterface import Ui_toolsInterface
 from ui.dialogs.rewrite_dialog import RewriteDialog
 
@@ -146,7 +147,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         for card in self.processing_cards + self.export_cards:
             # 仅禁用操作按钮，保留卡片说明的正常对比度。
             for button in card.findChildren(PushButton):
-                button.setEnabled(imported)
+                set_enabled(button, imported)
 
     # 讲稿处理
 

@@ -25,20 +25,24 @@
 - 支持导出 PPT备注、Markdown、SRT字幕、音频文件（逐条或合并）及工程包格式
 - 支持多TTS引擎切换与参数独立保存
 - 支持在线TTS引擎（Edge / 阿里百炼 / 千问复刻）
+- 支持连接本机或局域网的 qwentts.cpp 服务，使用本地模型合成语音
+- 支持本地 qwentts.cpp 语速调节，保持音高
+- 支持所有TTS引擎设置音频头尾最低留白，改善短句连播衔接
 - 支持AI改写讲稿，兼容 OpenAI 格式
 - 支持历史记录列表，支持会话恢复
 - 支持音频缓存复用
+- 支持切换界面字体
 - 支持检查更新
 
 ## TTS引擎说明
 
-当前内置4种引擎：
+当前内置5种引擎：
 
 - 本地 TTSx3：离线可用，稳定，适合无网场景
 - 在线 Edge-TTS：配置简单，音色自然，支持切换语言地区
-- 在线 阿里百炼：可配置模型/语速/音量/音调
-- 在线 千问复刻：支持云端复刻音色合成
-
+- 在线 阿里百炼 CosyVoice：可配置模型/语速/音量/音调
+- 在线 千问音色复刻：支持云端复刻音色，支持 Qwen-Audio-TTS 3.1 Flash、3.0 系列模型
+- 本地 qwentts.cpp：连接已启动的本地服务，支持模型与音色读取、试听和批量合成
 
 ## 使用方法
 
@@ -63,18 +67,46 @@
 
 ## 进阶使用
 
-在Windows系统中，本地TTS功能通过调用SAPI 5 text-to-speech (TTS) engine来实现，默认引擎均为微软的普通语音包，发音较为生硬。
+### 本地 NaturalVoiceSAPIAdapter 接入
+
+在Windows系统中，「本地 · TTSx3」通过调用 SAPI 5 text-to-speech (TTS) engine 实现，默认引擎均为微软的普通语音包，发音较为生硬。
 
 推荐本地部署[NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)，能够为本软件提供微软自然语音的SAPI 5 TTS引擎。下载本地自然语音包后，启动相关功能即可，具体部署方法请参见该项目文档。
 
+### 本地 qwentts.cpp 接入
+
+兼容 [ServeurpersoCom 原始项目](https://github.com/ServeurpersoCom/qwentts.cpp) 与 [Panda-Panta Windows 便携版](https://github.com/Panda-Panta/qwentts.cpp/releases)。模型下载和服务启动在 qwentts.cpp 中完成，本软件负责连接服务并生成讲稿音频。
+
+1. 按对应项目说明准备 GGUF 模型并启动服务。Windows 便携版可解压后运行 `Qwen3-TTS-Launcher.exe`，选择模型、语言并启动；原始项目使用 `tts-server` 启动 HTTP 服务。
+2. 在本软件设置页选择「本地 · qwentts.cpp」，填写后端服务地址，默认 `http://127.0.0.1:8080`。
+3. 点击「测试连接」，读取当前模型与音色，再选择音色。
+4. 按需调整设置，点击试听确认效果，再保存设置。
+5. 导入讲稿或重新生成音频。
+
+使用 Windows 便携版的 Base 克隆模型时，可先在服务网页中创建复刻音色，再回本软件刷新音色列表。
+
 ## 如何打包
 
-本项目提供Windows可执行文件。如果您想从代码重新编译本项目，可参考以下指令。
+本项目提供 Windows 64 位可执行文件。如果您想从源码运行或打包，可在 Windows 64 位 Python 环境中安装依赖：
+
+```shell
+python -m pip install -r requirements.txt
+python main.py
+```
 
 使用pyinstaller：
 
 ```shell
-pyinstaller PowerPointReviewer.spec
+python -m pip install pyinstaller
+python -m PyInstaller PowerPointReviewer.spec
 ```
+
+如需生成安装器、便携包和增量更新包，先安装 .NET SDK 与 Velopack CLI（`vpk`），再执行：
+
+```shell
+python build.py --notes CHANGELOG.md
+```
+
+最新版本的更新内容见 [CHANGELOG.md](CHANGELOG.md)。
 
 如果遇到任何bug，或者有任何建议，欢迎提交issue，谢谢。
