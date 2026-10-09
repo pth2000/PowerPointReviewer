@@ -1,8 +1,26 @@
 <div align="center">
-<!-- Title: -->
+  <img src="image/readme-banner.png" alt="演示文稿、播放按钮与语音波形组成的项目封面" width="100%">
   <h1>PowerPointReviewer</h1>
-<!-- Short description: -->
-  <p>一个 PowerPoint 讲稿朗读审阅工具</p>
+  <p>PowerPoint 讲稿朗读与审阅工具</p>
+
+  <p>
+    <a href="https://github.com/pth2000/PowerPointReviewer/releases/latest"><img src="https://img.shields.io/github/v/release/pth2000/PowerPointReviewer?style=flat&amp;label=release&amp;color=476582" alt="最新版本"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748b?style=flat" alt="MIT 许可证"></a>
+    <img src="https://img.shields.io/badge/platform-Windows_x64-64748b?style=flat" alt="支持 Windows 64 位">
+    <a href="https://github.com/pth2000/PowerPointReviewer/stargazers"><img src="https://img.shields.io/github/stars/pth2000/PowerPointReviewer?style=flat&amp;color=64748b" alt="GitHub Stars"></a>
+  </p>
+
+  <p>
+    <strong><a href="https://gitee.com/pth2000/PowerPointReviewer/releases">下载（Gitee）</a></strong>
+    &nbsp; · &nbsp;
+    <a href="https://github.com/pth2000/PowerPointReviewer/releases/latest">下载（GitHub）</a>
+    &nbsp; · &nbsp;
+    <a href="#使用方法">使用方法</a>
+    &nbsp; · &nbsp;
+    <a href="CHANGELOG.md">更新日志</a>
+    &nbsp; · &nbsp;
+    <a href="https://github.com/pth2000/PowerPointReviewer/issues">反馈问题</a>
+  </p>
 </div>
 
 ![截图](./image/screenshots.png)
