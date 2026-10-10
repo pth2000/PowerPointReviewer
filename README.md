@@ -4,14 +4,7 @@
   <p>PowerPoint 讲稿朗读与审阅工具</p>
 
   <p>
-    <a href="https://github.com/pth2000/PowerPointReviewer/releases/latest"><img src="https://img.shields.io/github/v/release/pth2000/PowerPointReviewer?style=flat&amp;label=release&amp;color=476582" alt="最新版本"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748b?style=flat" alt="MIT 许可证"></a>
-    <img src="https://img.shields.io/badge/platform-Windows_x64-64748b?style=flat" alt="支持 Windows 64 位">
-    <a href="https://github.com/pth2000/PowerPointReviewer/stargazers"><img src="https://img.shields.io/github/stars/pth2000/PowerPointReviewer?style=flat&amp;color=64748b" alt="GitHub Stars"></a>
-  </p>
-
-  <p>
-    <strong><a href="https://gitee.com/pth2000/PowerPointReviewer/releases">下载（Gitee）</a></strong>
+    <a href="https://gitee.com/pth2000/PowerPointReviewer/releases">下载（Gitee）</a>
     &nbsp; · &nbsp;
     <a href="https://github.com/pth2000/PowerPointReviewer/releases/latest">下载（GitHub）</a>
     &nbsp; · &nbsp;
@@ -41,6 +34,7 @@
 - 支持统计演讲稿信息
 - 支持讲稿往返编辑：导出为 Word 表格或 JSON，修改后可直接导回
 - 支持导出 PPT备注、Markdown、SRT字幕、音频文件（逐条或合并）及工程包格式
+- 支持导出PPT放映视频，包括放映录制和静态合成两种方式
 - 支持多TTS引擎切换与参数独立保存
 - 支持在线TTS引擎（Edge / 阿里百炼 / 千问复刻）
 - 支持连接本机或局域网的 qwentts.cpp 服务，使用本地模型合成语音
@@ -69,7 +63,7 @@
 3. 在主页点击导入按钮，选择您的文件路径。之后，软件会将讲稿文本导入，并转换为语音文件，这可能需要一点时间。
 4. 软件导入完毕后，即可使用播放控制功能。您可以选择播放、停止、重置音频，跳转播放页码，查看统计信息。
 5. 如果启用倒计时播放功能，点击播放后，软件将先播放倒计时，再播放正文讲稿。
-6. 如果启用PPT同步翻页功能，请在播放后保持焦点在PPT放映窗口中，软件将自动发送下一页指令。
+6. 如果启用PPT同步翻页功能，请先打开对应文稿并开始放映，软件会随配音自动翻页。可在设置页选择翻页方式。
 7. 可在“历史记录列表”中快速加载过往会话。支持 Ctrl / Shift 多选与全选，可统一管理记录。
 8. 可在实用工具页对已导入讲稿进行进一步处理。
 

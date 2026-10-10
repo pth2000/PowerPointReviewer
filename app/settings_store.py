@@ -29,13 +29,15 @@ class AppSettings:
         # 全局热键
         'hotkeys_enabled': False,
         # 翻页方式：foreground 前台按键，com 演示软件接口，window 指定窗口
-        'page_turn_mode': 'foreground',
+        'page_turn_mode': 'com',
         'page_turn_window': {},
         'hotkeys': dict(hotkeys.DEFAULT_BINDINGS),
         # 试听
         'preview_text': '这是一个试听音频，用于测试当前的语音设置',
         # 导出
         'export_dir': '',
+        'video_recording': {},
+        'video_export_mode': 'recording',
         # AI 改写（OpenAI 兼容接口）
         'llm_base_url': 'https://api.openai.com/v1',
         'llm_api_key': '',

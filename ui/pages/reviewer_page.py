@@ -307,7 +307,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         非前台方式在目标不可用时回退到前台按键，避免翻页整体失效。
         """
-        mode = str(self.ctx.app_settings.get('page_turn_mode') or 'foreground')
+        mode = str(self.ctx.app_settings.get('page_turn_mode') or 'com')
         if mode == 'com':
             if slideshow.advance():
                 return

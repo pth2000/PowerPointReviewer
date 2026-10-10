@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import sys
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
@@ -119,7 +120,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             '工程包',
             '将讲稿、音频与配置打包为单个文件',
             [('导出工程包', self.export_project_package)],
-            help_text='在其他设备导入后可直接播放，无需重新合成。',
+            help_text='包含讲稿与已生成的音频，在其他设备导入后即可播放。',
         ))
 
         self.export_cards.append(self.add_card(
@@ -131,6 +132,18 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
                 ('合并音频', self.export_merged_audio),
             ],
             help_text='SRT 字幕的时间轴按各语句的音频时长生成。合并音频将全部语句依次拼接为一个文件。',
+        ))
+
+        self.export_cards.append(self.add_card(
+            'PPT 演示视频',
+            '将 PPT 画面与讲稿配音制作为视频',
+            [
+                ('放映录制', self.record_video),
+                ('静态合成', self.compose_video),
+            ],
+            help_text='放映录制：保留 PPT 动画，跟随讲稿配音展示内容。\n'
+                      '静态合成：以逐页静态画面搭配讲稿配音。\n'
+                      '请在 Windows 上使用，并安装 PowerPoint 或 WPS 演示。',
         ))
 
 
@@ -180,6 +193,39 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         self.reviewer_page.create_success_info_bar('已开始重新合成', message)
 
     # 共用前置检查
+
+    def record_video(self):
+        self.export_video('recording')
+
+    def compose_video(self):
+        self.export_video('static')
+
+    def export_video(self, mode):
+        """独占放映控制与播放状态，关闭录制窗口后恢复主页订阅。"""
+        if sys.platform != 'win32':
+            self.create_warning_info_bar('暂不支持此系统', 'PPT 视频导出目前需要 Windows 与 PowerPoint / WPS 演示')
+            return
+        if not self.require_notes() or not self.require_idle() or not self.require_durations():
+            return
+        page = self.reviewer_page
+        if len(page.media_list) != len(page.notes_list):
+            self.create_warning_info_bar('音频尚未就绪', '请先完成全部讲稿的语音生成')
+            return
+        from ui.dialogs.video_recording_dialog import VideoRecordingDialog
+
+        page.stop_audio()
+        self.ctx.hotkeys.clear()
+        self.ctx.slideshow_watcher.stop()
+        try:
+            dialog = VideoRecordingDialog(page.notes_list, page.media_list,
+                                          page.note_file_path, self, ctx=self.ctx,
+                                          initial_mode=mode)
+            dialog.exec()
+        except Exception as exc:
+            self.create_error_info_bar('无法导出视频', str(exc))
+        finally:
+            page.refresh_hotkeys()
+            page.refresh_slideshow_watch()
 
     def require_notes(self) -> bool:
         """检查讲稿是否已导入，未就绪时在当前页提示。"""

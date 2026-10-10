@@ -27,6 +27,37 @@ _user32 = ctypes.windll.user32
 _kernel32 = ctypes.windll.kernel32
 _EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
 
+# Win64 handles must not use ctypes' default 32-bit argument/return types.
+_user32.EnumWindows.argtypes = [_EnumWindowsProc, wintypes.LPARAM]
+_user32.EnumWindows.restype = wintypes.BOOL
+for _name in ('IsWindow', 'IsWindowVisible', 'IsIconic', 'GetWindowTextLengthW'):
+    getattr(_user32, _name).argtypes = [wintypes.HWND]
+_user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+_user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+_user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+_user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+_user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+_user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+_user32.GetAncestor.restype = wintypes.HWND
+_user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+_user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+_user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+_user32.MonitorFromWindow.restype = wintypes.HANDLE
+_user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+_kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_kernel32.OpenProcess.restype = wintypes.HANDLE
+_kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                               wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+_kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+
+class _MonitorInfo(ctypes.Structure):
+    _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', wintypes.RECT),
+                ('rcWork', wintypes.RECT), ('dwFlags', wintypes.DWORD)]
+
+
+_user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MonitorInfo)]
+
 
 def _window_text(hwnd) -> str:
     length = _user32.GetWindowTextLengthW(hwnd)
@@ -65,8 +96,39 @@ def _process_name(pid: int) -> str:
         _kernel32.CloseHandle(handle)
 
 
-def list_windows() -> list:
-    """枚举可见且有标题的顶层窗口，按面积降序返回。"""
+def window_info(hwnd) -> dict:
+    """读取窗口身份，也适用于没有标题的 COM 放映窗口。"""
+    if not hwnd or not _user32.IsWindow(hwnd):
+        return {}
+    pid = wintypes.DWORD()
+    _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return {'hwnd': int(hwnd), 'pid': int(pid.value), 'process': _process_name(pid.value),
+            'title': _window_text(hwnd), 'class_name': _window_class(hwnd), 'area': _window_area(hwnd)}
+
+
+def is_fullscreen_window(hwnd) -> bool:
+    """要求客户区覆盖所在显示器，排除阅读窗口及带标题栏的最大化窗口。"""
+    if not hwnd or not _user32.IsWindow(hwnd):
+        return False
+    rect = wintypes.RECT()
+    if not _user32.GetClientRect(hwnd, ctypes.byref(rect)):
+        return False
+    origin = wintypes.POINT(rect.left, rect.top)
+    if not _user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+        return False
+    monitor = _user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+    info = _MonitorInfo()
+    info.cbSize = ctypes.sizeof(info)
+    if not monitor or not _user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+        return False
+    bounds = (origin.x, origin.y, origin.x + rect.right - rect.left,
+              origin.y + rect.bottom - rect.top)
+    expected = (info.rcMonitor.left, info.rcMonitor.top, info.rcMonitor.right, info.rcMonitor.bottom)
+    return all(abs(actual - required) <= 2 for actual, required in zip(bounds, expected))
+
+
+def list_windows(include_untitled=False) -> list:
+    """枚举可见顶层窗口，按面积降序返回；录制时也允许无标题窗口。"""
     found = []
 
     def collect(hwnd, _param):
@@ -74,22 +136,14 @@ def list_windows() -> list:
         if not _user32.IsWindowVisible(hwnd) or _user32.IsIconic(hwnd):
             return True
         title = _window_text(hwnd)
-        if not title:
+        if not title and not include_untitled:
             return True
 
-        pid = wintypes.DWORD()
-        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if pid.value == _SELF_PID:
+        window = window_info(hwnd)
+        if not window or window['pid'] == _SELF_PID:
             return True
 
-        found.append({
-            'hwnd': int(hwnd),
-            'pid': int(pid.value),
-            'process': _process_name(pid.value),
-            'title': title,
-            'class_name': _window_class(hwnd),
-            'area': _window_area(hwnd),
-        })
+        found.append(window)
         return True
 
     _user32.EnumWindows(_EnumWindowsProc(collect), 0)

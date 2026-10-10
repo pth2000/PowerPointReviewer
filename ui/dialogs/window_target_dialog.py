@@ -18,6 +18,7 @@ from qfluentwidgets import (
 
 from app import window_target
 from ui.dialogs.base import ThemedDialog
+from ui.dialogs.window_preview import WindowPreview
 
 
 class WindowTargetDialog(ThemedDialog):
@@ -26,21 +27,30 @@ class WindowTargetDialog(ThemedDialog):
     列表按窗口面积降序排列，放映中的全屏窗口通常位于最前。
     """
 
-    def __init__(self, current=None, parent=None):
+    def __init__(self, current=None, parent=None, recording=False, presentation=None):
         super().__init__(parent)
         self.selected = dict(current) if isinstance(current, dict) else {}
+        self.recording = recording
+        self.presentation = presentation
+        self._valid_window = False
+        self._preview_ready = False
 
-        self.setWindowTitle('选择翻页目标')
+        title = '选择录制窗口' if recording else '选择翻页目标'
+        self.setWindowTitle(title)
         self.setMinimumSize(700, 480)
+        if recording:
+            self.setMinimumHeight(620)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        layout.addWidget(SubtitleLabel('选择翻页目标', self))
+        layout.addWidget(SubtitleLabel(title, self))
 
         tip = CaptionLabel(self)
-        tip.setText('请在放映开始后选择放映窗口')
+        tip.setText('请选择与当前文稿对应的全屏幻灯片画面。此选择仅改变录制画面，'
+                    '翻页和动画仍由当前文稿控制；演讲者控制台、阅读和编辑窗口暂不支持。'
+                    if recording else '请在放映开始后选择放映窗口')
         tip.setWordWrap(True)
         layout.addWidget(tip)
 
@@ -64,6 +74,12 @@ class WindowTargetDialog(ThemedDialog):
         self.table.itemDoubleClicked.connect(lambda _item: self.accept())
         layout.addWidget(self.table, stretch=1)
 
+        self.preview = None
+        if recording:
+            self.preview = WindowPreview(self)
+            self.preview.readyChanged.connect(self._preview_ready_changed)
+            layout.addWidget(self.preview)
+
         self.status_label = CaptionLabel(self)
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -75,7 +91,10 @@ class WindowTargetDialog(ThemedDialog):
 
         clear_button = PushButton('不指定', self)
         clear_button.clicked.connect(self._clear_selection)
-        button_row.addWidget(clear_button)
+        if not recording:
+            button_row.addWidget(clear_button)
+        else:
+            clear_button.hide()
         button_row.addStretch(1)
 
         cancel_button = PushButton('取消', self)
@@ -94,10 +113,13 @@ class WindowTargetDialog(ThemedDialog):
         current_hwnd = int(self.selected.get('hwnd') or 0)
         self.table.setRowCount(0)
 
-        for window in window_target.list_windows():
+        for window in window_target.list_windows(include_untitled=self.recording):
+            processes = getattr(self.presentation, 'capture_processes', None)
+            if processes is not None and window['process'].casefold() not in processes:
+                continue
             row = self.table.rowCount()
             self.table.insertRow(row)
-            values = (window['title'], window['process'], window['class_name'])
+            values = (window['title'] or '（无标题窗口）', window['process'], window['class_name'])
             for col, value in enumerate(values):
                 cell = QTableWidgetItem(value)
                 cell.setData(Qt.ItemDataRole.UserRole, window)
@@ -124,9 +146,27 @@ class WindowTargetDialog(ThemedDialog):
     def _sync_buttons(self):
         """根据选中项更新提示与确定按钮状态。"""
         window = self._current_window()
-        self.confirm_button.setEnabled(window is not None)
+        self._valid_window = False
+        self._preview_ready = False
+        self.confirm_button.setEnabled(window is not None and not self.recording)
+        if self.preview is not None:
+            self.preview.stop()
         if window is not None:
-            self.status_label.setText(f'翻页将发送到：{window["title"]}')
+            if self.recording:
+                try:
+                    validator = getattr(self.presentation, 'validate_capture_window', None)
+                    if validator is not None:
+                        validator(window)
+                    self._valid_window = True
+                except Exception as exc:
+                    self.status_label.setText(str(exc))
+                    self.preview.stop(str(exc))
+                    return
+            action = '录制窗口' if self.recording else '翻页将发送到'
+            title = window['title'] or window['process'] or '无标题窗口'
+            self.status_label.setText(f'{action}：{title}')
+            if self.preview is not None:
+                self.preview.show_target(window)
         elif self.selected:
             remembered = self.selected.get('title') or self.selected.get('process') or '原目标'
             self.status_label.setText(f'上次选择的窗口不在列表中：{remembered}')
@@ -135,6 +175,17 @@ class WindowTargetDialog(ThemedDialog):
 
     def accept(self):
         window = self._current_window()
+        if window is None or (self.recording and not (self._valid_window and self._preview_ready)):
+            return
         if window is not None:
-            self.selected = window_target.make_target(window)
+            self.selected = dict(window) if self.recording else window_target.make_target(window)
         super().accept()
+
+    def _preview_ready_changed(self, ready):
+        self._preview_ready = ready
+        self.confirm_button.setEnabled(ready and self._valid_window and self._current_window() is not None)
+
+    def done(self, result):
+        if self.preview is not None:
+            self.preview.stop()
+        super().done(result)

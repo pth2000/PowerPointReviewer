@@ -516,7 +516,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.setup_appearance_cards()
         self.setup_log_card()
 
-    PAGE_TURN_MODES = (('foreground', '前台按键'), ('com', '演示软件接口'), ('window', '指定窗口'))
+    PAGE_TURN_MODES = (('com', '演示软件接口（COM）'), ('foreground', '前台按键'), ('window', '指定窗口'))
 
     def setup_page_turn_card(self):
         """创建翻页方式卡片。"""
@@ -527,9 +527,9 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.page_turn_combo.setMinimumSize(QSize(180, 33))
         self.page_turn_combo.setMaximumSize(QSize(180, 33))
         self.page_turn_combo.addItems([label for _mode, label in self.PAGE_TURN_MODES])
-        current = str(self.ctx.app_settings.get('page_turn_mode') or 'foreground')
+        current = str(self.ctx.app_settings.get('page_turn_mode') or 'com')
         labels = dict(self.PAGE_TURN_MODES)
-        self.page_turn_combo.setCurrentText(labels.get(current, labels['foreground']))
+        self.page_turn_combo.setCurrentText(labels.get(current, labels['com']))
         self.page_turn_combo.currentTextChanged.connect(self.on_page_turn_mode_changed)
         card.layout().addWidget(self.page_turn_combo)
 
@@ -551,7 +551,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
     def on_page_turn_mode_changed(self, label: str):
         """切换翻页方式并立即落盘。"""
-        mode = next((m for m, text in self.PAGE_TURN_MODES if text == label), 'foreground')
+        mode = next((m for m, text in self.PAGE_TURN_MODES if text == label), 'com')
         self.ctx.app_settings.set('page_turn_mode', mode)
         self.ctx.config.save_later()
         self.refresh_page_turn_status()
@@ -581,11 +581,11 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
         probe 为假时跳过对演示软件的探测，供构造阶段使用。
         """
-        mode = str(self.ctx.app_settings.get('page_turn_mode') or 'foreground')
+        mode = str(self.ctx.app_settings.get('page_turn_mode') or 'com')
         if getattr(self, 'page_turn_pick_button', None) is not None:
             self.page_turn_pick_button.setVisible(mode == 'window')
         if mode not in self.PAGE_TURN_CAPTIONS:
-            mode = 'foreground'
+            mode = 'com'
         self.page_turn_caption.setText(self.PAGE_TURN_CAPTIONS[mode])
         theme.set_help_text(self.page_turn_card.help_icon, self.PAGE_TURN_HELP[mode])
 
