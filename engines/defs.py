@@ -140,7 +140,7 @@ ENGINE_DEFS = [
             {
                 'key': 'model', 'label': '合成模型',
                 'description': '选择用于复刻与合成的千问模型',
-                'help': '3.1 Flash 是新增版本，支持指令和情感标签。Qwen-Audio-TTS 非实时合成需填写工作空间 ID 并使用北京地域。音色与模型绑定，更换模型后需重新复刻或选择对应音色。',
+                'help': '3.1 Flash 支持语音风格指令和情感标签。Qwen-Audio-TTS 系列需填写工作空间 ID 并选择北京地域。更换模型后，需重新复刻或选择该模型的音色。',
                 'type': 'choice',
                 'choices': list(AUDIO_TTS_MODELS + VC_MODELS),
                 'default': AUDIO_TTS_MODELS[0], 'rebuild_voices': True
@@ -148,7 +148,7 @@ ENGINE_DEFS = [
             {
                 'key': 'workspace_id', 'label': '工作空间 ID',
                 'description': '指定所使用的百炼业务空间',
-                'help': 'Qwen-Audio-TTS 系列必填，可在百炼控制台的业务空间管理中查看。旧 Qwen3-TTS-VC 可留空。',
+                'help': 'Qwen-Audio-TTS 系列必填，可在百炼控制台的业务空间管理中查看。Qwen3-TTS-VC 系列可留空。',
                 'type': 'text', 'default': ''
             },
             {
@@ -161,7 +161,7 @@ ENGINE_DEFS = [
             {
                 'key': 'instructions', 'label': '语音风格指令',
                 'description': '用文字控制语气、情绪、方言和朗读风格',
-                'help': '例如「用自然、清晰的讲解语气，语速稍慢」。留空使用默认风格。也可在讲稿中使用 [excited]、[laughter] 等标签。',
+                'help': '例如“用自然、清晰的讲解语气，语速稍慢”。留空使用默认风格。也可在讲稿中使用 [excited]、[laughter] 等标签。',
                 'type': 'text', 'default': '', 'supported_models': AUDIO_TTS_MODELS
             },
             {
@@ -188,7 +188,7 @@ ENGINE_DEFS = [
             },
             {
                 'key': 'preferred_name', 'label': '默认音色名', 'description': '为新建的复刻音色命名',
-                'help': 'Qwen-Audio-TTS 使用小写字母和数字，最多 9 位；旧 Qwen3-TTS-VC 支持字母、数字和下划线，最多 16 位。',
+                'help': 'Qwen-Audio-TTS 使用小写字母和数字，最多 9 位；Qwen3-TTS-VC 支持字母、数字和下划线，最多 16 位。',
                 'type': 'text', 'default': 'ppt_reviewer'
             },
             {
@@ -211,7 +211,7 @@ ENGINE_DEFS = [
         'id': 'qwentts',
         'name': '本地 · qwentts.cpp',
         'description': '连接本机或局域网的 qwentts.cpp 服务，离线合成语音',
-        'help': '先在 qwentts.cpp 启动器中选择模型和语言并启动服务，再填写后端地址、测试连接和选择音色。兼容原始项目及 Panda-Panta Windows 便携版。复刻音色可在服务网页中创建，再刷新音色列表。',
+        'help': '先在 qwentts.cpp 启动器中选择模型和语言并启动服务，再填写服务地址、测试连接和选择音色。复刻音色可在服务网页中创建，再刷新音色列表。',
         'supports_voice': True,
         'parallel_enabled': False,
         'parallel_workers': 1,
@@ -220,8 +220,8 @@ ENGINE_DEFS = [
         'options': [
             {
                 'key': 'base_url', 'label': '服务地址',
-                'description': '填写本地 TTS 后端地址与端口',
-                'help': '默认 http://127.0.0.1:8080，也接受以 /v1 结尾的地址。填写后点击「测试连接」。',
+                'description': '填写本地语音服务的地址与端口',
+                'help': '例如 http://127.0.0.1:8080，请与启动器中显示的服务地址一致。填写后点击“测试连接”。',
                 'type': 'text', 'default': 'http://127.0.0.1:8080'
             },
             {
@@ -246,14 +246,14 @@ ENGINE_DEFS = [
             },
             {
                 'key': 'seed', 'label': '随机种子',
-                'description': '固定同一文本重复生成时的随机选择',
+                'description': '让相同讲稿重复生成时更接近同一效果',
                 'help': '默认 42，相同文本、音色和参数重复生成可复现。-1 表示每次随机。固定种子不能保证不同文本的语调完全相同。',
                 'type': 'int', 'min': -1, 'max': 2147483647, 'step': 1, 'default': 42
             },
             {
                 'key': 'temperature', 'label': '采样随机性',
                 'description': '调整生成声音时的随机程度',
-                'help': '取值 0–2，默认 0.9。调低可减少采样随机性，但不一定改善音质；0 使用确定的最优候选。此项不是语速控制。',
+                'help': '取值 0–2，默认 0.9。数值越低，生成声音的变化越小。调整后可试听确认效果。',
                 'type': 'float', 'min': 0.0, 'max': 2.0, 'step': 0.1, 'default': 0.9
             },
             {

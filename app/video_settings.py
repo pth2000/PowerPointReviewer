@@ -36,7 +36,7 @@ class VideoRecordingOptions:
         if self.container not in ('mp4', 'mkv'):
             raise ValueError('请选择 MP4 或 MKV 输出格式。')
         if not isinstance(self.embed_subtitles, bool):
-            raise ValueError('字幕开关须为布尔值。')
+            raise ValueError('字幕设置无效，请重新选择是否添加字幕。')
 
     def to_dict(self):
         return asdict(self)

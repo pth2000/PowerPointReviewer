@@ -26,7 +26,7 @@ class StaticVideoComposition(QObject):
         self.timeline = timeline
         self.options = options or VideoRecordingOptions(fps=timeline.fps)
         if self.options.fps != timeline.fps:
-            raise ValueError('视频帧率与合成时间轴不一致。')
+            raise ValueError('视频设置不一致，请重新选择帧率后再导出。')
         self.images = {int(page): Path(path) for page, path in images.items()}
         if any(cue.page not in self.images for cue in timeline.cues):
             raise ValueError('讲稿页码没有对应的 PPT 画面。')

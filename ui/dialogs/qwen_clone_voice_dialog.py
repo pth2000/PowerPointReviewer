@@ -18,6 +18,7 @@ from qfluentwidgets import (
     InfoBar,
     InfoBarPosition,
     LineEdit,
+    MessageBox,
     PrimaryPushButton,
     PushButton,
     TableWidget,
@@ -68,9 +69,10 @@ class QwenCloneVoiceDialog(ThemedDialog):
             '小写字母、数字，最多 9 位' if audio_tts else '字母、数字、下划线，最多 16 位')
         param_row.addWidget(self.preferred_name_edit)
 
-        param_row.addWidget(QLabel('参考音频类型', self))
+        param_row.addWidget(QLabel('参考音频格式', self))
         self.mime_combo = ComboBox(self)
-        self.mime_combo.addItems(['audio/mpeg', 'audio/wav', 'audio/mp4'])
+        for label, mime in (('MP3', 'audio/mpeg'), ('WAV', 'audio/wav'), ('M4A', 'audio/mp4')):
+            self.mime_combo.addItem(label, userData=mime)
         param_row.addWidget(self.mime_combo)
         main_layout.addLayout(param_row)
 
@@ -130,7 +132,7 @@ class QwenCloneVoiceDialog(ThemedDialog):
         self.preferred_name_edit.setText(str(settings.get('preferred_name', 'ppt_reviewer')))
 
         mime = str(settings.get('audio_mime_type', 'audio/mpeg'))
-        mime_index = self.mime_combo.findText(mime)
+        mime_index = self.mime_combo.findData(mime)
         if mime_index >= 0:
             self.mime_combo.setCurrentIndex(mime_index)
 
@@ -154,7 +156,7 @@ class QwenCloneVoiceDialog(ThemedDialog):
             self,
             '选择参考音频',
             '',
-            'Audio Files (*.mp3 *.wav *.m4a)'
+            '音频文件 (*.mp3 *.wav *.m4a)'
         )
         if not selected:
             return
@@ -163,12 +165,12 @@ class QwenCloneVoiceDialog(ThemedDialog):
 
         inferred = self._infer_mime(selected)
         if inferred:
-            idx = self.mime_combo.findText(inferred)
+            idx = self.mime_combo.findData(inferred)
             if idx >= 0:
                 self.mime_combo.setCurrentIndex(idx)
-            self._info_success('已识别音频格式', f'已识别为 {inferred}')
+            self._info_success('已识别音频格式', f'已选择 {self.mime_combo.currentText()} 格式')
         else:
-            self._info_warning('无法自动识别', '请手动选择音频类型')
+            self._info_warning('无法自动识别', '请手动选择音频格式')
 
     def _current_row_voice(self) -> str:
         """返回音色列表当前行的服务端音色 ID。"""
@@ -224,7 +226,7 @@ class QwenCloneVoiceDialog(ThemedDialog):
         """校验表单、创建云端音色并刷新列表。"""
         reference_path = self.reference_audio_edit.text().strip()
         preferred_name = self.preferred_name_edit.text().strip() or 'ppt_reviewer'
-        mime = self.mime_combo.currentText().strip() or 'audio/mpeg'
+        mime = self.mime_combo.currentData() or 'audio/mpeg'
 
         if not reference_path:
             self._info_warning('缺少参考音频', '未选择参考音频文件')
@@ -246,7 +248,6 @@ class QwenCloneVoiceDialog(ThemedDialog):
             return
 
         self.selected_voice = voice
-        self.tts_engine.set_current_option('voice', voice)
         self.refresh_list(select_voice=voice)
         self._info_success('创建成功', f'已创建音色：{voice}')
 
@@ -257,6 +258,12 @@ class QwenCloneVoiceDialog(ThemedDialog):
             self._info_warning('未选择音色', '在列表中选中一个音色')
             return
 
+        confirm = MessageBox('删除所选音色？',
+                             '删除后无法继续用它生成配音，已生成的配音仍可播放。', self)
+        confirm.yesButton.setText('删除')
+        confirm.cancelButton.setText('取消')
+        if not confirm.exec():
+            return
         try:
             self.tts_engine.delete_qwen_clone_voice(voice)
         except Exception as e:

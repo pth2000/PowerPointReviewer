@@ -18,6 +18,7 @@ from qfluentwidgets import (
 
 from app import paths, theme
 from app.recording_presentation import list_presentations
+from app.recording_session import RecordingSession
 from app.slide_images import SlideRenderTask
 from app.video_composition import StaticVideoComposition
 from app.video_mux import VideoMuxTask, build_video_captions, ensure_mux_available
@@ -65,6 +66,16 @@ class VideoRecordingDialog(ThemedDialog):
         self.busy = False
         self.closing = False
         self.presentations = []
+        self.live_session = None
+        self.window_picker_open = False
+        self.waiting_manual = False
+        self.show_attempts = 0
+        self.show_timer = QTimer(self)
+        self.show_timer.setInterval(150)
+        self.show_timer.timeout.connect(self._await_show)
+        self.source_timer = QTimer(self)
+        self.source_timer.setInterval(1000)
+        self.source_timer.timeout.connect(self._poll_source)
         self.layout_timer = QTimer(self)
         self.layout_timer.setSingleShot(True)
         self.layout_timer.timeout.connect(self._resize_to_contents)
@@ -91,12 +102,12 @@ class VideoRecordingDialog(ThemedDialog):
         source_layout = QVBoxLayout(source_card)
         source_layout.setContentsMargins(16, 16, 16, 16)
         source_layout.setSpacing(12)
-        self.source_title = StrongBodyLabel('放映来源', source_card)
+        self.source_title = StrongBodyLabel('PPT 文稿', source_card)
         row, self.source_help_icon = theme.make_title_row(
             self.source_title,
-            '在 PowerPoint 或 WPS 中按 F5 开始全屏放映，再刷新列表。\n'
-            '请确认所选文稿与当前讲稿对应。\n'
-            '可通过“选择窗口”预览和更换录制画面，翻页与动画仍控制所选文稿。',
+            '使用关联的 PPT，开始录制时自动准备全屏放映。\n'
+            '如有编辑，请先保存 PPT，以使用最新内容。\n'
+            '可通过“预览画面”确认或更换录制窗口。',
         )
         self.status_badge = InfoBadge.info('等待放映', source_card)
         self.status_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
@@ -108,14 +119,27 @@ class VideoRecordingDialog(ThemedDialog):
         live_layout.setContentsMargins(0, 0, 0, 0)
         live_layout.setSpacing(12)
         row = QHBoxLayout()
+        bound_source = self._recording_source()
+        self.presentation_file_icon = IconWidget(FluentIcon.DOCUMENT, source_card)
+        self.presentation_file_icon.setFixedSize(16, 16)
+        self.presentation_file_icon.setVisible(bound_source is not None)
+        row.addWidget(self.presentation_file_icon)
+        self.presentation_file_label = _CaptureLabel(source_card)
+        self.presentation_file_label.setText(bound_source.name if bound_source else '')
+        self.presentation_file_label.setToolTip(str(bound_source or ''))
+        self.presentation_file_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.presentation_file_label.setVisible(bound_source is not None)
+        row.addWidget(self.presentation_file_label, 1 if bound_source is not None else 0)
         self.presentation_combo = ComboBox(source_card)
+        self.presentation_file_label.setFont(self.presentation_combo.font())
         self.presentation_combo.setMinimumWidth(0)
         self.presentation_combo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self.presentation_combo.setPlaceholderText('请先按 F5 开始全屏放映')
+        self.presentation_combo.setPlaceholderText('选择当前讲稿对应的放映')
         self.presentation_combo.installEventFilter(self)
+        self.presentation_combo.setVisible(bound_source is None)
         row.addWidget(self.presentation_combo, 1)
         self.refresh_button = ToolButton(FluentIcon.SYNC, source_card)
-        self.refresh_button.setToolTip('刷新放映列表')
+        self.refresh_button.setToolTip('刷新放映状态')
         self.refresh_button.setAccessibleName('刷新放映')
         self.refresh_button.clicked.connect(self.reload)
         row.addWidget(self.refresh_button)
@@ -225,16 +249,19 @@ class VideoRecordingDialog(ThemedDialog):
             self.reload()
         self._resize_to_contents()
         self.layout_timer.start(0)
+        self.source_timer.start()
 
     def _change_mode(self, mode):
         if self.busy:
             return
+        if self.live_session is not None:
+            self._release_show()
         self.mode = mode
         static = mode == 'static'
         self.live_source_panel.setVisible(not static)
         self.static_source_panel.setVisible(static)
         self.wait_panel.setVisible(not static)
-        self.source_title.setText('PPT 文件' if static else '放映来源')
+        self.source_title.setText('PPT 文件' if static else 'PPT 文稿')
         self.start_button.setText('开始合成' if static else '开始录制')
         self.recording_badge.hide()
         self.progress.hide()
@@ -248,9 +275,9 @@ class VideoRecordingDialog(ThemedDialog):
             '请安装 PowerPoint 或 WPS 演示。\n'
             '默认使用导入讲稿时的 PPT，也可选择与讲稿页码对应的其他 PPT。\n'
             '如有编辑，请先保存 PPT，以使用最新内容。' if static else
-            '在 PowerPoint 或 WPS 中按 F5 开始全屏放映，再刷新列表。\n'
-            '请确认所选文稿与当前讲稿对应。\n'
-            '可通过“选择窗口”预览和更换录制画面，翻页与动画仍控制所选文稿。')
+            '使用关联的 PPT，开始录制时自动准备全屏放映。\n'
+            '如有编辑，请先保存 PPT，以使用最新内容。\n'
+            '可通过“预览画面”确认或更换录制窗口。')
         if static:
             self._selection_changed()
         else:
@@ -408,13 +435,31 @@ class VideoRecordingDialog(ThemedDialog):
         height = self.layout().totalHeightForWidth(self.width())
         self.resize(self.width(), height if height > 0 else self.layout().sizeHint().height())
 
+    def _poll_source(self):
+        if (self.isVisible() and self.mode == 'recording' and not self.busy
+                and not self.closing and not self.window_picker_open):
+            self.reload()
+
     def reload(self):
+        if self.busy or self.window_picker_open:
+            return
         previous = self._selected_presentation()
         selection = None
         selection_error = ''
         self.presentation_combo.blockSignals(True)
         self.presentation_combo.clear()
         self.presentations = list_presentations()
+        if self._recording_source() is not None:
+            self.presentations = [show for show in self.presentations if show.matches_source(self.source_path)]
+        if self.live_session is not None and self.live_session.presentation is not None:
+            owned = self.live_session.presentation
+            if getattr(owned, 'is_active', lambda: True)():
+                self.presentations = [owned] + [show for show in self.presentations
+                                               if not show.same_show(owned)]
+            else:
+                discovered = self.presentations
+                self._release_show()
+                self.presentations = discovered
         for presentation in self.presentations:
             if previous is not None and getattr(presentation, 'same_show', lambda other: False)(previous):
                 selection = presentation
@@ -434,6 +479,8 @@ class VideoRecordingDialog(ThemedDialog):
                     or (selection is None and presentation.matches_source(self.source_path))):
                 self.presentation_combo.setCurrentIndex(index)
                 break
+        if not self.presentations and self._recording_source() is not None:
+            self.presentation_combo.addItem(self._recording_source().name)
         self.presentation_combo.blockSignals(False)
         self._selection_changed()
         if selection_error:
@@ -442,6 +489,10 @@ class VideoRecordingDialog(ThemedDialog):
     def _selected_presentation(self):
         index = self.presentation_combo.currentIndex()
         return self.presentations[index] if 0 <= index < len(self.presentations) else None
+
+    def _recording_source(self):
+        source = Path(self.source_path) if self.source_path else None
+        return source if source and source.suffix.lower() in ('.ppt', '.pptx') else None
 
     def _selection_changed(self):
         if self.mode == 'static':
@@ -459,46 +510,78 @@ class VideoRecordingDialog(ThemedDialog):
                                  detail=False, source=True)
             return
         presentation = self._selected_presentation()
+        source = self._recording_source()
+        self.presentation_file_icon.setVisible(source is not None)
+        self.presentation_file_label.setVisible(source is not None)
+        self.presentation_file_label.setText(source.name if source else '')
+        self.presentation_file_label.setToolTip(str(source or ''))
+        self.presentation_combo.setVisible(source is None)
         ready = presentation is not None and bool(getattr(presentation, 'hwnd', 1))
+        if ready:
+            ready = getattr(presentation, 'capture_ready', lambda: True)()
         manual = getattr(presentation, 'capture_mode', 'auto') == 'manual'
         self.auto_window_button.setVisible(manual)
         self.auto_window_button.setEnabled(not self.busy and manual)
         target = getattr(presentation, 'target', {})
         title = (target.get('title') or target.get('process') or '无标题窗口') if ready else '尚未识别'
-        self.capture_label.setText(f'录制窗口（{"手动" if manual else "自动"}）：{title}'
-                                   if presentation is not None else '录制窗口：尚未选择放映')
-        self.capture_label.setToolTip(self.capture_label.text())
-        self._fit_source_text()
-        self.start_button.setEnabled(not self.busy and ready and sys.platform == 'win32')
-        self.window_button.setEnabled(not self.busy and presentation is not None)
-        if self.busy:
-            return
-        if presentation is None:
-            self._set_status('请在 PowerPoint 或 WPS 中按 F5 开始全屏放映，再刷新列表。',
-                             '等待放映', detail=False, source=True)
-        elif not ready:
-            self._set_status('已连接放映，请点击“选择窗口”指定录制画面。',
-                             '待选窗口', InfoLevel.WARNING, detail=False, source=True)
+        automatic = source is not None and source.is_file() and presentation is None
+        provider = getattr(presentation, 'provider', 'PowerPoint')
+        if ready:
+            label = f'录制窗口（{"手动" if manual else "自动"}）：{title}'
+            message = ('已打开当前 PPT 的放映，可以开始录制。' if source else
+                       '请确认所选放映与当前讲稿对应，然后开始录制。')
+            badge, level = '放映中', InfoLevel.SUCCESS
+        elif presentation is not None:
+            label = f'{provider} · 请选择录制画面'
+            message = '放映已打开，请预览并选择录制画面。'
+            badge, level = '待选画面', InfoLevel.WARNING
+        elif automatic:
+            label = '开始录制时自动打开并放映'
+            message = '录制当前 PPT，程序会自动准备全屏放映。'
+            badge, level = '自动放映', InfoLevel.INFOAMTION
         else:
-            self._set_status('请确认所选放映与当前讲稿对应，然后开始录制。',
-                             '已连接', InfoLevel.SUCCESS, detail=False, source=True)
+            if source is not None:
+                label = '未找到 PPT，请重新关联文稿'
+                message = '关联对应 PPT 后即可自动准备放映。'
+                badge, level = '未找到 PPT', InfoLevel.WARNING
+            else:
+                label = '关联 PPT，或选择已打开的放映'
+                message = '请选择与当前讲稿对应的 PPT 或放映。'
+                badge, level = '未关联 PPT', InfoLevel.INFOAMTION
+        self.capture_label.setText(label)
+        self.capture_label.setToolTip(f'{provider}\n{title}' if ready else message)
+        self._fit_source_text()
+        # 自动刷新只更新来源状态，保留导出成功、失败或取消的结果提示。
+        self._update_badge(self.status_badge, badge, level, message)
+        self.window_button.setText('预览画面' if source is not None else '选择窗口')
+        self.window_button.setToolTip('预览并选择录制画面。' if presentation is not None else
+                                     '准备当前 PPT 的放映，预览并选择录制画面。')
+        self.start_button.setEnabled(not self.busy and (ready or automatic) and sys.platform == 'win32')
+        self.window_button.setEnabled(not self.busy and (presentation is not None or automatic))
+        self.presentation_combo.setEnabled(not self.busy and source is None)
 
     def choose_window(self):
         presentation = self._selected_presentation()
-        if self.busy or presentation is None:
+        if self.busy:
+            return
+        if presentation is None and self._recording_source() is not None:
+            self._set_busy(True)
+            self._prepare_show('pick')
+            return
+        if presentation is None:
             return
         dialog = WindowTargetDialog(getattr(presentation, 'target', {}), self,
                                     recording=True, presentation=presentation)
+        self.window_picker_open = True
         try:
             if dialog.exec() != dialog.DialogCode.Accepted or not dialog.selected:
                 return
             presentation.bind_capture_window(dialog.selected)
             self._selection_changed()
-            self._set_status('已选择录制画面，翻页和动画仍控制当前文稿。',
-                             '已连接', InfoLevel.SUCCESS, detail=False, source=True)
         except Exception as exc:
             self._set_status(str(exc), '选窗失败', InfoLevel.ERROR, source=True)
         finally:
+            self.window_picker_open = False
             dialog.deleteLater()
 
     def restore_auto_window(self):
@@ -508,8 +591,6 @@ class VideoRecordingDialog(ThemedDialog):
         try:
             presentation.restore_auto_window()
             self._selection_changed()
-            self._set_status('已恢复自动识别的放映窗口。', '已连接', InfoLevel.SUCCESS,
-                             detail=False, source=True)
         except Exception as exc:
             self._set_status(f'恢复自动失败：{exc}', '识别失败', InfoLevel.ERROR, source=True)
 
@@ -536,6 +617,8 @@ class VideoRecordingDialog(ThemedDialog):
     def start(self):
         if self.busy:
             return
+        if self.mode == 'recording':
+            self.reload()
         try:
             recording_format()
             self.options = self.selected_options()
@@ -549,16 +632,18 @@ class VideoRecordingDialog(ThemedDialog):
                 name = self.slide_source.name
             else:
                 presentation = self._selected_presentation()
-                if presentation is None:
+                source = self._recording_source()
+                if presentation is None and (source is None or not source.is_file()):
                     raise RuntimeError('请先启动 PPT 全屏放映。')
-                if (self.source_path and Path(self.source_path).suffix.lower() == '.pptx'
+                if (presentation is not None and source is not None
                         and not presentation.matches_source(self.source_path)):
-                    raise RuntimeError('所选 PPT 与当前导入的文稿不同，请打开对应文稿并开始放映。')
-                if max(self.pages) > presentation.slide_count:
+                    raise RuntimeError('所选放映与已导入的 PPT 不同，请刷新后重试。')
+                if presentation is not None and max(self.pages) > presentation.slide_count:
                     raise RuntimeError('讲稿页码超出了所选 PPT 的页数，请选择对应的放映。')
-                self.capture_window = presentation.capturable_window()
+                if presentation is not None:
+                    self.capture_window = presentation.capturable_window()
                 self.selected_presentation = presentation
-                name = presentation.name
+                name = source.name if source is not None else presentation.name
             selected, _filter = QFileDialog.getSaveFileName(
                 self, '保存演示视频',
                 str(Path.home() / (Path(name).stem + '.' + self.options.container)),
@@ -608,7 +693,68 @@ class VideoRecordingDialog(ThemedDialog):
             except Exception as exc:
                 self._failed(str(exc))
             return
+        self.prepared_audio = paths
+        self._prepare_show('record')
+
+    def _prepare_show(self, action):
+        if self.closing:
+            self._cancelled()
+            return
+        self.show_action = action
+        self.waiting_manual = False
         try:
+            self._set_status('正在准备 PPT 放映…', '准备放映')
+            if self.live_session is None:
+                presentation = self._selected_presentation()
+                if presentation is not None:
+                    self.live_session = RecordingSession()
+                    self.live_session.presentation = presentation
+                    self.live_session.remember_position()
+                else:
+                    self.live_session = RecordingSession.start(self._recording_source())
+            self.selected_presentation = self.live_session.presentation
+            self.presentations = [self.selected_presentation]
+            self.presentation_combo.blockSignals(True)
+            self.presentation_combo.clear()
+            self.presentation_combo.addItem(self.selected_presentation.name)
+            self.presentation_combo.blockSignals(False)
+            self.show_attempts = 0
+            self.show_timer.start()
+        except Exception as exc:
+            self._failed(str(exc))
+
+    def _await_show(self):
+        if self.closing:
+            self._cancelled()
+            return
+        try:
+            self.live_session.refresh_window()
+        except Exception:
+            self.show_attempts += 1
+            if self.show_attempts < 40:
+                return
+            # 保留本次放映，便于自动识别超时后手动选择；关闭对话框时再释放。
+            self.waiting_manual = True
+            self._cleanup()
+            button = self.window_button.text()
+            self._set_status(f'放映已启动，请点击“{button}”确认录制画面。',
+                             '待选画面', InfoLevel.WARNING, source=True)
+            return
+        self.show_timer.stop()
+        self._selection_changed()
+        if self.show_action == 'pick':
+            self._set_busy(False)
+            self.choose_window()
+        else:
+            self._start_live_recording(self.prepared_audio)
+
+    def _start_live_recording(self, paths):
+        try:
+            if self.closing:
+                self._cancelled()
+                return
+            if max(self.pages) > self.selected_presentation.slide_count:
+                raise RuntimeError('讲稿页码超出了 PPT 的页数。')
             wait_ms = self.wait_spin.value() if self.wait_checkbox.isChecked() else 0
             timeline = VideoTimeline(self.pages, paths, wait_ms, fps=self.options.fps)
             self.captions = build_video_captions(self.notes, timeline) if self.options.embed_subtitles else ()
@@ -736,6 +882,9 @@ class VideoRecordingDialog(ThemedDialog):
             self._failed(f'无法保存到目标位置：{exc}。完整视频保留在：{saved}')
 
     def _cleanup(self):
+        self.show_timer.stop()
+        if not self.waiting_manual:
+            self._release_show()
         self._set_busy(False)
         if self.preparation is not None:
             self.preparation.cancel()
@@ -770,6 +919,13 @@ class VideoRecordingDialog(ThemedDialog):
                 pass
             self.mux_staging = None
 
+    def _release_show(self):
+        if self.live_session is not None:
+            self.live_session.close()
+            self.live_session = None
+            self.presentations = []
+        self.waiting_manual = False
+
     def _failed(self, message):
         self._cleanup()
         self._set_status('视频导出失败：' + message, '导出失败', InfoLevel.ERROR)
@@ -797,6 +953,8 @@ class VideoRecordingDialog(ThemedDialog):
             else:
                 self._cancelled()
             return
+        self._release_show()
+        self.source_timer.stop()
         super().reject()
 
     def closeEvent(self, event):
@@ -804,4 +962,6 @@ class VideoRecordingDialog(ThemedDialog):
             event.ignore()
             self.reject()
         else:
+            self._release_show()
+            self.source_timer.stop()
             super().closeEvent(event)

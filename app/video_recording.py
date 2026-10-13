@@ -21,7 +21,7 @@ def recording_format():
     media_format.setVideoCodec(QMediaFormat.VideoCodec.H264)
     media_format.setAudioCodec(QMediaFormat.AudioCodec.AAC)
     if not media_format.isSupported(QMediaFormat.ConversionMode.Encode):
-        raise RuntimeError('当前环境不支持 MP4（H.264/AAC）录制，请使用完整发行包并检查显卡驱动。')
+        raise RuntimeError('当前无法导出 MP4 视频，请更新显卡驱动并重新下载最新版软件后再试。')
     return media_format
 
 
@@ -137,7 +137,7 @@ class RecordingAudioPreparation(QObject):
         try:
             buffer = self.decoder.read()
             if not buffer.isValid() or buffer.format() != pcm_format():
-                raise RuntimeError('录制音频未能转换为所需格式。')
+                raise RuntimeError('无法准备视频配音，请重新生成配音后重试。')
             self.writer.writeframesraw(bytes(buffer.constData()))
         except Exception as exc:
             self._fail(str(exc))
@@ -190,7 +190,7 @@ class VideoRecording(QObject):
         self.timeline = timeline
         self.options = options or VideoRecordingOptions(fps=timeline.fps)
         if self.options.fps != timeline.fps:
-            raise ValueError('视频帧率与录制时间轴不一致。')
+            raise ValueError('视频设置不一致，请重新选择帧率后再导出。')
         self.status_interval = max(1, round(timeline.fps / 5))
         self.target = Path(target)
         self.presentation = presentation

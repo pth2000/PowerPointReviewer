@@ -46,7 +46,7 @@ class VideoTimeline:
             path = Path(path)
             with wave.open(str(path), 'rb') as reader:
                 if (reader.getnchannels(), reader.getsampwidth(), reader.getframerate()) != (1, 2, SAMPLE_RATE):
-                    raise ValueError('录制音频须为 48 kHz 单声道 PCM16 WAV。')
+                    raise ValueError('配音暂时无法用于视频导出，请重新生成后重试。')
                 frames = reader.getnframes()
                 if frames <= 0:
                     raise ValueError('录制音频为空。')
@@ -73,7 +73,7 @@ class TimelineAudio:
 
     def read(self, start, frames):
         if start < 0 or frames <= 0 or start + frames > self.timeline.total_frames:
-            raise ValueError('音频读取位置超出录制时间轴。')
+            raise ValueError('无法读取配音，请重新导出视频。')
         end = start + frames
         output = bytearray(frames * 2)
         while self.index < len(self.timeline.cues):

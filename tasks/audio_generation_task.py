@@ -37,6 +37,8 @@ class GenerationResult:
     cache_keys: list = field(default_factory=list)
     cache_exts: list = field(default_factory=list)
     cache_hit_count: int = 0
+    generation_profile: dict = field(default_factory=dict)
+    speaker: str = ''
 
 
 class AudioGenerationTask(QThread):
@@ -49,6 +51,7 @@ class AudioGenerationTask(QThread):
     def __init__(self, tts_engine: TTSEngine, parent=None):
         super().__init__(parent)
         self.tts_engine = tts_engine
+        self.source_engine = tts_engine
         self.audio_cache_path = paths.AUDIO_CACHE_DIR
         self.countdown_cache_path = paths.COUNTDOWN_CACHE_DIR
         self.output_path = paths.TEMP_DIR
@@ -65,6 +68,7 @@ class AudioGenerationTask(QThread):
         ``force_regenerate`` 只跳过命中判断，仍按稳定缓存键覆盖原缓存文件。
         """
         self.notes_list = list(notes_list)
+        self.tts_engine = self.source_engine.snapshot()
         self.countdown_max_seconds = int(countdown_max_seconds)
         self.force_regenerate = bool(force_regenerate)
 
@@ -73,6 +77,10 @@ class AudioGenerationTask(QThread):
         try:
             self.save_countdown_wav()
             result = self.save_wav()
+            if self.isInterruptionRequested():
+                return
+        except InterruptedError:
+            return
         except Exception as e:
             traceback.print_exc()
             self.signal_error.emit(str(e))
@@ -120,7 +128,7 @@ class AudioGenerationTask(QThread):
                     temp_path.write_bytes(content)
 
             if not temp_path.exists() or temp_path.stat().st_size == 0:
-                raise RuntimeError('语音引擎返回了空音频文件')
+                raise RuntimeError('未生成可播放的配音，请重试或更换音色。')
 
             temp_path.replace(cache_path)
         finally:
@@ -132,6 +140,8 @@ class AudioGenerationTask(QThread):
 
     def _save_one_note_wav(self, index, note_dict, generation_profile):
         """生成或复用单条音频，并返回可按输入索引归位的结果元组。"""
+        if self.isInterruptionRequested():
+            raise InterruptedError('配音生成已停止')
         text = note_dict['text']
         output_ext = self.tts_engine.get_output_extension()
         cache_key = self.tts_engine.build_audio_cache_key(text, generation_profile)
@@ -181,6 +191,8 @@ class AudioGenerationTask(QThread):
         )
         self.tts_engine.validate_generation_settings()
         generation_profile = self.tts_engine.get_generation_profile()
+        result.generation_profile = generation_profile
+        result.speaker = self.tts_engine.get_selected_voice_name()
 
         def collect(item):
             index, path, duration, cache_key, cache_ext, cache_hit = item
@@ -216,6 +228,8 @@ class AudioGenerationTask(QThread):
         倒计时是可选功能，生成失败只记录日志；正文合成继续，播放端负责提示缺失。
         """
         for time_num in range(self.countdown_max_seconds, 0, -1):
+            if self.isInterruptionRequested():
+                raise InterruptedError('配音生成已停止')
             path = self.countdown_cache_path / f'{time_num}.wav'
             if path.exists() and path.stat().st_size > 0:
                 continue

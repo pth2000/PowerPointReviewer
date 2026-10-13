@@ -9,6 +9,7 @@ from typing import Optional
 # dashscope 导入耗时接近一秒，且只有实际调用百炼时才需要，
 # 因此推迟到调用点再导入，避免拖慢应用启动。
 _DEFAULT_WS_URL = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'
+_SYNTH_INIT_LOCK = threading.Lock()
 
 # 百炼模型的音色集合互不完全兼容，必须按当前模型提供选项。
 MODEL_VOICES: dict[str, list[str]] = {
@@ -318,46 +319,47 @@ def save(text: str, path: str, *, voices: list[str] = VOICES, voice_index: int =
         import dashscope
         from dashscope.audio.tts_v2 import SpeechSynthesizer, AudioFormat
     except ImportError as e:
-        raise RuntimeError('未安装 dashscope，请先执行: pip install dashscope') from e
+        raise RuntimeError('百炼语音功能不可用，请重新下载最新版软件后再试。') from e
 
     if not api_key:
         api_key = os.getenv('DASHSCOPE_API_KEY', '').strip()
     if not api_key:
         raise RuntimeError('未配置阿里百炼 API Key，请在设置页填写后重试')
 
-    dashscope.api_key = api_key
     voice_name = voices[voice_index] if 0 <= voice_index < len(voices) else voices[0]
 
     def _call() -> None:
         callback = _file_callback_class()(path)
-        synthesizer = SpeechSynthesizer(
-            model=model,
-            voice=voice_name,
-            format=AudioFormat.WAV_22050HZ_MONO_16BIT,
-            volume=int(volume),
-            speech_rate=float(rate),
-            pitch_rate=float(pitch),
-            callback=callback,
-            url=ws_url,
-        )
+        # SDK 在构造时读取全局 Key；只锁住初始化，后续合成仍可并行。
+        with _SYNTH_INIT_LOCK:
+            dashscope.api_key = api_key
+            synthesizer = SpeechSynthesizer(
+                model=model,
+                voice=voice_name,
+                format=AudioFormat.WAV_22050HZ_MONO_16BIT,
+                volume=int(volume),
+                speech_rate=float(rate),
+                pitch_rate=float(pitch),
+                callback=callback,
+                url=ws_url,
+            )
         try:
             synthesizer.call(text)
         except Exception as e:
             print(f'[百炼TTS] call() 抛出异常：{e}')
             traceback.print_exc()
-            raise RuntimeError(f'百炼 TTS 调用异常：{e}') from e
+            raise RuntimeError(f'百炼语音生成失败：{e}') from e
 
         # call() 返回不代表异步回调已写完文件，必须等待完成、错误或关闭事件。
         completed = callback.done_event.wait(timeout=30)
         if not completed:
-            raise RuntimeError('百炼 TTS 在 30 秒内未完成，可能是网络超时或服务阻塞')
+            raise RuntimeError('百炼语音生成超时，请检查网络连接后重试。')
         if callback.error_message:
-            raise RuntimeError(f'百炼 TTS 回调报错：{callback.error_message}')
+            raise RuntimeError(f'百炼语音生成失败：{callback.error_message}')
         output_path = Path(path)
         if not output_path.exists() or output_path.stat().st_size == 0:
             event_tail = callback.events[-3:] if callback.events else []
-            raise RuntimeError(
-                f'百炼 TTS 输出文件为空；累计字节={callback.total_bytes}；最近事件={event_tail}'
-            )
+            print(f'[百炼TTS] 输出为空；累计字节={callback.total_bytes}；最近事件={event_tail}')
+            raise RuntimeError('百炼未返回可播放的配音，请稍后重试或更换音色。')
 
     _call()

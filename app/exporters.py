@@ -209,7 +209,7 @@ def merge_audio(media_paths, target_path: Path) -> None:
     suffixes = {path.suffix.lower() for path in sources}
     if len(suffixes) > 1:
         joined = '、'.join(sorted(suffixes))
-        raise RuntimeError(f'音频格式不一致（{joined}），无法在不转码的前提下合并，请改用多文件导出。')
+        raise RuntimeError(f'音频格式不一致（{joined}），请使用“逐条音频”分别导出。')
 
     suffix = suffixes.pop()
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,7 +222,7 @@ def merge_audio(media_paths, target_path: Path) -> None:
                     reader = wave.open(str(path), 'rb')
                 except wave.Error as e:
                     raise RuntimeError(
-                        f'{path.name} 不是有效的 WAV 音频（{e}），请改用多文件导出。') from e
+                        f'{path.name} 无法读取，请重新生成这段配音后再导出。') from e
                 with reader:
                     current = reader.getparams()
                     if params is None:
@@ -232,7 +232,7 @@ def merge_audio(media_paths, target_path: Path) -> None:
                         writer.setframerate(current.framerate)
                     elif (current.nchannels, current.sampwidth, current.framerate) != (
                             params.nchannels, params.sampwidth, params.framerate):
-                        raise RuntimeError(f'音频参数不一致（{path.name}），请改用多文件导出。')
+                        raise RuntimeError(f'{path.name} 无法与其他配音合并，请使用“逐条音频”分别导出。')
                     writer.writeframes(reader.readframes(reader.getnframes()))
         return
 

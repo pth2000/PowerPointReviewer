@@ -1,7 +1,7 @@
 """编辑并测试 AI 改写使用的接口参数。"""
 
 from PySide6.QtCore import QSize
-from PySide6.QtWidgets import QGridLayout, QLineEdit, QWidget
+from PySide6.QtWidgets import QGridLayout, QLineEdit, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -9,6 +9,7 @@ from qfluentwidgets import (
     InfoBarPosition,
     LineEdit,
     MessageBoxBase,
+    PlainTextEdit,
     PushButton,
     SpinBox,
     SubtitleLabel,
@@ -16,6 +17,7 @@ from qfluentwidgets import (
 from PySide6.QtCore import Qt
 
 from tasks.rewrite_task import LLMTestTask
+from ui.dialogs.base import ThemedDialog
 
 
 class LLMConfigMessageBox(MessageBoxBase):
@@ -119,10 +121,29 @@ class LLMConfigMessageBox(MessageBoxBase):
         if ok:
             self._info('success', '连接正常', f'模型回复：{message}')
         else:
-            self._info('error', '连接失败', f'详情：{message}')
+            bar = self._info('error', '连接失败', message.split('\n\n', 1)[0])
+            if '\n\n' in message:
+                button = PushButton('查看详情', bar)
+                button.clicked.connect(lambda: self._show_error_details(message))
+                bar.addWidget(button)
+
+    def _show_error_details(self, message: str):
+        dialog = ThemedDialog(self)
+        dialog.setWindowTitle('连接失败详情')
+        dialog.resize(680, 440)
+        layout = QVBoxLayout(dialog)
+        detail = PlainTextEdit(dialog)
+        detail.setReadOnly(True)
+        detail.setPlainText(message)
+        layout.addWidget(detail)
+        close_button = PushButton('关闭', dialog)
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button, alignment=Qt.AlignmentFlag.AlignRight)
+        dialog.exec()
+        dialog.deleteLater()
 
     def _info(self, level: str, title: str, text: str):
         factory = {'success': InfoBar.success, 'warning': InfoBar.warning, 'error': InfoBar.error}[level]
-        factory(title=title, content=text, orient=Qt.Horizontal, isClosable=True,
+        return factory(title=title, content=text, orient=Qt.Horizontal, isClosable=True,
                 position=InfoBarPosition.TOP, duration=-1 if level == 'error' else 4000,
                 parent=self)

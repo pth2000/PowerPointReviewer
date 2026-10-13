@@ -26,6 +26,12 @@ class AppSettings:
         'countdown_enabled': True,
         'countdown_seconds': 5,
         'scroll_enabled': False,
+        'slideshow_auto_start': True,
+        'slideshow_follow_page': True,
+        'slideshow_sync_navigation': True,
+        'slideshow_stop_on_exit': True,
+        'resume_last_session': True,
+        'last_session': {},
         # 全局热键
         'hotkeys_enabled': False,
         # 翻页方式：foreground 前台按键，com 演示软件接口，window 指定窗口

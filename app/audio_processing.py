@@ -42,7 +42,7 @@ def _read_wav(content):
 def _change_speed(content, speed):
     params, pcm = _read_wav(content)
     if params.sampwidth != 2 or params.nchannels not in (1, 2):
-        raise RuntimeError('语速处理需要单声道或双声道的 16 位 PCM WAV。')
+        raise RuntimeError('当前音频格式不支持调整语速，请使用原速或更换语音服务。')
     # 不足 10 ms 的波形不具备稳定变速所需的周期，保留原样以免被处理成静音。
     if params.nframes * 1000 < params.framerate * 10:
         return content
@@ -76,7 +76,7 @@ def process_wav(content: bytes, *, speed=DEFAULT_SPEED,
     if leading_silence_ms == trailing_silence_ms == 0:
         return content
     if params.sampwidth != 2:
-        raise RuntimeError('音频留白处理需要 16 位 PCM WAV，请确认本地 TTS 的输出格式。')
+        raise RuntimeError('当前音频格式不支持添加留白，请关闭留白设置后重试。')
     samples = array('h', pcm)
     if sys.byteorder != 'little':
         samples.byteswap()

@@ -49,7 +49,7 @@ def export_slide_images(source, pages, directory, width, height, *, progress=Non
     check_cancelled()
     copy_path = directory / ('source' + source.suffix.lower())
     if source.resolve() == copy_path.resolve():
-        raise ValueError('PPT 副本目录不能覆盖原文稿。')
+        raise ValueError('无法准备 PPT 画面，请重新导出视频。')
     shutil.copyfile(source, copy_path)
     pythoncom.CoInitialize()
     try:

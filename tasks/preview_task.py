@@ -11,7 +11,7 @@ class PreviewTask(QThread):
 
     def __init__(self, tts_engine, text, path, parent=None):
         super().__init__(parent)
-        self.tts_engine = tts_engine
+        self.tts_engine = tts_engine.snapshot()
         self.text = text
         self.path = path
 

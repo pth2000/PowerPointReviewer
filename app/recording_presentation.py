@@ -16,7 +16,7 @@ from app import window_target
 _PROCESSES = {'PowerPoint': {'powerpnt.exe'}, 'WPS 演示': {'wps.exe', 'wpp.exe'}}
 
 
-def list_presentations():
+def list_presentations(*, fullscreen_only=True):
     if sys.platform != 'win32' or not _ensure_com():
         return []
     import win32com.client
@@ -30,8 +30,11 @@ def list_presentations():
         for index in range(1, count + 1):
             try:
                 window = application.SlideShowWindows(index)
-                if bool(window.IsFullScreen):
-                    result.append(RecordingPresentation(window, provider, prog_id, index))
+                if not fullscreen_only or bool(window.IsFullScreen):
+                    presentation = RecordingPresentation(window, provider, prog_id, index, application,
+                                                         capture_window=fullscreen_only)
+                    presentation.require_fullscreen = fullscreen_only
+                    result.append(presentation)
             except Exception:
                 continue
     return result
@@ -40,8 +43,11 @@ def list_presentations():
 class RecordingPresentation:
     """COM 在界面线程使用；窗口选择仅影响采集，不改变翻页方式。"""
 
-    def __init__(self, window, provider='PowerPoint', prog_id='PowerPoint.Application', index=1):
+    def __init__(self, window, provider='PowerPoint', prog_id='PowerPoint.Application', index=1,
+                 application=None, *, capture_window=True):
         self.window = window
+        self.application = application
+        self.require_fullscreen = True
         self.provider = provider
         self.presentation = window.Presentation
         self.name = str(self.presentation.Name)
@@ -60,7 +66,7 @@ class RecordingPresentation:
         self.foreign_window = None
         self.click_index = None
         self.indexed_clicks = False
-        hwnd = slideshow_hwnd(prog_id, index)
+        hwnd = slideshow_hwnd(prog_id, index) if capture_window else 0
         if hwnd:
             try:
                 self.bind_capture_window(window_target.window_info(hwnd), automatic=True)
@@ -68,7 +74,31 @@ class RecordingPresentation:
                 pass  # Retain the COM show so the user can explicitly select a window.
 
     def matches_source(self, source):
-        return source and Path(source).suffix.lower() == '.pptx' and Path(source).resolve() == Path(self.path).resolve()
+        return (source and Path(source).suffix.lower() in ('.ppt', '.pptx')
+                and Path(source).resolve() == Path(getattr(self, 'source_path', self.path)).resolve())
+
+    def is_active(self):
+        """检查 COM 放映是否仍存在，与手动选择的采集窗口分开判断。"""
+        try:
+            if self.application is not None:
+                # WPS 退出后旧 View 仍可能返回页码；以实时放映集合为准。
+                windows = self.application.SlideShowWindows
+                for index in range(1, int(windows.Count) + 1):
+                    active = windows.Item(index)
+                    if active._oleobj_ == self.window._oleobj_:
+                        return not self.require_fullscreen or bool(active.IsFullScreen)
+                return False
+            return ((not self.require_fullscreen or bool(self.window.IsFullScreen))
+                    and int(self.window.View.Slide.SlideIndex) > 0)
+        except Exception:
+            return False
+
+    def capture_ready(self):
+        try:
+            self._verify_window()
+            return True
+        except RuntimeError:
+            return False
 
     @property
     def capture_processes(self):
@@ -84,7 +114,7 @@ class RecordingPresentation:
             raise RuntimeError('所选窗口已关闭或改变，请刷新窗口列表。')
         user32 = ctypes.windll.user32
         if user32.GetAncestor(hwnd, 2) != hwnd:
-            raise RuntimeError('请选择全屏放映窗口，当前窗口无法单独采集。')
+            raise RuntimeError('所选窗口暂不支持录制，请选择全屏放映画面。')
         if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
             raise RuntimeError('请保持放映窗口正常显示。')
         known_show = automatic or all(actual.get(key) == self.auto_target.get(key)
@@ -138,7 +168,7 @@ class RecordingPresentation:
 
     def _verify_window(self):
         if not self.hwnd:
-            raise RuntimeError('无法自动识别放映窗口，请点击“选择窗口”指定本次录制的窗口。')
+            raise RuntimeError('无法自动识别放映窗口，请预览画面并选择窗口。')
         user32 = ctypes.windll.user32
         actual = window_target.window_info(self.hwnd)
         if (not actual or actual['pid'] != self.target['pid']
@@ -149,7 +179,7 @@ class RecordingPresentation:
         if user32.IsIconic(self.hwnd):
             raise RuntimeError('放映窗口已最小化，录制已停止。')
         if not window_target.is_fullscreen_window(self.hwnd):
-            raise RuntimeError('采集窗口已退出全屏，录制已停止。')
+            raise RuntimeError('录制窗口已退出全屏，录制已停止。')
 
     def _reset_clicks(self):
         self.click_index = None
@@ -159,6 +189,10 @@ class RecordingPresentation:
             self.indexed_clicks = True
         except Exception:
             self.indexed_clicks = False
+        if self.provider == 'WPS 演示':
+            # WPS 以进入页面后的索引表示起始动画状态。GotoSlide(..., True)
+            # 已复位页面；GotoClick(0) 在部分版本会阻塞自动化接口。
+            return
         if self.indexed_clicks and self.click_index:
             # WPS can retain the old click state even after GotoSlide(..., True).
             self.window.View.GotoClick(0)
@@ -216,9 +250,13 @@ class RecordingPresentation:
             if target > count:
                 raise RuntimeError(f'第 {page} 页讲稿要求第 {target} 次点击，但放映只有 {count} 次点击，'
                                    '请检查页内分隔符与动画是否对应。')
-            view.GotoClick(target)
-            if int(view.GetClickIndex()) != target:
-                raise RuntimeError(f'第 {page} 页的第 {target} 次动画点击未能执行。')
+            if self.provider == 'WPS 演示':
+                # Next 返回时 WPS 可能尚未更新点击索引；下一段开始前再检查。
+                view.Next()
+            else:
+                view.GotoClick(target)
+                if int(view.GetClickIndex()) != target:
+                    raise RuntimeError(f'第 {page} 页的第 {target} 次动画点击未能执行。')
             self.click_index = target
         else:
             view.Next()

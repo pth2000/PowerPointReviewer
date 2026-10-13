@@ -9,7 +9,7 @@ from app.window import Window
 from tts_engine import TTSEngine
 
 
-VERSION = '1.6.3'
+VERSION = '1.7.0'
 
 
 def main():

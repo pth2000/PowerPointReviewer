@@ -4,7 +4,7 @@ import os
 
 from app import paths
 
-# Velopack 没有 Gitee 适配器，改用通用 HTTP 源读取最新发行版的附件
+# 从最新索引发现更新，增量包从各自版本的发行版附件下载。
 GITEE_FEED = 'https://gitee.com/pth2000/PowerPointReviewer/releases/download/latest'
 GITHUB_REPO = 'https://github.com/pth2000/PowerPointReviewer'
 SOURCE_NAMES = ('Gitee', 'GitHub')
@@ -66,7 +66,15 @@ def create_manager(index: int = None):
         return None
     import velopack
 
-    return velopack.UpdateManager(_source(_source_index if index is None else index))
+    selected = _source_index if index is None else index
+    if not custom_feed():
+        from app.update_download import MirroredUpdateManager
+
+        roots = [GITEE_FEED.rsplit('/', 1)[0], f'{GITHUB_REPO}/releases/download']
+        if selected == 1:
+            roots.reverse()
+        return MirroredUpdateManager(_source(selected), roots)
+    return velopack.UpdateManager(_source(selected))
 
 
 def download_size(info) -> int:

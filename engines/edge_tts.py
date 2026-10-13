@@ -169,6 +169,26 @@ def pitch_to_edge(pitch: int) -> str:
 
 # 音频合成
 
+def _prepare_synthesis_endpoint() -> None:
+    """兼容旧版库使用的合成地址；上游更新地址后自动跳过。
+
+    https://github.com/rany2/edge-tts/pull/491
+    TODO: 上游正式版本包含此修复后，提高 requirements.txt 中 edge-tts 的
+    最低版本，验证试听后移除此函数及调用，并调整对应兼容性测试。
+    音色目录仍使用库默认地址，合成参数和 MP3 格式保持一致。
+    """
+    import edge_tts.communicate as transport
+    from edge_tts.constants import TRUSTED_CLIENT_TOKEN
+
+    legacy = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?'
+    if transport.WSS_URL.startswith(legacy):
+        # 一次性迁移模块常量，避免并行合成期间来回切换全局地址。
+        transport.WSS_URL = (
+            'wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1'
+            f'?Ocp-Apim-Subscription-Key={TRUSTED_CLIENT_TOKEN}'
+        )
+
+
 def save(text: str, path: str, *, voice: str = '', locale: str = DEFAULT_LOCALE,
          rate: int = 200, volume: float = 1.0, pitch: int = 0) -> None:
     """使用 Edge-TTS 合成音频，并在未指定音色时选用地区首项。
@@ -184,7 +204,9 @@ def save(text: str, path: str, *, voice: str = '', locale: str = DEFAULT_LOCALE,
 
     async def _run() -> None:
         import edge_tts
+        from aiohttp import WSServerHandshakeError
 
+        _prepare_synthesis_endpoint()
         communicate = edge_tts.Communicate(
             text,
             target_voice,
@@ -192,7 +214,12 @@ def save(text: str, path: str, *, voice: str = '', locale: str = DEFAULT_LOCALE,
             volume=volume_to_edge(float(volume)),
             pitch=pitch_to_edge(int(pitch)),
         )
-        await communicate.save(path)
+        try:
+            await communicate.save(path)
+        except WSServerHandshakeError as error:
+            if error.status == 403:
+                raise RuntimeError('Edge 在线语音服务拒绝了本次请求（403），请稍后重试或切换语音引擎。') from error
+            raise
 
     # 每次合成可能运行在不同线程；asyncio.run 会完整创建和关闭本次专用事件循环。
     asyncio.run(_run())

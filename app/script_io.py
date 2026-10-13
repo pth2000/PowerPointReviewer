@@ -127,7 +127,7 @@ def _parse_docx_table(document) -> ScriptData:
                 notes[page] = text
 
     if notes:
-        report.append(f'按表格解析，共 {len(notes)} 页')
+        report.append(f'已导入 {len(notes)} 页讲稿')
         if skipped > 1:
             report.append(f'{skipped - 1} 行页码无法识别，已跳过')
     return ScriptData(notes=notes, report=report)
@@ -168,7 +168,7 @@ def _parse_docx_text(document) -> ScriptData:
         report.append(f'首个页码标记之前的 {len(orphan)} 段内容已归入第 {first} 页')
 
     if notes:
-        report.insert(0, f'按段落文本解析，共 {len(notes)} 页')
+        report.insert(0, f'已导入 {len(notes)} 页讲稿')
     return ScriptData(notes=notes, report=report)
 
 
@@ -182,7 +182,7 @@ def parse_docx(path: Path) -> ScriptData:
     if not data.notes:
         data = _parse_docx_text(document)
         if data.notes:
-            data.report.append('未找到讲稿表格，已按段落文本解析。建议重新导出以获得更稳定的往返编辑')
+            data.report.append('已读取文档中的分段讲稿。编辑时请保留每页开头的页码标记')
 
     if not data.notes:
         raise RuntimeError('未能识别出页码。请确认文档包含讲稿表格，'
@@ -197,14 +197,14 @@ def parse_json(path: Path) -> ScriptData:
     try:
         payload = json.loads(Path(path).read_text(encoding='utf-8'))
     except Exception as e:
-        raise RuntimeError(f'JSON 解析失败：{e}') from e
+        raise RuntimeError('无法读取 JSON 讲稿，请确认文件完整且内容格式正确。') from e
 
     if not isinstance(payload, dict):
-        raise RuntimeError('JSON 顶层结构必须是对象')
+        raise RuntimeError('JSON 讲稿格式不正确，请选择本软件导出的讲稿文件。')
 
     fmt = str(payload.get('format', ''))
     if fmt and fmt != JSON_FORMAT:
-        raise RuntimeError(f'该文件不是本软件导出的讲稿（format={fmt}）')
+        raise RuntimeError('该文件不是本软件导出的 JSON 讲稿，请选择对应的讲稿文件。')
 
     mark = str(payload.get('mark', '') or '')
     pages = payload.get('pages')
@@ -231,7 +231,7 @@ def parse_json(path: Path) -> ScriptData:
     if not notes:
         raise RuntimeError('JSON 中没有可用的讲稿内容')
 
-    report.insert(0, f'按 JSON 解析，共 {len(notes)} 页')
+    report.insert(0, f'已导入 {len(notes)} 页讲稿')
     return ScriptData(
         notes=notes,
         source_name=str(payload.get('source_name', '') or Path(path).stem),

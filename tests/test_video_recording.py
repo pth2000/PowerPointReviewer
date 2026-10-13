@@ -341,6 +341,10 @@ class QtRecordingTests(unittest.TestCase):
             slide_count = 1
             slide_size = QSizeF(720, 540)
             restored = False
+            hwnd = 123
+
+            def _verify_window(self):
+                pass
 
             def matches_source(self, source):
                 return True
@@ -373,7 +377,8 @@ class QtRecordingTests(unittest.TestCase):
         self.assertTrue(dialog.wait_spin.isEnabled())
         dialog.wait_checkbox.setChecked(False)
         dialog.finished.connect(self.loop.quit)
-        with patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName',
+        with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]), \
+             patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName',
                    return_value=(str(destination), 'MP4 视频 (*.mp4)')):
             with patch('app.video_recording.QWindowCapture.start', capture):
                 QTimer.singleShot(0, dialog.start)

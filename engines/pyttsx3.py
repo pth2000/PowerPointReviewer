@@ -44,4 +44,4 @@ def save(text: str, path: str, *, voices: list, rate: int = 200,
         engine.stop()
         del engine
     except Exception as e:
-        raise RuntimeError(f'本地引擎保存失败：{e}') from e
+        raise RuntimeError(f'系统语音生成失败：{e}') from e

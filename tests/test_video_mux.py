@@ -1,6 +1,7 @@
 """实际录制、封装、播放字幕及导出失败/取消保护验证。"""
 
 from array import array
+from contextlib import contextmanager
 import hashlib
 from pathlib import Path
 import tempfile
@@ -39,6 +40,8 @@ class Presentation:
     def advance(self, page, previous): pass
     def verify(self, page): pass
     def restore(self): pass
+    hwnd = 123
+    def _verify_window(self): pass
 
 
 class VideoMuxTests(unittest.TestCase):
@@ -190,13 +193,18 @@ class VideoMuxTests(unittest.TestCase):
         settings = AppSettings()
         settings.set('video_recording', VideoRecordingOptions(1280, 720, container=container,
                                                               embed_subtitles=subtitles).to_dict())
-        with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[Presentation()]):
+        presentation = Presentation()
+        with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]):
             dialog = VideoRecordingDialog([{'page': 1, 'text': '字幕内容'}], [self.wav],
                                           ctx=SimpleNamespace(app_settings=settings, config=Mock()))
         def capture(_capture): dialog.recording._capture_frame(QVideoFrame(self.image))
-        return dialog, patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName',
-                             return_value=(str(destination), f'{container.upper()} 视频 (*.{container})')), \
-               patch('app.video_recording.QWindowCapture.start', capture)
+        @contextmanager
+        def save_and_refresh():
+            with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]), \
+                 patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName',
+                       return_value=(str(destination), f'{container.upper()} 视频 (*.{container})')):
+                yield
+        return dialog, save_and_refresh(), patch('app.video_recording.QWindowCapture.start', capture)
 
     def test_dialog_saves_subtitles_and_cleans_staging_files(self):
         destination = self.root / '最终视频.mkv'

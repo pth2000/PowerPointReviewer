@@ -1,6 +1,8 @@
 """提供 AI 讲稿处理以及文档、字幕、音频和工程包导出。"""
 
 import json
+import re
+from itertools import count
 from pathlib import Path
 import sys
 
@@ -22,6 +24,7 @@ from app.app_context import AppContext
 from app.widget_state import set_enabled
 from toolsInterface import Ui_toolsInterface
 from ui.dialogs.rewrite_dialog import RewriteDialog
+from engines.defs import ENGINE_DEFS
 
 
 class ToolsInterface(QWidget, Ui_toolsInterface):
@@ -37,6 +40,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         self.processing_cards = []
         self.export_cards = []
         self.build_layout()
+        self.reviewer_page.presentation_state_changed.connect(self.refresh_state)
         self.refresh_state()
 
     # 页面装配
@@ -79,6 +83,10 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         for index, (text, slot) in enumerate(controls):
             factory = PrimaryPushButton if (primary_first and index == 0) else PushButton
             button = factory(text, card)
+            button.setProperty('requires_ppt', slot in (self.write_to_ppt, self.record_video, self.compose_video))
+            button.setProperty('requires_audio', slot in (
+                self.export_project_package, self.write_to_srt, self.export_audio_files,
+                self.export_merged_audio, self.record_video, self.compose_video))
             button.clicked.connect(slot)
             button.setMinimumSize(QSize(button_width, 33))
             button.setMaximumSize(QSize(button_width, 16777215))
@@ -95,11 +103,11 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
         self.processing_cards.append(self.add_card(
             'AI 优化',
-            '借助大语言模型逐页改写讲稿',
+            '按所选风格逐页优化讲稿',
             [('前往优化', self.open_rewrite_dialog)],
             primary_first=True,
             help_text='支持 OpenAI 兼容接口，例如 DeepSeek 或本地部署的 Ollama。'
-                      '首次使用需在「接口配置」中填写服务地址与模型名称。改写结果经确认后才会写回讲稿。',
+                      '首次使用需在“接口配置”中填写服务地址与模型名称。改写结果经确认后才会写回讲稿。',
         ))
 
         self.add_section('导出')
@@ -118,9 +126,9 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
         self.export_cards.append(self.add_card(
             '工程包',
-            '将讲稿、音频与配置打包为单个文件',
+            '打包讲稿、音频与配置',
             [('导出工程包', self.export_project_package)],
-            help_text='包含讲稿与已生成的音频，在其他设备导入后即可播放。',
+            help_text='包含讲稿与已生成的音频，在其他设备导入后即可播放。PPT 文稿可在“历史记录列表”中关联。',
         ))
 
         self.export_cards.append(self.add_card(
@@ -157,10 +165,17 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
     def refresh_state(self):
         """按讲稿是否就绪更新各操作按钮。"""
         imported = bool(self.reviewer_page.notes)
+        linked = self.reviewer_page.has_presentation()
+        audio_ready = self.audio_ready()
         for card in self.processing_cards + self.export_cards:
             # 仅禁用操作按钮，保留卡片说明的正常对比度。
             for button in card.findChildren(PushButton):
-                set_enabled(button, imported)
+                requires_ppt = bool(button.property('requires_ppt'))
+                requires_audio = bool(button.property('requires_audio'))
+                ready = audio_ready if requires_audio else True
+                set_enabled(button, imported and not self.reviewer_page.is_busy() and ready and (not requires_ppt or linked))
+                if requires_ppt:
+                    button.setToolTip('在“历史记录列表”中关联 PPT 后可使用' if imported and not linked else '')
 
     # 讲稿处理
 
@@ -207,6 +222,8 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             return
         if not self.require_notes() or not self.require_idle() or not self.require_durations():
             return
+        if not self.require_presentation():
+            return
         page = self.reviewer_page
         if len(page.media_list) != len(page.notes_list):
             self.create_warning_info_bar('音频尚未就绪', '请先完成全部讲稿的语音生成')
@@ -214,12 +231,12 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         from ui.dialogs.video_recording_dialog import VideoRecordingDialog
 
         page.stop_audio()
+        page.release_playback_show()
         self.ctx.hotkeys.clear()
         self.ctx.slideshow_watcher.stop()
         try:
             dialog = VideoRecordingDialog(page.notes_list, page.media_list,
-                                          page.note_file_path, self, ctx=self.ctx,
-                                          initial_mode=mode)
+                                          page.presentation_path, self, ctx=self.ctx, initial_mode=mode)
             dialog.exec()
         except Exception as exc:
             self.create_error_info_bar('无法导出视频', str(exc))
@@ -244,10 +261,48 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
     def require_durations(self) -> bool:
         """检查所有讲稿段是否已有对应的时长数据。"""
         page = self.reviewer_page
-        if not page.notes_list or len(page.notes_duration_list) != len(page.notes_list):
+        if not self.audio_ready() or len(page.notes_duration_list) != len(page.notes_list):
             self.create_warning_info_bar('音频尚未就绪', '完成语音转换后可导出')
             return False
         return True
+
+    def audio_ready(self):
+        page = self.reviewer_page
+        try:
+            return (page.is_import and not page.is_busy() and bool(page.notes_list)
+                    and len(page.media_list) == len(page.notes_list)
+                    and all(Path(path).is_file() and Path(path).stat().st_size > 0 for path in page.media_list))
+        except OSError:
+            return False
+
+    def require_audio(self):
+        if self.audio_ready():
+            return True
+        self.create_warning_info_bar('音频尚未就绪', '请先完成讲稿配音，再导出')
+        return False
+
+    def audio_metadata(self):
+        page = self.reviewer_page
+        profile = page.generation_profile
+        if profile is None:
+            profile = self.ctx.tts_engine.get_generation_profile()
+            speaker = self.ctx.tts_engine.get_selected_voice_name()
+        else:
+            speaker = page.generation_speaker
+        engine = next((item['name'] for item in ENGINE_DEFS if item['id'] == profile.get('mode')), '')
+        return profile, speaker, engine
+
+    def export_name(self):
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(self.reviewer_page.note_file_name))
+        return name.rstrip(' .') or '讲稿'
+
+    def require_presentation(self) -> bool:
+        self.reviewer_page.refresh_presentation_state()
+        if self.reviewer_page.has_presentation():
+            return True
+        self.refresh_state()
+        self.create_warning_info_bar('受限模式', '请在“历史记录列表”中关联 PPT 后再使用此功能')
+        return False
 
     # 导出目录
 
@@ -269,15 +324,17 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         """为已存在的目标文件追加递增序号，避免静默覆盖。"""
         if not path.exists():
             return path
-        for index in range(2, 1000):
+        for index in count(2):
             candidate = path.with_name(f'{path.stem}_{index}{path.suffix}')
             if not candidate.exists():
                 return candidate
-        return path
 
     def get_ppt_path(self):
         """选择待回写的 PowerPoint，优先定位到当前源文件。"""
         current = self.reviewer_page.note_file_path
+        associated = self.reviewer_page.presentation_path
+        if associated and associated.is_file() and associated.suffix.lower() == '.pptx':
+            return associated
         start_path = str(current) if current and current.suffix.lower() == '.pptx' else ''
         selected_files = QFileDialog.getOpenFileName(
             self, '选择要写入备注的 PowerPoint 文件', start_path, 'PowerPoint Files (*.pptx)')
@@ -287,7 +344,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
     def write_to_ppt(self):
         """将当前逐页讲稿回写到指定 PowerPoint 的备注。"""
-        if not self.require_notes():
+        if not self.require_notes() or not self.require_idle() or not self.require_presentation():
             return
         notes_dict = self.reviewer_page.notes
 
@@ -296,14 +353,15 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             self.create_warning_info_bar('已取消', '未选择 PowerPoint 文件')
             return
 
-        dir_path = self.choose_export_dir()
-        if not dir_path:
-            return
-
         try:
             from pptx import Presentation
 
             ppt = Presentation(str(ppt_path))
+            if max(notes_dict, default=1) > len(ppt.slides):
+                self.create_warning_info_bar(
+                    '讲稿页码与 PPT 不匹配',
+                    f'讲稿包含第 {max(notes_dict)} 页，但 PPT 只有 {len(ppt.slides)} 页。请先更新讲稿或选择对应的 PPT。')
+                return
             for slide_number, slide in enumerate(ppt.slides, start=1):
                 if slide_number in notes_dict:
                     slide.notes_slide.notes_text_frame.text = notes_dict[slide_number]
@@ -312,6 +370,9 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             self.create_error_info_bar('PowerPoint 读取错误', f'详情：{e}')
             return
 
+        dir_path = self.choose_export_dir()
+        if not dir_path:
+            return
         output_path = self.unique_path(dir_path / f'{ppt_path.stem}_NEW.pptx')
         try:
             ppt.save(str(output_path))
@@ -324,7 +385,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
     def write_to_word(self):
         """导出可修改后稳定回导的 Word 表格讲稿。"""
-        if not self.require_notes():
+        if not self.require_notes() or not self.require_idle():
             return
 
         dir_path = self.choose_export_dir()
@@ -332,7 +393,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             return
 
         page = self.reviewer_page
-        file_path = self.unique_path(dir_path / f'{page.note_file_name}_Notes.docx')
+        file_path = self.unique_path(dir_path / f'{self.export_name()}_Notes.docx')
         try:
             exporters.write_docx(
                 file_path, page.notes_list, page.notes_duration_list, mark=page.mark,
@@ -346,7 +407,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
     def write_to_markdown(self):
         """导出适合阅读和打印的 Markdown 讲稿。"""
-        if not self.require_notes():
+        if not self.require_notes() or not self.require_idle():
             return
 
         dir_path = self.choose_export_dir()
@@ -354,17 +415,17 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             return
 
         page = self.reviewer_page
-        engine_def = self.ctx.tts_engine.get_current_engine_definition()
+        _profile, speaker, engine_name = self.audio_metadata()
         content = exporters.build_markdown(
             page.notes_list,
             page.notes_duration_list,
             title=page.note_file_name or '演讲稿',
             mark=page.mark,
-            engine_name=str(engine_def.get('name', '')),
-            speaker=self.ctx.tts_engine.get_selected_voice_name(),
+            engine_name=engine_name,
+            speaker=speaker,
         )
 
-        file_path = self.unique_path(dir_path / f'{page.note_file_name}_Notes.md')
+        file_path = self.unique_path(dir_path / f'{self.export_name()}_Notes.md')
         try:
             file_path.write_text(content, encoding='utf-8')
         except Exception as e:
@@ -376,7 +437,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
     def write_to_json(self):
         """导出保留分页和分段结构的可回导 JSON。"""
-        if not self.require_notes():
+        if not self.require_notes() or not self.require_idle():
             return
 
         dir_path = self.choose_export_dir()
@@ -384,15 +445,15 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             return
 
         page = self.reviewer_page
-        engine_def = self.ctx.tts_engine.get_current_engine_definition()
+        _profile, speaker, engine_name = self.audio_metadata()
         payload = exporters.build_script_json(
             page.notes_list, page.notes_duration_list,
             source_name=page.note_file_name, mark=page.mark,
-            engine_name=str(engine_def.get('name', '')),
-            speaker=self.ctx.tts_engine.get_selected_voice_name(),
+            engine_name=engine_name,
+            speaker=speaker,
         )
 
-        file_path = self.unique_path(dir_path / f'{page.note_file_name}_Notes.json')
+        file_path = self.unique_path(dir_path / f'{self.export_name()}_Notes.json')
         try:
             with file_path.open('w', encoding='utf-8') as json_file:
                 json.dump(payload, json_file, ensure_ascii=False, indent=2)
@@ -406,7 +467,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
     def export_project_package(self):
         """将讲稿、音频和生成配置打包为可跨设备恢复的工程包。"""
         page = self.reviewer_page
-        if not self.require_notes():
+        if not self.require_notes() or not self.require_idle() or not self.require_audio():
             return
         if not page.media_list:
             self.create_warning_info_bar('音频尚未就绪', '完成语音转换后可导出工程包')
@@ -417,11 +478,8 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             page.note_cache_keys, page.note_cache_exts, page.media_list)
         audio_size = project_package.estimate_size(items)
 
-        box = MessageBox(
-            '导出工程包',
-            f'将打包 {len(items)} 条语句及对应音频，约 {audio_cache.format_size(audio_size)}',
-            self,
-        )
+        box = MessageBox('导出工程包',
+                         f'打包 {len(items)} 条语句及对应音频，约 {audio_cache.format_size(audio_size)}', self)
         box.yesButton.setText('选择保存位置')
         box.cancelButton.setText('取消')
         if not box.exec():
@@ -432,14 +490,17 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             return
 
         target = self.unique_path(
-            dir_path / f'{page.note_file_name}{project_package.PACKAGE_SUFFIX}')
+            dir_path / f'{self.export_name()}{project_package.PACKAGE_SUFFIX}')
         try:
+            profile, speaker, _engine_name = self.audio_metadata()
             info = project_package.export_package(
                 target, items=items, notes=page.notes, mark=page.mark,
                 source_name=page.note_file_name,
-                generation_profile=self.ctx.tts_engine.get_generation_profile(),
-                speaker=self.ctx.tts_engine.get_selected_voice_name(),
+                generation_profile=profile,
+                speaker=speaker,
                 app_version=self.ctx.version,
+                presentation=page.presentation_link,
+                presentation_path=page.presentation_path,
             )
         except Exception as e:
             print(e)
@@ -465,10 +526,10 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         page = self.reviewer_page
         content = exporters.build_srt(page.notes_list, page.notes_duration_list)
         if not content.strip():
-            self.create_warning_info_bar('没有可导出的字幕', '当前讲稿没有有效的语句时长')
+            self.create_warning_info_bar('没有可导出的字幕', '请先生成讲稿配音，再导出字幕')
             return
 
-        file_path = self.unique_path(dir_path / f'{page.note_file_name}_Notes.srt')
+        file_path = self.unique_path(dir_path / f'{self.export_name()}_Notes.srt')
         try:
             file_path.write_text(content, encoding='utf-8')
         except Exception as e:
@@ -481,15 +542,14 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
     def export_audio_files(self):
         """将每条讲稿音频复制为带顺序和页码的独立文件。"""
         page = self.reviewer_page
-        if not page.media_list:
-            self.create_warning_info_bar('音频尚未就绪', '完成语音转换后可导出')
+        if not self.require_idle() or not self.require_audio():
             return
 
         dir_path = self.choose_export_dir()
         if not dir_path:
             return
 
-        target_dir = dir_path / f'{page.note_file_name}_Audio'
+        target_dir = self.unique_path(dir_path / f'{self.export_name()}_Audio')
         try:
             exported = exporters.export_audio_files(page.media_list, page.notes_list, target_dir)
         except Exception as e:
@@ -502,8 +562,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
     def export_merged_audio(self):
         """将格式兼容的全部讲稿音频合并为单个文件。"""
         page = self.reviewer_page
-        if not page.media_list:
-            self.create_warning_info_bar('音频尚未就绪', '完成语音转换后可导出')
+        if not self.require_idle() or not self.require_audio():
             return
 
         dir_path = self.choose_export_dir()
@@ -511,7 +570,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             return
 
         suffix = Path(page.media_list[0]).suffix.lower() or '.wav'
-        file_path = self.unique_path(dir_path / f'{page.note_file_name}_Full{suffix}')
+        file_path = self.unique_path(dir_path / f'{self.export_name()}_Full{suffix}')
         try:
             exporters.merge_audio(page.media_list, file_path)
         except Exception as e:

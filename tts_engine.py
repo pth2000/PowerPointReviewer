@@ -1,5 +1,6 @@
 ﻿"""统一调度 TTS 引擎，并维护按引擎隔离的配置、音色选择和缓存身份。"""
 
+import copy
 import time
 import traceback
 import hashlib
@@ -45,6 +46,13 @@ class TTSEngine:
             self._voice_index_map[eid] = 0
 
     # 引擎选择
+
+    def snapshot(self):
+        """隔离一次生成使用的配置，界面修改不影响正在生成的音频。"""
+        engine = copy.copy(self)
+        for key in ('_engine_settings', '_voice_index_map', '_voice_name_map', '_qwentts_service_info'):
+            setattr(engine, key, copy.deepcopy(getattr(self, key)))
+        return engine
 
     def get_engine_names(self) -> list[str]:
         """返回注册表顺序下的引擎显示名称。"""
@@ -393,7 +401,7 @@ class TTSEngine:
         return 'wav'
 
     def create_qwen_clone_voice(self, reference_audio_path: str, *, preferred_name: Optional[str] = None) -> str:
-        """创建千问复刻音色，将返回的 ID 写入引擎设置。"""
+        """创建千问复刻音色，返回 ID 供用户明确选择使用。"""
         settings = self._engine_settings.get('qwen_clone', {})
         model = str(settings.get('model') or self.option_default('qwen_clone', 'model'))
         region = str(settings.get('region', 'cn-beijing'))
@@ -410,7 +418,6 @@ class TTSEngine:
             region=region,
             workspace_id=str(settings.get('workspace_id', '')),
         )
-        self._engine_settings['qwen_clone']['voice'] = voice
         return voice
 
     def delete_qwen_clone_voice(self, voice: str) -> None:
@@ -469,7 +476,7 @@ class TTSEngine:
         if mode == 'edge':
             from app.audio_decode import decode_edge_wav
             if target.suffix.lower() != '.wav':
-                raise RuntimeError('Edge 启用留白后需要 WAV 输出，请使用 .wav 文件路径。')
+                raise RuntimeError('无法生成带留白的配音，请关闭留白设置后重试。')
             with tempfile.TemporaryDirectory(prefix='ppt-edge-audio-') as folder:
                 source = Path(folder) / 'source.mp3'
                 self._synthesize_file_by_mode(mode, text, str(source), rate, volume, voice_index, **kwargs)
@@ -582,7 +589,7 @@ class TTSEngine:
                 if attempt < retry_times and retry_delay > 0:
                     time.sleep(retry_delay * (attempt + 1))
 
-        raise RuntimeError(f'语音保存失败，已重试 {retry_times} 次：{last_error}') from last_error
+        raise RuntimeError(f'语音生成失败：{last_error}') from last_error
 
     def save_file(self, text: str, path: str,
                   rate=None, volume=None, voice_index=None, **kwargs) -> None:

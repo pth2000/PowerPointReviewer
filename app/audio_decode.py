@@ -43,7 +43,7 @@ def decode_edge_wav(path):
         try:
             buffer = decoder.read()
             if not buffer.isValid() or buffer.format() != output_format:
-                raise RuntimeError('Qt 未返回所需的 PCM 音频格式。')
+                raise RuntimeError('无法处理这段配音，请重新生成后重试。')
             pcm.extend(bytes(buffer.constData()))
         except Exception as exc:
             fail(str(exc))
@@ -63,9 +63,9 @@ def decode_edge_wav(path):
         if not errors:
             loop.exec()
         if errors:
-            raise RuntimeError('Edge 音频解码失败：' + errors[0])
+            raise RuntimeError('Edge 配音处理失败：' + errors[0])
         if not pcm or len(pcm) % 2:
-            raise RuntimeError('Edge 音频解码失败：未返回完整音频。')
+            raise RuntimeError('Edge 配音不完整，请重新生成后重试。')
         output = BytesIO()
         with wave.open(output, 'wb') as writer:
             writer.setnchannels(1)

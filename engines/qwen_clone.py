@@ -82,7 +82,7 @@ def _get_api_key(api_key: str) -> str:
     if not key:
         key = os.getenv('DASHSCOPE_API_KEY', '').strip()
     if not key:
-        raise RuntimeError('未配置 API Key，请在设置页填写或设置环境变量 DASHSCOPE_API_KEY')
+        raise RuntimeError('请先在设置页填写阿里云百炼 API Key。')
     return key
 
 
@@ -246,7 +246,7 @@ def list_voices(*, api_key: str = '', region: str = 'cn-beijing', page_size: int
     try:
         data = resp.json()
     except Exception as e:
-        raise RuntimeError(f'查询音色响应解析失败: {e}') from e
+        raise RuntimeError('无法读取音色列表，请稍后刷新重试。') from e
 
     items = _parse_voice_list(data)
     wanted = str(target_model or '').strip()
@@ -320,10 +320,10 @@ def _create_voice_audio_tts(*, reference_audio_path, target_model, preferred_nam
         output = resp.json().get('output', {})
         voice = str(output.get('voice_id') or output.get('voice') or '').strip()
     except Exception as e:
-        raise RuntimeError(f'创建音色响应解析失败: {e}') from e
+        raise RuntimeError('无法读取新音色的信息，请稍后刷新音色列表。') from e
 
     if not voice:
-        raise RuntimeError('创建音色失败：响应中未返回音色 ID')
+        raise RuntimeError('未能创建可用音色，请检查参考音频后重试。')
     return voice
 
 
@@ -390,10 +390,10 @@ def create_voice(*,
         output = data.get('output', {}) if isinstance(data, dict) else {}
         voice = str(output.get('voice', '')).strip()
     except Exception as e:
-        raise RuntimeError(f'创建音色响应解析失败: {e}') from e
+        raise RuntimeError('无法读取新音色的信息，请稍后刷新音色列表。') from e
 
     if not voice:
-        raise RuntimeError('创建音色失败：响应中未返回 voice')
+        raise RuntimeError('未能创建可用音色，请检查参考音频后重试。')
     return voice
 
 
@@ -405,7 +405,7 @@ def delete_voice(*, voice: str, api_key: str = '', region: str = 'cn-beijing',
     key = _get_api_key(api_key)
     target_voice = (voice or '').strip()
     if not target_voice:
-        raise RuntimeError('删除音色失败：voice 不能为空')
+        raise RuntimeError('请先选择要删除的音色。')
 
     url = f"{_service_base(target_model, region, workspace_id)}/services/audio/tts/customization"
     if is_audio_tts(target_model):
@@ -458,7 +458,7 @@ def _save_audio_tts(text: str, path: str, *, model: str, voice: str, workspace_i
     import requests
 
     if region != 'cn-beijing':
-        raise RuntimeError('Qwen-Audio-TTS 非实时合成仅支持北京地域，请选择 cn-beijing 并使用对应的 API Key。')
+        raise RuntimeError('当前模型需要使用北京地域，请选择 cn-beijing 并填写该地域的 API Key。')
     url = f'{_maas_base(workspace_id, region)}/services/audio/tts/SpeechSynthesizer'
     body_input: dict[str, Any] = {
         'text': text,
@@ -488,7 +488,7 @@ def _save_audio_tts(text: str, path: str, *, model: str, voice: str, workspace_i
     try:
         payload = resp.json()
     except Exception as e:
-        raise RuntimeError(f'语音合成响应解析失败: {e}') from e
+        raise RuntimeError('无法读取生成的配音，请稍后重试。') from e
 
     audio_url = _extract_audio_url(payload)
     _download_audio(audio_url, path, request_timeout=request_timeout)

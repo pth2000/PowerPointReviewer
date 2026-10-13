@@ -5,11 +5,14 @@
 """
 
 import json
+import re
+import shutil
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from app import paths
+from app import paths, presentation_link
 
 PACKAGE_SUFFIX = '.pprpkg'
 PACKAGE_FILTER = f'讲稿工程包 (*{PACKAGE_SUFFIX})'
@@ -67,10 +70,16 @@ def estimate_size(items) -> int:
 
 def export_package(target_path, *, items, notes, mark, source_name,
                    generation_profile, speaker, app_version='',
-                   include_audio: bool = True) -> dict:
+                   include_audio: bool = True, presentation=None,
+                   presentation_path=None) -> dict:
     """写出工程包，并返回音频数量、缺失项和最终文件大小。"""
     target = Path(target_path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    link = dict(presentation or {})
+    if presentation_path and Path(presentation_path).is_file():
+        link = presentation_link.describe(presentation_path)
+    # 跨设备传递内容身份，不将原设备的绝对路径写入工程包。
+    portable_link = {key: link[key] for key in ('name', 'sha256', 'slide_count') if key in link}
 
     manifest = {
         'format': PACKAGE_FORMAT,
@@ -80,10 +89,16 @@ def export_package(target_path, *, items, notes, mark, source_name,
         'source_name': source_name,
         'mark': mark,
         'speaker': speaker,
-        'generation_profile': generation_profile or {},
+        'generation_profile': {
+            key: ({name: value for name, value in options.items()
+                   if name not in ('api_key', 'access_token', 'token', 'password', 'authorization')}
+                  if key == 'options' and isinstance(options, dict) else options)
+            for key, options in (generation_profile or {}).items()
+        },
         'has_audio': bool(include_audio),
         'notes': {str(k): v for k, v in dict(notes or {}).items()},
         'items': [{k: v for k, v in item.items() if k != 'media'} for item in items],
+        'presentation': portable_link,
     }
 
     packed = 0
@@ -119,14 +134,14 @@ def read_manifest(package_path) -> dict:
         with zipfile.ZipFile(package_path) as archive:
             raw = archive.read(MANIFEST_NAME).decode('utf-8')
     except KeyError as e:
-        raise RuntimeError('工程包缺少清单文件，可能已损坏') from e
+        raise RuntimeError('工程包内容不完整，请重新导出后再导入。') from e
     except zipfile.BadZipFile as e:
         raise RuntimeError('文件不是有效的工程包') from e
 
     try:
         manifest = json.loads(raw)
     except Exception as e:
-        raise RuntimeError(f'工程包清单解析失败：{e}') from e
+        raise RuntimeError('无法读取工程包内容，请重新导出后再导入。') from e
 
     if manifest.get('format') != PACKAGE_FORMAT:
         raise RuntimeError('该文件不是本软件导出的工程包')
@@ -148,7 +163,46 @@ def import_package(package_path) -> dict:
 
     restored = 0
     skipped = 0
+    link = dict(manifest.get('presentation') or {})
+    # 工程包的本地路径只能由接收端重建，忽略外部清单中的路径。
+    link.pop('path', None)
     with zipfile.ZipFile(package_path) as archive:
+        entry = link.pop('entry', None)
+        if entry:
+            # 仅兼容此前导出的包；新工程包只携带文稿身份信息。
+            if entry not in ('presentation/document.pptx', 'presentation/document.ppt'):
+                raise ValueError('工程包中的 PPT 无法读取，请重新导出工程包。')
+            expected = str(link.get('sha256', ''))
+            if not re.fullmatch(r'[a-f0-9]{64}', expected):
+                raise ValueError('工程包中的 PPT 信息不完整，请重新导出工程包。')
+            directory = paths.PRESENTATION_DIR / expected
+            directory.mkdir(parents=True, exist_ok=True)
+            suffix = Path(entry).suffix
+            name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(link.get('name') or 'presentation'))
+            name = name.rstrip(' .') or 'presentation'
+            target = directory / (Path(name).stem[:100] + suffix)
+            with tempfile.NamedTemporaryFile(dir=directory, suffix='.tmp', delete=False) as stream:
+                temp = Path(stream.name)
+                try:
+                    with archive.open(entry) as source:
+                        shutil.copyfileobj(source, stream)
+                except Exception:
+                    stream.close()
+                    temp.unlink(missing_ok=True)
+                    raise
+            try:
+                if presentation_link.fingerprint(temp) != expected:
+                    raise ValueError('工程包中的 PPT 文件已损坏，校验未通过。')
+                # 同一工程再次导入时复用已恢复的文稿，兼容它正被演示软件打开。
+                if not target.is_file() or presentation_link.fingerprint(target) != expected:
+                    temp.replace(target)
+            finally:
+                temp.unlink(missing_ok=True)
+            link.update(path=str(target.resolve()), name=target.name)
+        elif link.get('sha256'):
+            matched = presentation_link.resolve(link, presentation_link.nearby_files(Path(package_path).parent))
+            if matched:
+                link = presentation_link.describe(matched)
         for name in archive.namelist():
             if not name.startswith(f'{AUDIO_DIR}/') or name.endswith('/'):
                 continue
@@ -169,10 +223,11 @@ def import_package(package_path) -> dict:
 
     record = {
         'version': 1,
-        'session_id': datetime.now().strftime('%Y%m%d_%H%M%S'),
+        'session_id': datetime.now().strftime('%Y%m%d_%H%M%S_%f'),
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'source_file': '',
         'source_name': str(manifest.get('source_name', '') or '导入的工程包'),
+        'presentation': link,
         'mark': str(manifest.get('mark', '') or '●'),
         'speaker': str(manifest.get('speaker', '')),
         'generation_profile': manifest.get('generation_profile', {}),

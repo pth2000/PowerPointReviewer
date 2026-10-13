@@ -5,16 +5,18 @@ import webbrowser
 from functools import partial
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QFont
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout, QWidget
 from qfluentwidgets import (
+    BodyLabel,
     CaptionLabel,
     CardWidget,
     ComboBox,
     DoubleSpinBox,
     FluentIcon,
     IconWidget,
+    HorizontalSeparator,
     InfoBadge,
     InfoLevel,
     InfoBar,
@@ -52,6 +54,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
     regenerate_requested = Signal()
     hotkeys_changed = Signal()
     page_turn_mode_changed = Signal()
+    sync_playback_changed = Signal(bool)
+    slideshow_preferences_changed = Signal()
 
     # 这些字段与语音设置一起参加脏状态比较；其它偏好由其所属页面即时保存。
     OWNED_APP_KEYS = ('preview_text',)
@@ -95,6 +99,10 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self._prompting_unsaved = False
         # 由主窗口注入，避免设置页直接依赖主页对象。
         self.can_regenerate_check = lambda: False
+        self.sync_playback_available_check = lambda: False
+        self.sync_playback_unavailable_hint = lambda: '请先导入讲稿'
+        self.page_turn_source = lambda: None
+        self.page_turn_description = lambda: slideshow.describe(self.page_turn_source())
 
         # 语音设置显式保存；保存栏同时承担脏状态提示。
         self.saveCaptionLabel.setText('将修改应用到之后的语音合成')
@@ -146,6 +154,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.ctx.playback_bus.stop_requested.connect(self.on_stop_requested)
 
         self.preview_thread = None
+        self._preview_requested = False
         self.previewButton.clicked.connect(self.preview_audio)
 
         # 全部控件渲染后再记录基线，避免将初值规范化误判为用户修改。
@@ -230,6 +239,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def hideEvent(self, event):
         """用户切离设置页时安排未保存更改确认。"""
         super().hideEvent(event)
+        if hasattr(self, 'page_turn_status_timer'):
+            self.page_turn_status_timer.stop()
         # 最小化和关窗也会触发 hideEvent；关窗路径由主窗口单独处理。
         if event.spontaneous() or not self.window().isVisible():
             return
@@ -240,8 +251,10 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
     def prompt_unsaved_changes(self, allow_regenerate: bool = True):
         """让用户保存或放弃更改，并按需衔接音频重新生成。"""
-        if self._prompting_unsaved or not self.is_dirty():
-            return
+        if self._prompting_unsaved:
+            return False
+        if not self.is_dirty():
+            return True
 
         self._prompting_unsaved = True
         try:
@@ -253,9 +266,10 @@ class SettingInterface(QWidget, Ui_settingInterface):
             box.yesButton.setText('保存')
             box.cancelButton.setText('放弃更改')
             if box.exec():
-                self.save_settings(allow_regenerate=allow_regenerate)
+                return self.save_settings(allow_regenerate=allow_regenerate)
             else:
                 self.discard_changes()
+                return True
         finally:
             self._prompting_unsaved = False
 
@@ -263,10 +277,14 @@ class SettingInterface(QWidget, Ui_settingInterface):
         """响应其它页面的播放请求，停止当前试听。"""
         if requester is self:
             return
+        self._preview_requested = False
         self.preview_player.stop()
 
     def preview_audio(self):
         """使用当前未保存的语音设置异步生成并播放试听。"""
+        if self.preview_thread is not None and self.preview_thread.isRunning():
+            return
+        self._preview_requested = True
         try:
             if self.preview_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
                 self.preview_player.stop()
@@ -279,13 +297,14 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
             text = str(self.ctx.app_settings.get('preview_text')).strip()
             if not text:
+                self._preview_requested = False
                 self.create_warning_info_bar('试听文字为空', '在"试听文字"中填写要朗读的内容')
                 return
             # 试听文件必须与主页扫描的 TEMP_DIR 根目录隔离。
             paths.PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
             self.clean_preview_files()
             preview_ext = self.ctx.tts_engine.get_output_extension()
-            preview_path = paths.PREVIEW_DIR / f'preview_{int(time.time())}.{preview_ext}'
+            preview_path = paths.PREVIEW_DIR / f'preview_{time.time_ns()}.{preview_ext}'
 
             set_enabled(self.previewButton, False)
             self.previewButton.setText('正在生成…')
@@ -293,10 +312,12 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self.preview_thread = PreviewTask(self.ctx.tts_engine, text, str(preview_path), self)
             self.preview_thread.signal_finish.connect(self.on_preview_generated)
             self.preview_thread.signal_error.connect(self.on_preview_error)
+            self.preview_thread.finished.connect(partial(self._preview_finished, self.preview_thread))
             self.preview_thread.finished.connect(self.preview_thread.deleteLater)
             self.preview_thread.start()
 
         except Exception as e:
+            self._preview_requested = False
             print(e)
             self.create_error_info_bar('试听启动失败', f'详情：{e}')
             self.previewButton.setEnabled(True)
@@ -315,15 +336,23 @@ class SettingInterface(QWidget, Ui_settingInterface):
         """恢复按钮状态，并以互斥方式播放新试听音频。"""
         self.previewButton.setEnabled(True)
         self.previewButton.setText('试听')
+        if not self._preview_requested:
+            return
+        self._preview_requested = False
         self.ctx.playback_bus.request_stop(self)
         self.preview_player.setSource(QUrl.fromLocalFile(str(path)))
         self.preview_player.play()
 
     def on_preview_error(self, err_msg):
         """恢复按钮状态并展示试听生成错误。"""
+        self._preview_requested = False
         self.previewButton.setEnabled(True)
         self.previewButton.setText('试听')
         self.create_error_info_bar('试听生成失败', f'详情：{err_msg}')
+
+    def _preview_finished(self, task):
+        if self.preview_thread is task:
+            self.preview_thread = None
 
     def clear_dynamic_option_cards(self):
         """移除当前引擎对应的动态选项和音色卡片。"""
@@ -381,7 +410,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         """创建即时生效的主题模式、主题色和界面字体卡片。"""
         mode_card = self._make_appearance_card(
             '主题模式', '切换界面的浅色或深色外观',
-            help_text='选择「跟随系统」时，随 Windows 的深浅色设置自动切换。')
+            help_text='选择“跟随系统”时，随 Windows 的深浅色设置自动切换。')
         self.theme_mode_combo = ComboBox(mode_card)
         self.theme_mode_combo.setMinimumSize(QSize(180, 33))
         self.theme_mode_combo.setMaximumSize(QSize(180, 33))
@@ -456,6 +485,9 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
     def _set_card_badge(self, card, text: str, level=InfoLevel.INFOAMTION):
         """在卡片标题右侧显示状态标签；说明文字保持静态，状态只体现在标签上。"""
+        state = (text, level)
+        if getattr(card, '_status_badge_state', None) == state:
+            return
         badge = getattr(card, 'status_badge', None)
         if badge is None:
             badge = InfoBadge.make('', card, level=level)
@@ -464,6 +496,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         badge.setText(text)
         badge.setLevel(level)
         badge.setVisible(bool(text))
+        card._status_badge_state = state
 
     def refresh_color_dots(self):
         """刷新主题色按钮，并用描边标记当前颜色。"""
@@ -509,14 +542,161 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def build_persistent_tail(self):
         """构建不随引擎切换重建的固定设置区块。"""
         self.setup_preview_text_card()
+        self.add_section_label('常规', append=True)
+        self.setup_resume_session_card()
         self.add_section_label('放映控制', append=True)
+        self.setup_sync_playback_card()
         self.setup_page_turn_card()
+        self.setup_slideshow_preferences_card()
         self.setup_hotkey_card()
         self.add_section_label('外观', append=True)
         self.setup_appearance_cards()
         self.setup_log_card()
 
     PAGE_TURN_MODES = (('com', '演示软件接口（COM）'), ('foreground', '前台按键'), ('window', '指定窗口'))
+
+    def setup_resume_session_card(self):
+        card = self._make_appearance_card(
+            '继续上次讲稿', '启动时询问是否恢复上次讲稿和播放位置',
+            help_text='恢复后等待手动播放。关闭后仍可在“历史记录列表”中加载讲稿。')
+        self.resume_session_switch = SwitchButton(card)
+        self.resume_session_switch.setOnText('启用')
+        self.resume_session_switch.setOffText('停用')
+        self.resume_session_switch.setChecked(bool(self.ctx.app_settings.get('resume_last_session')))
+        self.resume_session_switch.checkedChanged.connect(self.on_resume_session_changed)
+        card.layout().addWidget(self.resume_session_switch)
+
+    def on_resume_session_changed(self, checked):
+        checked = bool(checked)
+        if checked != bool(self.ctx.app_settings.get('resume_last_session')):
+            self.ctx.app_settings.set('resume_last_session', checked)
+            self.ctx.config.save_later()
+
+    def setup_sync_playback_card(self):
+        card = self._make_appearance_card(
+            '同步翻页', '朗读讲稿时同步控制 PPT 放映',
+            help_text='与主页的同步翻页开关保持一致，调整后立即生效。'
+                      '未关联 PPT 时，请先在“历史记录列表”中关联文稿。')
+        self.sync_playback_card = card
+        self.sync_playback_switch = SwitchButton(card)
+        self.sync_playback_switch.setOnText('启用')
+        self.sync_playback_switch.setOffText('停用')
+        self.sync_playback_switch.setChecked(bool(self.ctx.app_settings.get('scroll_enabled')))
+        self.sync_playback_switch.checkedChanged.connect(self.on_sync_playback_changed)
+        card.layout().addWidget(self.sync_playback_switch)
+        self.refresh_sync_playback_state()
+
+    def on_sync_playback_changed(self, checked):
+        if not self.sync_playback_available_check():
+            self.refresh_sync_playback_state()
+            return
+        checked = bool(checked)
+        if checked != bool(self.ctx.app_settings.get('scroll_enabled')):
+            self.ctx.app_settings.set('scroll_enabled', checked)
+            self.ctx.config.save_later()
+        self.sync_playback_changed.emit(checked)
+
+    def refresh_sync_playback_state(self):
+        control = self.sync_playback_switch
+        control.blockSignals(True)
+        control.setChecked(bool(self.ctx.app_settings.get('scroll_enabled')))
+        control.blockSignals(False)
+        available = bool(self.sync_playback_available_check())
+        set_enabled(control, available)
+        control.setToolTip(self.sync_playback_unavailable_hint() if not available else '')
+        if hasattr(self, 'slideshow_preference_switches'):
+            self.refresh_slideshow_preferences_state()
+
+    SLIDESHOW_PREFERENCES = (
+        ('slideshow_auto_start', '自动开始放映',
+         '点击播放时，自动打开对应 PPT 并开始放映',
+         '关闭后，请先在 PowerPoint 或 WPS 中手动开始放映。已有对应放映时直接连接。'),
+        ('slideshow_follow_page', '朗读跟随 PPT 翻页',
+         '在 PPT 中手动翻页时，朗读切换到该页',
+         '正在朗读时，从新页第一段开始朗读；停止时只调整讲稿位置。'),
+        ('slideshow_sync_navigation', '讲稿定位时同步放映',
+         '开始播放、跳转或重置讲稿时，同步调整放映位置',
+         '也适用于上一段、下一段和重播。关闭后，这些操作只调整讲稿；自动翻页仍按讲稿推进。'),
+        ('slideshow_stop_on_exit', '退出放映时停止朗读',
+         '关闭 PPT 放映后，同时停止配音',
+         '关闭后，退出放映会继续播放剩余配音，本次播放不再翻页。'),
+    )
+
+    def setup_slideshow_preferences_card(self):
+        card = CardWidget(self.importWidget)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 18, 20, 6)
+        layout.setSpacing(0)
+        heading = theme.make_card_title('放映联动', card)
+        font = heading.font()
+        font.setPointSize(theme.CARD_TITLE_POINT_SIZE + 1)
+        heading.setFont(font)
+        layout.addWidget(heading)
+        layout.addSpacing(8)
+        self.slideshow_preferences_card = card
+        self.slideshow_preference_switches = {}
+        self.slideshow_preference_labels = {}
+        for key, title, caption, help_text in self.SLIDESHOW_PREFERENCES:
+            if self.slideshow_preference_switches:
+                layout.addWidget(HorizontalSeparator(card))
+            item = QWidget(card)
+            row = QHBoxLayout(item)
+            row.setContentsMargins(0, 12, 0, 12)
+            row.setSpacing(16)
+            info = QVBoxLayout()
+            info.setSpacing(3)
+            title_label = BodyLabel(title, item)
+            font = title_label.font()
+            font.setPointSize(theme.CARD_TITLE_POINT_SIZE)
+            font.setWeight(QFont.Weight.Normal)
+            title_label.setFont(font)
+            title_row, _help = theme.make_title_row(title_label, help_text)
+            info.addLayout(title_row)
+            label = CaptionLabel(caption, item)
+            label.setWordWrap(True)
+            info.addWidget(label)
+            self.slideshow_preference_labels[key] = (title_label, label)
+            row.addLayout(info, stretch=1)
+            control = SwitchButton(item)
+            control.setOnText('启用')
+            control.setOffText('停用')
+            control.setChecked(bool(self.ctx.app_settings.get(key)))
+            control.checkedChanged.connect(partial(self.on_slideshow_preference_changed, key))
+            self.slideshow_preference_switches[key] = control
+            row.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+            layout.addWidget(item)
+        self.verticalLayout_2.addWidget(card)
+        self.refresh_slideshow_preferences_state()
+
+    def refresh_slideshow_preferences_state(self):
+        com = self.ctx.app_settings.get('page_turn_mode') == 'com'
+        self.slideshow_preferences_card.setVisible(com)
+        available = bool(self.sync_playback_available_check())
+        enabled = com and available and bool(self.ctx.app_settings.get('scroll_enabled'))
+        hint = (self.sync_playback_unavailable_hint() if not available else
+                '请先启用同步翻页' if not enabled else '')
+        for key, control in self.slideshow_preference_switches.items():
+            control.blockSignals(True)
+            control.setChecked(bool(self.ctx.app_settings.get(key)))
+            control.blockSignals(False)
+            set_enabled(control, enabled)
+            control.setToolTip(hint)
+            title, caption = self.slideshow_preference_labels[key]
+            title.setTextColor('#000000' if enabled else '#919191',
+                               '#ffffff' if enabled else '#8a8a8a')
+            caption.setTextColor('#000000' if enabled else '#a5a5a5',
+                                 '#ffffff' if enabled else '#777777')
+
+    def on_slideshow_preference_changed(self, key, checked):
+        if (not self.sync_playback_available_check()
+                or not self.ctx.app_settings.get('scroll_enabled')
+                or self.ctx.app_settings.get('page_turn_mode') != 'com'):
+            self.refresh_slideshow_preferences_state()
+            return
+        if bool(checked) != bool(self.ctx.app_settings.get(key)):
+            self.ctx.app_settings.set(key, bool(checked))
+            self.ctx.config.save_later()
+            self.slideshow_preferences_changed.emit()
 
     def setup_page_turn_card(self):
         """创建翻页方式卡片。"""
@@ -540,6 +720,9 @@ class SettingInterface(QWidget, Ui_settingInterface):
         card.layout().addWidget(self.page_turn_pick_button)
         # 构造阶段不探测放映状态，避免为此在启动时加载 COM 依赖
         self.refresh_page_turn_status(probe=False)
+        self.page_turn_status_timer = QTimer(self)
+        self.page_turn_status_timer.setInterval(500)
+        self.page_turn_status_timer.timeout.connect(self._poll_page_turn_status)
 
     def open_window_target_dialog(self):
         """打开窗口选择器，确认后立即保存。"""
@@ -555,12 +738,20 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.ctx.app_settings.set('page_turn_mode', mode)
         self.ctx.config.save_later()
         self.refresh_page_turn_status()
+        self.refresh_slideshow_preferences_state()
         self.page_turn_mode_changed.emit()
 
     def showEvent(self, event):
         """每次切回本页时重新检测放映状态。"""
         super().showEvent(event)
+        if hasattr(self, 'sync_playback_switch'):
+            self.refresh_sync_playback_state()
         if getattr(self, 'page_turn_caption', None) is not None:
+            self.refresh_page_turn_status()
+            self.page_turn_status_timer.start()
+
+    def _poll_page_turn_status(self):
+        if self.isVisible():
             self.refresh_page_turn_status()
 
     PAGE_TURN_CAPTIONS = {
@@ -570,10 +761,10 @@ class SettingInterface(QWidget, Ui_settingInterface):
     }
     PAGE_TURN_HELP = {
         'foreground': '翻页键发送到当前处于前台的窗口，放映时需保持放映窗口在前台。',
-        'com': '直接控制 PowerPoint 或 WPS 演示的放映，不受前台窗口影响，需先开始放映。'
-               '放映中手动翻页时，朗读位置随之调整；在本程序中跳转页码时，放映同步跳转。',
+        'com': '控制对应的 PowerPoint 或 WPS 放映，切换到其他程序后仍可同步翻页。'
+               '可在“放映联动”中分别设置自动开始放映、翻页跟随、位置同步和退出时停止朗读。',
         'window': '向选定窗口发送滚轮翻页，切换到其他程序后仍然有效。'
-                  '放映开始后，点击「选择窗口」指定放映窗口。',
+                  '放映开始后，点击“选择窗口”指定放映窗口。',
     }
 
     def refresh_page_turn_status(self, probe: bool = True):
@@ -586,18 +777,22 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self.page_turn_pick_button.setVisible(mode == 'window')
         if mode not in self.PAGE_TURN_CAPTIONS:
             mode = 'com'
-        self.page_turn_caption.setText(self.PAGE_TURN_CAPTIONS[mode])
-        theme.set_help_text(self.page_turn_card.help_icon, self.PAGE_TURN_HELP[mode])
+        if getattr(self, '_page_turn_description_mode', None) != mode:
+            self.page_turn_caption.setText(self.PAGE_TURN_CAPTIONS[mode])
+            theme.set_help_text(self.page_turn_card.help_icon, self.PAGE_TURN_HELP[mode])
+            self._page_turn_description_mode = mode
 
         if mode == 'com':
             if not probe:
                 self._set_card_badge(self.page_turn_card, '')
                 return
-            detected = slideshow.describe()
+            source = self.page_turn_source()
+            detected = self.page_turn_description()
             if detected:
                 self._set_card_badge(self.page_turn_card, detected, InfoLevel.SUCCESS)
             else:
-                self._set_card_badge(self.page_turn_card, '未检测到放映', InfoLevel.WARNING)
+                self._set_card_badge(self.page_turn_card, '未检测到对应放映' if source else '未检测到放映',
+                                     InfoLevel.WARNING)
         elif mode == 'window':
             target = self.ctx.app_settings.get('page_turn_window')
             if target and window_target.describe(target):
@@ -661,10 +856,10 @@ class SettingInterface(QWidget, Ui_settingInterface):
         info_layout.setSpacing(0)
         log_title_row, _icon = theme.make_title_row(
             theme.make_card_title('运行日志', card),
-            '反馈问题时可附上日志目录中的文件。单个日志超过 1 MB 后自动轮换，最多保留 4 个文件。')
+            '遇到问题时，可将此目录中的日志文件附在反馈中，帮助查找原因。')
         info_layout.addLayout(log_title_row)
         caption = CaptionLabel(card)
-        caption.setText('记录运行过程与错误信息')
+        caption.setText('反馈问题时提供运行日志')
         caption.setWordWrap(True)
         info_layout.addWidget(caption)
         h_layout.addLayout(info_layout, stretch=1)
@@ -1049,11 +1244,11 @@ class SettingInterface(QWidget, Ui_settingInterface):
             if not info['voices']:
                 status += '\n使用模型默认声音；复刻音色请在服务网页中创建后刷新。'
         else:
-            status = '请先启动本地服务，然后点击「测试连接」'
+            status = '请先启动本地服务，然后点击“测试连接”'
             if values.get('model'):
                 status += f"\n已保存模型：{values['model']}"
         if base_model:
-            status += '\nBase 克隆由参考音频控制声音，风格指令将自动忽略。'
+            status += '\n当前克隆模型根据参考音频生成声音，不支持语音风格指令。'
         self._qwentts_status.setText(status)
         voices = info['voices'] if info else []
         combo = self._qwentts_voice_combo
@@ -1226,6 +1421,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
             else:
                 # 取消只代表不更换当前音色，创建或删除操作可能已经生效。
                 self.setup_voices_list()
+                self.mark_dirty()
         except Exception as e:
             self.create_error_info_bar('打开管理对话框失败', f'详情：{e}')
 

@@ -55,8 +55,8 @@ class WindowTargetDialog(ThemedDialog):
         layout.addWidget(tip)
 
         self.table = TableWidget(self)
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(['窗口标题', '程序', '窗口类'])
+        self.table.setColumnCount(2)
+        self.table.setHorizontalHeaderLabels(['窗口标题', '程序'])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -65,9 +65,7 @@ class WindowTargetDialog(ThemedDialog):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
         header.resizeSection(1, 150)
-        header.resizeSection(2, 200)
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.itemSelectionChanged.connect(self._sync_buttons)
@@ -119,7 +117,7 @@ class WindowTargetDialog(ThemedDialog):
                 continue
             row = self.table.rowCount()
             self.table.insertRow(row)
-            values = (window['title'] or '（无标题窗口）', window['process'], window['class_name'])
+            values = (window['title'] or '（无标题窗口）', window['process'])
             for col, value in enumerate(values):
                 cell = QTableWidgetItem(value)
                 cell.setData(Qt.ItemDataRole.UserRole, window)

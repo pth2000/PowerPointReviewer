@@ -40,7 +40,7 @@ class WindowPreview(QLabel):
                 raise RuntimeError('无法预览此窗口，请选择其他放映窗口。')
             window = QCapturableWindow(self.foreign_window)
             if not window.isValid():
-                raise RuntimeError('此窗口无法采集，请重新启动放映。')
+                raise RuntimeError('此窗口无法录制，请重新启动放映。')
             self.session = QMediaCaptureSession(self)
             self.capture = QWindowCapture(self)
             self.sink = QVideoSink(self)

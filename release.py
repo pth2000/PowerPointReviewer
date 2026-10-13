@@ -10,10 +10,12 @@
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import build
@@ -28,11 +30,10 @@ GITHUB_REPO_URL = f'https://github.com/{GITEE_OWNER}/{GITEE_REPO}'
 # Gitee 免费仓库的附件配额
 FILE_LIMIT = 100 * 1024 * 1024
 TOTAL_LIMIT = 1024 * 1024 * 1024
-# 客户端只会读取最新发行版的更新包，旧发行版的完整包与索引可以清理
+# 首个支持自动更新的版本长期保留安装版与便携版。
+BASELINE_TAG = 'v1.6.0'
 # 经典版本：Velopack 之前发布的绿色包，下载附件始终保留
 CLASSIC_UNTIL = 'v1.5.1'
-# 里程碑版本卸任后是否继续保留便携包；Gitee 配额紧张时只留安装器
-MILESTONE_KEEP_PORTABLE = False
 
 
 def version_tuple(tag: str) -> tuple:
@@ -44,11 +45,6 @@ def version_tuple(tag: str) -> tuple:
 def is_classic(tag: str) -> bool:
     """判断是否为需要长期保留下载附件的经典版本。"""
     return version_tuple(tag) <= version_tuple(CLASSIC_UNTIL)
-
-
-def is_milestone(tag: str) -> bool:
-    """判断是否为里程碑版本，即修订号为 0 的版本。"""
-    return version_tuple(tag)[2] == 0
 
 
 def github_tag_commit(tag: str) -> str:
@@ -145,6 +141,49 @@ def artifacts(version: str, required: bool = True) -> list:
     return files
 
 
+def check_asset(path: Path, asset: dict):
+    """发布前确认索引中的大小和校验值与实际更新包一致。"""
+    if path.stat().st_size != asset['Size']:
+        raise RuntimeError(f'更新包大小与索引不符：{path.name}，请重新打包')
+    hashes = {'SHA1': hashlib.sha1(), 'SHA256': hashlib.sha256()}
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            for digest in hashes.values():
+                digest.update(chunk)
+    for name, digest in hashes.items():
+        if asset.get(name) and digest.hexdigest().lower() != asset[name].lower():
+            raise RuntimeError(f'更新包 {name} 与索引不符：{path.name}，请重新打包')
+    if not asset.get('SHA1'):
+        raise RuntimeError(f'更新索引缺少 SHA1：{path.name}')
+
+
+def gitee_payload(version: str, required: bool = True) -> tuple[list, bytes]:
+    """只上传当前产物，索引保留历史增量元数据供客户端按版本取包。"""
+    files = [path for path in artifacts(version, required)
+             if path.name != FEED_NAME]
+    feed_path = RELEASES_DIR / FEED_NAME
+    if not feed_path.is_file():
+        return files, b''  # 构建前的预演与配额估算。
+    data = feed_path.read_bytes()
+    feed = json.loads(data.decode('utf-8-sig'))
+    current = {asset['FileName']: asset for asset in feed['Assets']
+               if asset['PackageId'] == PACK_ID and asset['Version'] == version}
+    if f'{PACK_ID}-{version}-full.nupkg' not in current:
+        if not required:
+            return files, b''  # 新版本尚未构建。
+        raise RuntimeError(f'更新索引缺少 {version} 完整包，请重新打包')
+    if required:
+        for path in files:
+            if path.suffix == '.nupkg':
+                if path.name not in current:
+                    raise RuntimeError(f'更新索引缺少 {path.name}，请重新打包')
+                check_asset(path, current[path.name])
+        for asset in current.values():
+            if not (RELEASES_DIR / asset['FileName']).is_file():
+                raise RuntimeError(f'缺少产物：{asset["FileName"]}，请重新打包')
+    return files, data
+
+
 def collect_problems(version: str, tag: str, notes: Path, allow_dirty: bool = False,
                      need_tokens: bool = True, skip_gitee: bool = False) -> list:
     """返回发布前检查发现的问题，空列表表示可以发布。"""
@@ -187,10 +226,15 @@ def collect_problems(version: str, tag: str, notes: Path, allow_dirty: bool = Fa
         if not os.environ.get('GITHUB_TOKEN'):
             problems.append('未设置环境变量 GITHUB_TOKEN')
 
-    built = artifacts(version, required=False)
+    built, feed_bytes = [], b''
+    if not skip_gitee:
+        try:
+            built, feed_bytes = gitee_payload(version, required=False)
+        except (RuntimeError, ValueError, KeyError) as e:
+            problems.append(str(e))
     if built:
         try:
-            planned = sum(path.stat().st_size for path in built)
+            planned = sum(path.stat().st_size for path in built) + len(feed_bytes)
             usage = gitee_usage(os.environ.get('GITEE_TOKEN', ''))
             if usage + planned > TOTAL_LIMIT:
                 problems.append(
@@ -230,12 +274,14 @@ def preflight(version: str, tag: str, notes: Path, args) -> str:
 def publish_gitee(version: str, tag: str, notes_text: str, branch: str, dry_run: bool):
     """在 Gitee 创建发行版并上传全部产物。"""
     token = os.environ.get('GITEE_TOKEN', '')
-    files = artifacts(version, required=not dry_run)
-    total = sum(path.stat().st_size for path in files)
-    print(f'[Gitee] 发行版 {tag}，共 {len(files)} 个附件，合计 {human(total)}')
+    files, feed_bytes = gitee_payload(version, required=not dry_run)
+    total = sum(path.stat().st_size for path in files) + len(feed_bytes)
+    print(f'[Gitee] 发行版 {tag}，共 {len(files) + bool(feed_bytes)} 个附件，合计 {human(total)}')
     if dry_run:
         for path in files:
             print(f'        将上传 {path.name}（{human(path.stat().st_size)}）')
+        if feed_bytes:
+            print(f'        将上传 {FEED_NAME}（{human(len(feed_bytes))}）')
         if not files:
             print('        产物尚未构建，正式发布时会上传安装器、便携包、更新包与更新索引')
         return
@@ -246,6 +292,17 @@ def publish_gitee(version: str, tag: str, notes_text: str, branch: str, dry_run:
         gitee_upload(release['id'], path, token)
     uploaded = {item['name'] for item in gitee_attachments(release['id'], token)}
     missing = [path.name for path in files if path.name not in uploaded]
+    if missing:
+        sys.exit(f'[Gitee] 以下附件未上传成功，尚未发布更新索引：{missing}')
+    # 更新索引最后上传，避免客户端根据索引请求尚未上传的包。
+    with tempfile.TemporaryDirectory(prefix='gitee-feed-') as folder:
+        feed_path = Path(folder) / FEED_NAME
+        feed_path.write_bytes(feed_bytes)
+        print(f'        上传 {FEED_NAME}（{human(len(feed_bytes))}）…', flush=True)
+        gitee_upload(release['id'], feed_path, token)
+    uploaded = {item['name'] for item in gitee_attachments(release['id'], token)}
+    expected = [path.name for path in files] + [FEED_NAME]
+    missing = [name for name in expected if name not in uploaded]
     if missing:
         sys.exit(f'[Gitee] 以下附件未上传成功：{missing}')
     print(f'[Gitee] 完成：{release.get("html_url") or tag}')
@@ -282,7 +339,8 @@ def verify(version: str, tag: str):
     import requests
     import time
 
-    local = hashlib.sha256((RELEASES_DIR / FEED_NAME).read_bytes()).hexdigest()
+    _, feed_bytes = gitee_payload(version, required=False)
+    local = hashlib.sha256(feed_bytes).hexdigest()
     status = '未获取到'
     for attempt in range(3):
         try:
@@ -327,20 +385,19 @@ def gitee_usage(token: str = '') -> int:
 def keep_attachment(index: int, tag: str, name: str) -> bool:
     """按保留策略判断附件是否保留。
 
-    最新发行版保持完整；经典版本与里程碑版本保留安装包与便携包；
-    中间版本只保留增量包；完整包与更新索引只在最新发行版中有用。
+    最新发行版全部保留；v1.6.0 保留安装版与便携版；中间版本只保留
+    各自的增量包。Velopack 之前的旧绿色版下载附件继续保留。
     """
     if index == 0:
         return True
     if name.endswith('-delta.nupkg'):
-        return True
+        # 历史发行版只留自己的增量包，移除曾为 HTTP 源复制的其它版本包。
+        return name == f'{PACK_ID}-{tag.removeprefix("v")}-delta.nupkg'
     if is_update_file(name):
         return False
     if is_classic(tag):
         return True
-    if not is_milestone(tag):
-        return False
-    return MILESTONE_KEEP_PORTABLE or name != PORTABLE_NAME
+    return version_tuple(tag) == version_tuple(BASELINE_TAG) and name in (SETUP_NAME, PORTABLE_NAME)
 
 
 def drop_tags(tags: list, dry_run: bool):
@@ -373,7 +430,13 @@ def prune_gitee(dry_run: bool):
     freed = 0
     for index, release in enumerate(gitee_releases(token)):
         tag = release.get('tag_name', '')
-        for item in gitee_attachments(release['id'], token):
+        attachments = gitee_attachments(release['id'], token)
+        if version_tuple(tag) == version_tuple(BASELINE_TAG):
+            names = {item['name'] for item in attachments}
+            missing = [name for name in (SETUP_NAME, PORTABLE_NAME) if name not in names]
+            if missing:
+                print(f'[清理] {tag} 缺少 {missing}，请从 GitHub 同版本取回并补上传')
+        for item in attachments:
             name = item['name']
             if keep_attachment(index, tag, name):
                 continue

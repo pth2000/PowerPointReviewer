@@ -8,7 +8,7 @@ class AudioOutputWatcher(QObject):
     """将播放器持续绑定到系统默认输出设备。
 
     设备插拔可由 ``audioOutputsChanged`` 捕获；Windows 手动切换默认设备时不一定
-    发出该信号，因此还需定时轮询。
+    发出该信号，因此仅在播放期间补充定时检测，开始播放前也检查一次。
     """
 
     def __init__(self, player: QMediaPlayer, audio_output, label: str = '播放器',
@@ -23,8 +23,17 @@ class AudioOutputWatcher(QObject):
         self._devices.audioOutputsChanged.connect(self.sync_default_device)
 
         self._timer = QTimer(self)
+        self._timer.setInterval(interval_ms)
         self._timer.timeout.connect(self.sync_default_device)
-        self._timer.start(interval_ms)
+        self._player.playbackStateChanged.connect(self._playback_state_changed)
+        self._playback_state_changed(self._player.playbackState())
+
+    def _playback_state_changed(self, state):
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            self.sync_default_device()
+            self._timer.start()
+        else:
+            self._timer.stop()
 
     def sync_default_device(self):
         """检测默认设备变化，并在切换后恢复原播放位置。"""

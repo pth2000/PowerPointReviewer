@@ -40,7 +40,7 @@ def normalize_base_url(value: str) -> str:
     if path.endswith('/v1'):
         path = path[:-3]
     if path.endswith('/audio/speech'):
-        raise RuntimeError('请填写服务根地址，而非语音合成接口地址。')
+        raise RuntimeError('请填写启动器显示的服务地址，例如 http://127.0.0.1:8080。')
     host = parts.hostname.lower()
     if host == '0.0.0.0':
         host = '127.0.0.1'
@@ -88,7 +88,7 @@ def _json(session, url: str, *, timeout: int):
     try:
         payload = response.json()
     except ValueError as exc:
-        raise RuntimeError('服务返回了无效 JSON，请确认填写的是 qwentts.cpp 后端端口。') from exc
+        raise RuntimeError('无法读取本地语音服务的信息，请确认地址与 qwentts.cpp 启动器中的服务地址一致。') from exc
     if not isinstance(payload, dict):
         raise RuntimeError('本地 TTS 服务响应格式不正确。')
     return payload
@@ -148,7 +148,7 @@ def query_service(base_url: str, *, timeout: int = 5, cancelled=None) -> dict:
 def check_model(base_url: str, expected_model: str) -> None:
     """在使用缓存前确认模型身份，避免换模型后复用旧音频。"""
     if not expected_model:
-        raise RuntimeError('请先在设置页点击「测试连接」，读取本地模型与音色后再生成语音。')
+        raise RuntimeError('请先在设置页点击“测试连接”，选择音色并保存后再生成语音。')
     base_url = normalize_base_url(base_url)
     with _session() as session:
         current = _model(session, base_url, timeout=5)

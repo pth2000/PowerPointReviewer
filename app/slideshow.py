@@ -7,6 +7,7 @@ COM 是演示软件提供的正规接口，与前台窗口无关，因此用它�
 """
 
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -50,7 +51,47 @@ def _running_apps():
             continue
 
 
-def _active_views():
+def _matches_source(presentation, source=None):
+    if not source:
+        return True
+    try:
+        return Path(str(presentation.FullName)).resolve() == Path(source).resolve()
+    except Exception:
+        return False
+
+
+def _contains_source(application, source=None):
+    try:
+        count = int(application.Presentations.Count)
+        return not source or any(_matches_source(application.Presentations.Item(index), source)
+                                 for index in range(1, count + 1))
+    except Exception:
+        return False
+
+
+def list_open_presentations():
+    """列出已保存且已打开的文稿，供用户关联；不启动或修改演示软件。"""
+    result, seen = [], set()
+    for provider, app in _running_apps():
+        try:
+            count = int(app.Presentations.Count)
+        except Exception:
+            continue
+        for index in range(1, count + 1):
+            try:
+                document = app.Presentations.Item(index)
+                path = Path(str(document.FullName)).resolve()
+                if path in seen or not path.is_file() or path.suffix.lower() not in ('.ppt', '.pptx'):
+                    continue
+                seen.add(path)
+                result.append({'path': str(path), 'name': path.name, 'provider': provider,
+                               'slide_count': int(document.Slides.Count)})
+            except Exception:
+                continue
+    return result
+
+
+def _active_views(source=None):
     """返回 (显示名, [放映视图, ...])，当前没有放映时返回 (None, [])。
 
     演讲者视图下可能存在多个放映窗口，全部返回以便同步推进。
@@ -63,7 +104,9 @@ def _active_views():
             views = []
             for index in range(1, count + 1):
                 try:
-                    views.append(app.SlideShowWindows(index).View)
+                    window = app.SlideShowWindows(index)
+                    if _matches_source(window.Presentation, source):
+                        views.append(window.View)
                 except Exception:
                     continue
             if views:
@@ -73,10 +116,17 @@ def _active_views():
     return None, []
 
 
-def _active_show():
+def _active_show(source=None):
     """返回 (显示名, 首个放映视图)，当前没有放映时返回 (None, None)。"""
-    label, views = _active_views()
+    label, views = _active_views(source)
     return (label, views[0]) if views else (None, None)
+
+
+def _slide_index(view):
+    try:
+        return int(view.Slide.SlideIndex)
+    except Exception:
+        return int(view.CurrentShowPosition)
 
 
 def is_available() -> bool:
@@ -84,23 +134,23 @@ def is_available() -> bool:
     return _active_show()[1] is not None
 
 
-def describe() -> str:
+def describe(source=None) -> str:
     """返回当前放映的简要信息，用于界面提示。"""
-    label, view = _active_show()
+    label, view = _active_show(source)
     if view is None:
         return ''
     try:
-        return f'{label}｜第 {view.CurrentShowPosition} 页'
+        return f'{label}｜第 {_slide_index(view)} 页'
     except Exception:
         return str(label)
 
 
-def advance() -> bool:
+def advance(source=None) -> bool:
     """让正在放映的演示前进一步；没有放映或全部调用失败时返回 False。
 
     与按一次翻页键等价，会依次触发页内动画。存在多个放映窗口时逐一推进。
     """
-    _label, views = _active_views()
+    _label, views = _active_views(source)
     if not views:
         return False
 
@@ -133,14 +183,14 @@ def current_position() -> int:
     if view is None:
         return 0
     try:
-        return int(view.CurrentShowPosition)
+        return _slide_index(view)
     except Exception:
         return 0
 
 
-def goto(page: int) -> bool:
+def goto(page: int, source=None) -> bool:
     """跳转到指定页；没有放映或页码越界时返回 False。"""
-    _label, views = _active_views()
+    _label, views = _active_views(source)
     if not views:
         return False
 
@@ -203,6 +253,9 @@ class SlideshowWatcher(QObject):
         super().__init__(parent)
         self._connection = None
         self._app = None
+        self.source_path = None
+        self._preferred_app = None
+        self._had_show = False
         self._pump_ticks = 0
         self._pump_timer = QTimer(self)
         self._pump_timer.setInterval(self.PUMP_INTERVAL_MS)
@@ -211,8 +264,12 @@ class SlideshowWatcher(QObject):
         self._retry_timer.setInterval(self.RETRY_INTERVAL_MS)
         self._retry_timer.timeout.connect(self._try_attach)
 
-    def start(self):
+    def start(self, source=None, application=None):
         """开始订阅；演示软件未运行时会定期重试。"""
+        if source != self.source_path or application is not self._preferred_app:
+            self.stop()
+            self.source_path = source
+            self._preferred_app = application
         if self._connection is not None:
             return
         if not self._try_attach():
@@ -223,6 +280,8 @@ class SlideshowWatcher(QObject):
         self._retry_timer.stop()
         self._pump_timer.stop()
         self._release()
+        self._preferred_app = None
+        self._had_show = False
 
     def _release(self):
         """断开事件接收器，避免演示软件继续持有回调引用。"""
@@ -239,13 +298,20 @@ class SlideshowWatcher(QObject):
         return self._connection is not None
 
     def _try_attach(self) -> bool:
-        for _label, app in _running_apps():
+        def candidates():
+            if self._preferred_app is not None:
+                yield '当前放映', self._preferred_app
+            yield from _running_apps()
+        for _label, app in candidates():
+            if not _contains_source(app, self.source_path):
+                continue
             try:
                 import win32com.client
                 self._connection = win32com.client.WithEvents(app, _make_handler(self))
             except Exception:
                 continue
             self._app = app
+            self._had_show = self._has_show()
             self._pump_ticks = 0
             self._retry_timer.stop()
             self._pump_timer.start()
@@ -262,9 +328,13 @@ class SlideshowWatcher(QObject):
         """探测演示软件是否仍在运行。"""
         if self._app is None:
             return False
+        return _contains_source(self._app, self.source_path)
+
+    def _has_show(self):
         try:
-            self._app.Presentations.Count
-            return True
+            windows = self._app.SlideShowWindows
+            return any(_matches_source(windows.Item(index).Presentation, self.source_path)
+                       for index in range(1, int(windows.Count) + 1))
         except Exception:
             return False
 
@@ -284,6 +354,13 @@ class SlideshowWatcher(QObject):
         self._pump_ticks += 1
         if self._pump_ticks >= self.PROBE_EVERY:
             self._pump_ticks = 0
+            # WPS 有时不发送退出事件，复用现有连接探测补齐退出通知。
+            showing = self._has_show()
+            ended = self._had_show and not showing
+            self._had_show = showing
+            if ended:
+                self.show_ended.emit()
+                return
             if not self._alive():
                 self._detach()
 
@@ -293,15 +370,18 @@ def _make_handler(watcher):
 
     class _Handler:
         def OnSlideShowBegin(self, Wn):
-            watcher.show_began.emit()
+            if _matches_source(Wn.Presentation, watcher.source_path):
+                watcher.show_began.emit()
 
         def OnSlideShowNextSlide(self, Wn):
             try:
-                watcher.slide_changed.emit(int(Wn.View.CurrentShowPosition))
+                if _matches_source(Wn.Presentation, watcher.source_path):
+                    watcher.slide_changed.emit(_slide_index(Wn.View))
             except Exception:
                 pass
 
         def OnSlideShowEnd(self, Pres):
-            watcher.show_ended.emit()
+            if _matches_source(Pres, watcher.source_path):
+                watcher.show_ended.emit()
 
     return _Handler

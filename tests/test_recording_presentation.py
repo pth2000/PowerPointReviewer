@@ -53,6 +53,31 @@ class PresentationTests(unittest.TestCase):
         self.adapter.restore()
         self.assertEqual(self.presentation.SlideShowSettings.AdvanceMode, 2)
 
+    def test_live_com_show_and_capture_readiness_are_separate(self):
+        self.assertTrue(self.adapter.is_active())
+        self.assertTrue(self.adapter.capture_ready())
+        self.user32.IsIconic.return_value = True
+        self.assertTrue(self.adapter.is_active())
+        self.assertFalse(self.adapter.capture_ready())
+        self.show.IsFullScreen = False
+        self.assertFalse(self.adapter.is_active())
+
+    def test_closed_com_show_is_not_active(self):
+        self.show.View = Mock()
+        type(self.show.View).Slide = property(lambda obj: (_ for _ in ()).throw(RuntimeError('closed')))
+        self.assertFalse(self.adapter.is_active())
+
+    def test_stale_wps_view_is_not_active_when_live_show_collection_is_empty(self):
+        self.show._oleobj_ = object()
+        windows = Mock(Count=1)
+        windows.Item.return_value = self.show
+        self.adapter.application = NS(SlideShowWindows=windows)
+        self.assertTrue(self.adapter.is_active())
+        windows.Count = 0
+        self.assertTrue(self.show.IsFullScreen)
+        self.assertEqual(self.show.View.Slide.SlideIndex, 1)
+        self.assertFalse(self.adapter.is_active())
+
     def test_slide_change_skips_remaining_clicks(self):
         self.adapter.begin(1)
         self.adapter.advance(2, 1)
@@ -186,6 +211,19 @@ class PresentationTests(unittest.TestCase):
         self.view.Next.side_effect = lambda: setattr(self.view.Slide, 'SlideIndex', 2)
         with self.assertRaisesRegex(RuntimeError, '第 2 页'):
             self.adapter.advance(1, 1)
+
+    def test_wps_uses_page_entry_index_and_next_without_gotoclick_reset(self):
+        self.adapter.provider = 'WPS 演示'
+        self.identity['process'] = 'wpp.exe'
+        self.identity['class_name'] = 'Qt5QWindowIcon'
+        self.view.GetClickIndex.return_value = 1
+        self.adapter.begin(1)
+        self.assertEqual(self.adapter.click_index, 1)
+        self.view.Next.side_effect = lambda: setattr(self.view.GetClickIndex, 'return_value', 2)
+        self.adapter.advance(1, 1)
+        self.assertEqual(self.adapter.click_index, 2)
+        self.view.Next.assert_called_once()
+        self.view.GotoClick.assert_not_called()
 
     def _track_document_changes(self, mode, timed=False, saved=True):
         document = self.presentation

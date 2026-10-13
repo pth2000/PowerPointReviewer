@@ -54,6 +54,7 @@ class RewriteDialog(ThemedDialog):
         self.applied: dict[int, str] = {}
         self.task = None
         self.test_thread = None
+        self._closing = False
 
         self.setWindowTitle('AI 优化')
         self.setMinimumSize(960, 680)
@@ -282,11 +283,13 @@ class RewriteDialog(ThemedDialog):
 
         result = self.results.get(page, {})
         self.rewritten_edit.blockSignals(True)
-        self.rewritten_edit.setPlainText(str(result.get('text', '')))
+        self.rewritten_edit.setPlainText(str(result.get('error') or result.get('text', '')))
         self.rewritten_edit.blockSignals(False)
         self.rewritten_edit.setReadOnly(not result.get('text'))
 
         message = result.get('error') or result.get('warning') or ''
+        if result.get('error'):
+            message = message.split('\n\n', 1)[0]
         self.warning_label.setText(f'提示：{message}' if message else '')
 
     def on_rewritten_edited(self):
@@ -329,6 +332,7 @@ class RewriteDialog(ThemedDialog):
         for page, _text in pages:
             self.results.pop(page, None)
             self._set_item_status(page, STATUS_PENDING)
+        self.show_page(self.page_list.currentRow())
 
         self.progress.setRange(0, len(pages))
         self.progress.setValue(0)
@@ -346,6 +350,7 @@ class RewriteDialog(ThemedDialog):
         self.task.signal_page_failed.connect(self.on_page_failed)
         self.task.signal_progress.connect(self.on_progress)
         self.task.signal_finish.connect(self.on_finish)
+        self.task.finished.connect(self._worker_finished)
         self.task.finished.connect(self.task.deleteLater)
         self.task.start()
 
@@ -383,6 +388,8 @@ class RewriteDialog(ThemedDialog):
         self.progress.setVisible(False)
         self.update_action_state()
 
+        if self._closing:
+            return
         succeeded = sum(1 for r in self.results.values() if r.get('text'))
         failed = sum(1 for r in self.results.values() if r.get('error'))
 
@@ -391,7 +398,7 @@ class RewriteDialog(ThemedDialog):
         elif failed:
             self._info_error('改写失败', '所有页面均未成功，请检查服务地址、API Key 与模型名称')
         else:
-            self._info_success('改写完成', f'已生成 {succeeded} 页候选文本')
+            self._info_success('改写完成', f'已完成 {succeeded} 页，可查看结果并选择应用')
 
     # 采用
 
@@ -408,6 +415,8 @@ class RewriteDialog(ThemedDialog):
 
     def apply_selected(self):
         """校验并收集勾选页结果，确认后关闭弹窗。"""
+        if self.task is not None:
+            return
         applied = {}
         risky = []
         for page in self.checked_pages():
@@ -424,8 +433,8 @@ class RewriteDialog(ThemedDialog):
         if risky:
             pages_text = '、'.join(f'第 {p} 页' for p in risky[:8])
             box = MessageBox(
-                '存在结构变化',
-                f'{pages_text} 的分隔符数量与原文不一致，写回后点击节奏会改变',
+                '讲稿分段有变化',
+                f'{pages_text} 的分隔符数量与原文不同，应用后 PPT 动画的点击节奏会改变',
                 self)
             box.yesButton.setText('仍要应用')
             box.cancelButton.setText('返回检查')
@@ -442,9 +451,23 @@ class RewriteDialog(ThemedDialog):
     def reject(self):
         """拒绝关闭前请求任务停止，避免后台信号访问已销毁控件。"""
         if self.task is not None and self.task.isRunning():
+            self._closing = True
             self.task.cancel()
-            self.task.wait(5000)
+            self.close_button.setEnabled(False)
+            self.close_button.setText('正在停止…')
+            return
         super().reject()
+
+    def _worker_finished(self):
+        if self._closing:
+            super().reject()
+
+    def closeEvent(self, event):
+        if self.task is not None and self.task.isRunning():
+            event.ignore()
+            self.reject()
+        else:
+            super().closeEvent(event)
 
     # 提示
 

@@ -1,6 +1,18 @@
-"""更新控件状态，避免禁用时的焦点转移触发页面滚动。"""
+"""管理控件启用状态，并识别主窗口内的模态弹窗。"""
 
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QWidget
+
+
+def active_modal_dialog(window):
+    """同时识别独立模态窗口和 Fluent 嵌在主窗口内的遮罩弹窗。"""
+    dialog = QApplication.activeModalWidget()
+    if dialog is not None:
+        return dialog
+    if isinstance(window, QWidget):
+        for dialog in reversed(window.findChildren(QDialog)):
+            if dialog.isVisible() and dialog.isModal():
+                return dialog
+    return None
 
 
 def set_enabled(widget: QWidget, enabled: bool):

@@ -54,6 +54,8 @@ def keys_of_record(record_path) -> set[str]:
     except Exception as e:
         print(f'[缓存] 无法解析历史记录 {Path(record_path).name}：{e}')
         return keys
+    if not isinstance(record, dict):
+        return keys
 
     for item in record.get('items', []) or []:
         if isinstance(item, dict):
@@ -139,12 +141,12 @@ def clear_all() -> tuple[int, int]:
     return _remove(list(iter_cache_files()))
 
 
-def clear_orphans() -> tuple[int, int]:
+def clear_orphans(protected_keys=()) -> tuple[int, int]:
     """删除未被任何历史记录引用的缓存文件。
 
     被引用的音频必须保留，否则相应历史记录将无法恢复播放。
     """
-    keys = referenced_keys()
+    keys = referenced_keys() | set(protected_keys)
     orphans = [path for path in iter_cache_files() if path.stem not in keys]
     return _remove(orphans)
 
