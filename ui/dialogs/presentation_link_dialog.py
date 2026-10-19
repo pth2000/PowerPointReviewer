@@ -7,7 +7,7 @@ from qfluentwidgets import (
     BodyLabel, ComboBox, MessageBox, PrimaryPushButton, PushButton, SubtitleLabel,
 )
 
-from app import presentation_link, slideshow
+from app.presentation import link as presentation_link, slideshow
 from ui.dialogs.base import ThemedDialog
 
 

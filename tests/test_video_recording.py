@@ -10,12 +10,18 @@ import wave
 
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QRect, QSizeF, QTimer, QUrl
 from PySide6.QtGui import QImage, QPainter
-from PySide6.QtMultimedia import QAudioDecoder, QCapturableWindow, QMediaPlayer, QVideoFrame, QVideoSink
+from PySide6.QtMultimedia import QAudioDecoder, QCapturableWindow, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import QApplication
 
-from app.video_recording import RecordingAudioPreparation, VideoRecording, compose_slide_image, pcm_format
-from app.video_settings import VideoRecordingOptions
-from app.video_timeline import FRAMES_PER_TICK, SAMPLE_RATE, SUPPORTED_FRAME_RATES, TimelineAudio, VideoTimeline
+from app.video.recording import RecordingAudioPreparation, VideoRecording, compose_slide_image, pcm_format
+from app.video.settings import VideoRecordingOptions
+from app.video.timeline import (
+    FRAMES_PER_TICK,
+    SAMPLE_RATE,
+    SUPPORTED_FRAME_RATES,
+    TimelineAudio,
+    VideoTimeline,
+)
 
 
 def write_wav(path, frames, value=5000, sample_rate=SAMPLE_RATE):
@@ -165,6 +171,83 @@ class QtRecordingTests(unittest.TestCase):
         for x, y in ((0, 0), (1919, 1079), (880, 540), (1040, 540)):
             self.assertEqual(output.pixelColor(x, y).name(), '#000000')
 
+    def _passive_recording(self):
+        source = self.root / 'voice.wav'
+        write_wav(source, SAMPLE_RATE * 5)
+        presentation = SimpleNamespace(hwnd=123, slide_size=QSizeF(960, 540),
+                                       verify=Mock(), advance=Mock(), restore=Mock())
+        timeline = VideoTimeline([1], [source])
+        recording = VideoRecording(timeline, self.root / 'output.mp4', presentation,
+                                   options=VideoRecordingOptions(1280, 720))
+        def cleanup():
+            recording.audio.close()
+            recording.deleteLater()
+        self.addCleanup(cleanup)
+        return recording
+
+    def test_unchanged_capture_reuses_pixels_with_independent_timestamps(self):
+        recording = self._passive_recording()
+        recording.latest_image = QImage(3200, 2000, QImage.Format.Format_RGB32)
+        recording.latest_image.fill(0xffcc4422)
+        with patch('app.video.recording.compose_slide_image', wraps=compose_slide_image) as compose:
+            first = recording._compose_frame()
+            recording.frame_index = 1
+            second = recording._compose_frame()
+            self.assertEqual(compose.call_count, 1)
+            self.assertEqual(first.startTime(), 0)
+            self.assertEqual(second.startTime(), 33333)
+            recording.latest_image.fill(0xff2244cc)
+            recording.frame_index = 2
+            animated = recording._compose_frame()
+            self.assertEqual(compose.call_count, 2)
+        self.assertEqual(first.toImage().pixelColor(640, 360).name(), '#cc4422')
+        self.assertEqual(second.toImage().pixelColor(640, 360).name(), '#cc4422')
+        self.assertEqual(animated.toImage().pixelColor(640, 360).name(), '#2244cc')
+
+    def test_input_ready_signal_during_send_does_not_send_a_frame_twice(self):
+        recording = self._passive_recording()
+        recording.latest_image = QImage(640, 360, QImage.Format.Format_RGB32)
+        recording.latest_image.fill(0xff2244cc)
+        recording.state = 'recording'
+        recording.clock = Mock()
+        recording.clock.isValid.return_value = True
+        recording.clock.elapsed.return_value = 0
+        def send_frame(frame):
+            recording._tick()
+            return True
+        with patch.object(recording.video_input, 'sendVideoFrame', side_effect=send_frame) as video, \
+             patch.object(recording.audio_input, 'sendAudioBuffer', return_value=True) as audio:
+            recording._tick()
+        video.assert_called_once()
+        audio.assert_called_once()
+        self.assertEqual(recording.frame_index, 1)
+        self.assertFalse(recording.ticking)
+
+    def test_encoder_backpressure_keeps_frames_and_logs_real_time_lag(self):
+        recording = self._passive_recording()
+        recording.latest_image = QImage(640, 360, QImage.Format.Format_RGB32)
+        recording.latest_image.fill(0xff2244cc)
+        recording.state = 'recording'
+        recording.clock = Mock()
+        recording.clock.isValid.return_value = True
+        recording.clock.elapsed.return_value = 0
+        with patch.object(recording.video_input, 'sendVideoFrame', return_value=False), \
+             patch.object(recording.audio_input, 'sendAudioBuffer') as audio:
+            recording._tick()
+            pending = recording.pending_frame
+            recording.clock.elapsed.return_value = 900
+            recording._tick()
+            self.assertIs(recording.pending_frame, pending)
+            self.assertEqual(recording.frame_index, 0)
+            audio.assert_not_called()
+            recording.clock.elapsed.return_value = 1100
+            with self.assertLogs('pptreviewer.video_recording', level='ERROR') as logged:
+                recording._tick()
+        self.assertIn('降低视频分辨率或帧率', recording.failure)
+        self.assertIn('落后=1100 ms', logged.output[0])
+        self.assertEqual(recording.state, 'done')
+        self.assertFalse(recording.ticking)
+
     def test_decodes_different_sample_rates(self):
         inputs = [self.root / 'one.wav', self.root / 'two.wav']
         write_wav(inputs[0], 22050, sample_rate=22050)
@@ -221,6 +304,11 @@ class QtRecordingTests(unittest.TestCase):
         target = self.root / f'video-{options.fps}.mp4'
 
         class Presentation:
+            hwnd = 123
+
+            def capture_image(self, image):
+                return image
+
             slide_size = QSizeF(720, 540)
 
             def __init__(self):
@@ -240,7 +328,7 @@ class QtRecordingTests(unittest.TestCase):
                 self.restored = True
 
         presentation = Presentation()
-        recorder = VideoRecording(timeline, target, presentation, QCapturableWindow(), options=options)
+        recorder = VideoRecording(timeline, target, presentation, options=options)
         self.assertEqual(recorder.recorder.videoBitRate(), options.video_bit_rate)
         self.assertEqual(recorder.recorder.audioBitRate(), options.audio_bit_rate)
         image = QImage(640, 480, QImage.Format.Format_RGB32)
@@ -248,7 +336,7 @@ class QtRecordingTests(unittest.TestCase):
         done, errors = [], []
         recorder.finished.connect(lambda path: (done.append(path), self.loop.quit()))
         recorder.failed.connect(lambda text: (errors.append(text), self.loop.quit()))
-        with patch.object(type(recorder.capture), 'start', lambda _capture: recorder._capture_frame(QVideoFrame(image))):
+        with patch.object(type(recorder.capture), 'start', lambda _capture: recorder._capture_image(image)):
             QTimer.singleShot(0, recorder.start)
             self.wait()
         if recorder.state != 'done':
@@ -337,6 +425,9 @@ class QtRecordingTests(unittest.TestCase):
         destination.write_bytes(b'existing video must survive cancellation')
 
         class Presentation:
+            def capture_image(self, image):
+                return image
+
             name = 'test.pptx'
             slide_count = 1
             slide_size = QSizeF(720, 540)
@@ -367,7 +458,7 @@ class QtRecordingTests(unittest.TestCase):
         image = QImage(640, 480, QImage.Format.Format_RGB32)
         image.fill(0xff445566)
         def capture(_capture):
-            dialog.recording._capture_frame(QVideoFrame(image))
+            dialog.recording._capture_image(image)
 
         with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]):
             dialog = VideoRecordingDialog([{'page': 1}], [source], ctx=ctx)
@@ -380,7 +471,7 @@ class QtRecordingTests(unittest.TestCase):
         with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]), \
              patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName',
                    return_value=(str(destination), 'MP4 视频 (*.mp4)')):
-            with patch('app.video_recording.QWindowCapture.start', capture):
+            with patch('app.video.recording.WindowCapture.start', capture):
                 QTimer.singleShot(0, dialog.start)
                 def cancel_when_running():
                     if dialog.recording and dialog.recording.frame_index > 3:

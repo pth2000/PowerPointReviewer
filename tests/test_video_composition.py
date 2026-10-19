@@ -14,13 +14,13 @@ from PySide6.QtGui import QImage, QPainter
 from PySide6.QtMultimedia import QAudioDecoder, QMediaPlayer, QVideoFrame, QVideoSink
 from PySide6.QtWidgets import QApplication
 
-from app.slide_images import SlideRenderCancelled, export_slide_images
-from app.video_composition import StaticVideoComposition
-from app.video_mux import build_video_captions
-from app.video_pixels import PreparedVideoFrame
-from app.video_recording import pcm_format
-from app.video_settings import VideoRecordingOptions
-from app.video_timeline import SAMPLE_RATE, TimelineAudio, VideoTimeline
+from app.presentation.images import SlideRenderCancelled, export_slide_images
+from app.video.composition import StaticVideoComposition
+from app.video.mux import build_video_captions
+from app.video.pixels import PreparedVideoFrame
+from app.video.recording import pcm_format
+from app.video.settings import VideoRecordingOptions
+from app.video.timeline import SAMPLE_RATE, TimelineAudio, VideoTimeline
 
 
 def write_audio(path, seconds, value=4000):
@@ -118,8 +118,8 @@ class StaticVideoTests(unittest.TestCase):
     def test_missing_pixel_converter_falls_back_to_qt_images(self):
         encoder = StaticVideoComposition(self.timeline(), self.root / 'fallback.mp4', self.images,
                                          options=VideoRecordingOptions(1280, 720))
-        with patch('app.video_composition.PreparedVideoFrame', side_effect=OSError('Library unavailable')) as prepare, \
-             self.assertLogs('app.video_composition', level='WARNING'):
+        with patch('app.video.composition.PreparedVideoFrame', side_effect=OSError('Library unavailable')) as prepare, \
+             self.assertLogs('app.video.composition', level='WARNING'):
             first = encoder._frame(1)
             encoder.frame_index = 1
             second = encoder._frame(3)
@@ -254,7 +254,7 @@ class StaticVideoTests(unittest.TestCase):
         def cleanup():
             original_cleanup()
             self.loop.quit()
-        with patch('app.slide_images.export_slide_images', return_value=self.images), \
+        with patch('app.presentation.images.export_slide_images', return_value=self.images), \
              patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName',
                    return_value=(str(destination), 'MP4')), \
              patch.object(dialog, '_cleanup', side_effect=cleanup):
@@ -300,7 +300,7 @@ class StaticVideoTests(unittest.TestCase):
                 dialog.reject()
             elif dialog.busy:
                 QTimer.singleShot(10, cancel_when_rendering)
-        with patch('app.slide_images.export_slide_images', side_effect=render), \
+        with patch('app.presentation.images.export_slide_images', side_effect=render), \
              patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName',
                    return_value=(str(destination), 'MP4')):
             QTimer.singleShot(0, dialog.start)
@@ -345,7 +345,7 @@ class SlideImageIsolationTests(unittest.TestCase):
                         patch('win32com.client.DispatchEx', return_value=self.application),
                         patch('win32com.client.dynamic.Dispatch', side_effect=lambda value: value),
                         patch('win32process.EnumProcesses', return_value=[123]),
-                        patch('app.slide_images._application_pid', return_value=123)]
+                        patch('app.presentation.images.application_pid', return_value=123)]
         for patcher in self.patches:
             patcher.start()
 
@@ -387,14 +387,14 @@ class SlideImageIsolationTests(unittest.TestCase):
         self.assertEqual(self.source.read_bytes(), b'original PPT content')
 
     def test_only_new_empty_application_is_quit(self):
-        with patch('app.slide_images._application_pid', return_value=456):
+        with patch('app.presentation.images.application_pid', return_value=456):
             export_slide_images(self.source, [1], self.root / 'work', 1280, 720)
         self.application.Quit.assert_called_once()
 
     def test_running_application_is_reused_and_never_quit(self):
         with patch('win32com.client.GetActiveObject', return_value=self.application), \
              patch('win32com.client.DispatchEx') as start_application, \
-             patch('app.slide_images._application_pid', return_value=456):
+             patch('app.presentation.images.application_pid', return_value=456):
             export_slide_images(self.source, [1], self.root / 'work', 1280, 720)
         start_application.assert_not_called()
         self.application.Quit.assert_not_called()
@@ -416,7 +416,7 @@ class SlideImageIsolationTests(unittest.TestCase):
 
     def test_new_application_with_another_document_is_kept(self):
         self.application.Presentations.Count = 1
-        with patch('app.slide_images._application_pid', return_value=456):
+        with patch('app.presentation.images.application_pid', return_value=456):
             export_slide_images(self.source, [1], self.root / 'work', 1280, 720)
         self.application.Quit.assert_not_called()
 

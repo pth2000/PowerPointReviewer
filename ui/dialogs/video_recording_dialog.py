@@ -16,15 +16,16 @@ from qfluentwidgets import (
     setCustomStyleSheet,
 )
 
-from app import paths, theme
-from app.recording_presentation import list_presentations
-from app.recording_session import RecordingSession
-from app.slide_images import SlideRenderTask
-from app.video_composition import StaticVideoComposition
-from app.video_mux import VideoMuxTask, build_video_captions, ensure_mux_available
-from app.video_recording import RecordingAudioPreparation, VideoRecording, recording_format
-from app.video_settings import AUDIO_BIT_RATES, RESOLUTIONS, VideoRecordingOptions
-from app.video_timeline import SUPPORTED_FRAME_RATES, VideoTimeline
+from app import paths
+from ui import theme
+from app.presentation.control import list_presentations
+from app.presentation.session import PresentationSession as RecordingSession
+from app.presentation.images import SlideRenderTask
+from app.video.composition import StaticVideoComposition
+from app.video.mux import VideoMuxTask, build_video_captions, ensure_mux_available
+from app.video.recording import RecordingAudioPreparation, VideoRecording, recording_format
+from app.video.settings import AUDIO_BIT_RATES, RESOLUTIONS, VideoRecordingOptions
+from app.video.timeline import SUPPORTED_FRAME_RATES, VideoTimeline
 from ui.dialogs.base import ThemedDialog
 from ui.dialogs.window_target_dialog import WindowTargetDialog
 
@@ -105,7 +106,7 @@ class VideoRecordingDialog(ThemedDialog):
         self.source_title = StrongBodyLabel('PPT 文稿', source_card)
         row, self.source_help_icon = theme.make_title_row(
             self.source_title,
-            '使用关联的 PPT，开始录制时自动准备全屏放映。\n'
+            '使用关联的 PPT，开始录制时自动准备放映。\n'
             '如有编辑，请先保存 PPT，以使用最新内容。\n'
             '可通过“预览画面”确认或更换录制窗口。',
         )
@@ -261,6 +262,7 @@ class VideoRecordingDialog(ThemedDialog):
         self.live_source_panel.setVisible(not static)
         self.static_source_panel.setVisible(static)
         self.wait_panel.setVisible(not static)
+        self.show_mode_panel.setVisible(not static)
         self.source_title.setText('PPT 文件' if static else 'PPT 文稿')
         self.start_button.setText('开始合成' if static else '开始录制')
         self.recording_badge.hide()
@@ -275,7 +277,7 @@ class VideoRecordingDialog(ThemedDialog):
             '请安装 PowerPoint 或 WPS 演示。\n'
             '默认使用导入讲稿时的 PPT，也可选择与讲稿页码对应的其他 PPT。\n'
             '如有编辑，请先保存 PPT，以使用最新内容。' if static else
-            '使用关联的 PPT，开始录制时自动准备全屏放映。\n'
+            '使用关联的 PPT，开始录制时自动准备放映。\n'
             '如有编辑，请先保存 PPT，以使用最新内容。\n'
             '可通过“预览画面”确认或更换录制窗口。')
         if static:
@@ -333,7 +335,7 @@ class VideoRecordingDialog(ThemedDialog):
         return super().eventFilter(obj, event)
 
     def _fit_source_text(self):
-        text = self.presentation_combo.currentText() or '请先按 F5 开始全屏放映'
+        text = self.presentation_combo.currentText() or '请先开始 PPT 放映'
         self.presentation_combo.setToolTip(text)
         fitted = self.presentation_combo.fontMetrics().elidedText(
             text, Qt.TextElideMode.ElideRight, max(0, self.presentation_combo.width() - 42))
@@ -369,6 +371,18 @@ class VideoRecordingDialog(ThemedDialog):
                 grid.addWidget(control, row, column * 2 + 1)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
+        self.show_mode_panel = QWidget(self.advanced_panel)
+        show_row = QHBoxLayout(self.show_mode_panel)
+        show_row.setContentsMargins(0, 0, 0, 0)
+        show_row.addWidget(BodyLabel('放映方式', self.show_mode_panel))
+        show_row.addStretch(1)
+        self.show_mode_combo = ComboBox(self.show_mode_panel)
+        self.show_mode_combo.addItem('窗口放映', userData=True)
+        self.show_mode_combo.addItem('全屏放映', userData=False)
+        self.show_mode_combo.setToolTip('启动新放映时使用，已有放映保持当前方式。\n'
+                                       'PowerPoint 窗口放映可在后台录制；WPS 使用全屏放映。')
+        show_row.addWidget(self.show_mode_combo)
+        grid.addWidget(self.show_mode_panel, 2, 0, 1, 4)
         self.wait_panel = QWidget(self.advanced_panel)
         wait_row = QHBoxLayout(self.wait_panel)
         wait_row.setContentsMargins(0, 0, 0, 0)
@@ -385,10 +399,10 @@ class VideoRecordingDialog(ThemedDialog):
             lambda checked: self.wait_spin.setEnabled(checked and not self.busy))
         wait_row.addStretch(1)
         wait_row.addWidget(self.wait_spin)
-        grid.addWidget(self.wait_panel, 2, 0, 1, 4)
+        grid.addWidget(self.wait_panel, 3, 0, 1, 4)
         self.reset_options_button = PushButton('恢复默认', self.advanced_panel)
         self.reset_options_button.clicked.connect(self._reset_options)
-        grid.addWidget(self.reset_options_button, 3, 3, alignment=Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(self.reset_options_button, 4, 3, alignment=Qt.AlignmentFlag.AlignRight)
         layout.addWidget(self.advanced_panel)
         self.advanced_panel.hide()
         saved = self.ctx.app_settings.get('video_recording') if self.ctx else None
@@ -403,6 +417,7 @@ class VideoRecordingDialog(ThemedDialog):
         self.audio_bitrate_combo.setCurrentIndex(self.audio_bitrate_combo.findData(options.audio_bit_rate))
         self.container_combo.setCurrentIndex(self.container_combo.findData(options.container))
         self.subtitle_checkbox.setChecked(options.embed_subtitles)
+        self.show_mode_combo.setCurrentIndex(self.show_mode_combo.findData(options.windowed))
         self._update_output_summary()
 
     def _update_output_summary(self):
@@ -419,7 +434,8 @@ class VideoRecordingDialog(ThemedDialog):
         return VideoRecordingOptions(width, height, self.fps_combo.currentData(),
                                      round(self.video_bitrate_spin.value() * 1000000),
                                      self.audio_bitrate_combo.currentData(),
-                                     self.container_combo.currentData(), self.subtitle_checkbox.isChecked())
+                                     self.container_combo.currentData(), self.subtitle_checkbox.isChecked(),
+                                     bool(self.show_mode_combo.currentData()))
 
     def _toggle_advanced(self, expanded):
         self.advanced_panel.setVisible(expanded)
@@ -448,7 +464,7 @@ class VideoRecordingDialog(ThemedDialog):
         selection_error = ''
         self.presentation_combo.blockSignals(True)
         self.presentation_combo.clear()
-        self.presentations = list_presentations()
+        self.presentations = list_presentations(fullscreen_only=False, capture_window=True)
         if self._recording_source() is not None:
             self.presentations = [show for show in self.presentations if show.matches_source(self.source_path)]
         if self.live_session is not None and self.live_session.presentation is not None:
@@ -537,7 +553,7 @@ class VideoRecordingDialog(ThemedDialog):
             badge, level = '待选画面', InfoLevel.WARNING
         elif automatic:
             label = '开始录制时自动打开并放映'
-            message = '录制当前 PPT，程序会自动准备全屏放映。'
+            message = '录制当前 PPT，程序会自动准备放映。'
             badge, level = '自动放映', InfoLevel.INFOAMTION
         else:
             if source is not None:
@@ -634,7 +650,7 @@ class VideoRecordingDialog(ThemedDialog):
                 presentation = self._selected_presentation()
                 source = self._recording_source()
                 if presentation is None and (source is None or not source.is_file()):
-                    raise RuntimeError('请先启动 PPT 全屏放映。')
+                    raise RuntimeError('请先启动 PPT 放映。')
                 if (presentation is not None and source is not None
                         and not presentation.matches_source(self.source_path)):
                     raise RuntimeError('所选放映与已导入的 PPT 不同，请刷新后重试。')
@@ -711,7 +727,8 @@ class VideoRecordingDialog(ThemedDialog):
                     self.live_session.presentation = presentation
                     self.live_session.remember_position()
                 else:
-                    self.live_session = RecordingSession.start(self._recording_source())
+                    self.live_session = RecordingSession.start(
+                        self._recording_source(), windowed=bool(self.show_mode_combo.currentData()))
             self.selected_presentation = self.live_session.presentation
             self.presentations = [self.selected_presentation]
             self.presentation_combo.blockSignals(True)
@@ -765,7 +782,7 @@ class VideoRecordingDialog(ThemedDialog):
             # 构造编码器前先验证放映，音频准备期间用户可能已关闭或最小化窗口。
             self.capture_window = self.selected_presentation.capturable_window()
             self.recording = VideoRecording(timeline, self.staging, self.selected_presentation,
-                                             self.capture_window, self, options=self.options)
+                                             self, options=self.options)
             self.recording.progress.connect(self._progress)
             self.recording.finished.connect(self._finished)
             self.recording.failed.connect(self._failed)
@@ -927,6 +944,8 @@ class VideoRecordingDialog(ThemedDialog):
         self.waiting_manual = False
 
     def _failed(self, message):
+        from app.logging_setup import get_logger
+        get_logger().error('视频导出失败（%s）：%s', self.mode, message, extra={'source': '视频导出'})
         self._cleanup()
         self._set_status('视频导出失败：' + message, '导出失败', InfoLevel.ERROR)
         if self.closing:

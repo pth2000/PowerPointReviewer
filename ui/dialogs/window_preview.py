@@ -5,7 +5,7 @@ from PySide6.QtGui import QImage, QPixmap, QWindow
 from PySide6.QtMultimedia import QCapturableWindow, QMediaCaptureSession, QVideoSink, QWindowCapture
 from PySide6.QtWidgets import QLabel, QSizePolicy
 
-from app import window_target
+from app.presentation import window_target
 
 
 class WindowPreview(QLabel):
@@ -19,6 +19,7 @@ class WindowPreview(QLabel):
         self.setMaximumHeight(200)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.image = QImage()
+        self.crop = None
         self.capture = self.session = self.sink = self.foreign_window = None
         self.generation = 0
         self.timer = QTimer(self)
@@ -26,8 +27,9 @@ class WindowPreview(QLabel):
         self.timer.timeout.connect(lambda: self._fail('预览超时，请确认放映窗口正常显示。'))
         self.setText('选择窗口后查看预览')
 
-    def show_target(self, target):
+    def show_target(self, target, crop=None):
         self.stop()
+        self.crop = crop
         generation = self.generation
         try:
             hwnd = int(target.get('hwnd') or 0)
@@ -61,6 +63,14 @@ class WindowPreview(QLabel):
         image = frame.toImage()
         if image.isNull():
             return
+        if self.crop is not None:
+            try:
+                image = self.crop(image)
+            except Exception as exc:
+                self._fail(str(exc))
+                return
+            if image.isNull():
+                return
         self.image = image.copy()
         self._release()
         self._render()

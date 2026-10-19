@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 
 from app import paths
 from app.hotkeys import HotkeyManager
-from app.slideshow import SlideshowWatcher
-from app.playback import PlaybackBus
+from app.presentation.slideshow import SlideshowWatcher
+from app.audio.playback import PlaybackBus
 from app.settings_store import AppSettings, ConfigStore
 from tts_engine import TTSEngine
 

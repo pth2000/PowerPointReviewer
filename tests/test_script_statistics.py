@@ -5,13 +5,15 @@ import unittest
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
-from app.script_statistics import build_statistics, count_characters, format_duration
+from app.documents.statistics import build_statistics, count_characters, format_duration
 from app.settings_store import AppSettings
-from app.playback import PlaybackBus
+from app.audio.playback import PlaybackBus
 from ui.dialogs.script_statistics_dialog import ScriptStatisticsDialog
 from ui.pages.reviewer_page import PPTReviewer
+
+from qt_test_case import QtTestCase
 
 
 class StatisticsTests(unittest.TestCase):
@@ -57,10 +59,7 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(format_duration(4800.6), '1 小时 20 分 1 秒')
 
 
-class StatisticsInterfaceTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class StatisticsInterfaceTests(QtTestCase):
 
     def setUp(self):
         self.root = QWidget()

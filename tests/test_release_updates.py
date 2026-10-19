@@ -14,8 +14,31 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from app.update_download import MirroredUpdateManager
+from app.updates.download import MirroredUpdateManager
+from app import paths
+from app.audio import signalsmith
 import release
+
+
+class ResourcePathTests(unittest.TestCase):
+    def test_source_resources_are_resolved_from_project_root(self):
+        with patch.object(paths, 'sys', SimpleNamespace()):
+            root = Path(paths.__file__).resolve().parent.parent
+            self.assertEqual(paths.resource_root(), root)
+            self.assertEqual(signalsmith._library_path(),
+                             root / 'third_party/signalsmith/SignalsmithStretch_x64.dll')
+
+    def test_frozen_resources_are_separate_from_application_data(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            bundle, program = root / '_internal', root / 'program'
+            with patch.object(paths, 'sys', SimpleNamespace(
+                    _MEIPASS=str(bundle), frozen=True,
+                    executable=str(program / 'PowerPointReviewer.exe'))):
+                self.assertEqual(paths.resource_root(), bundle)
+                self.assertEqual(paths.app_root(), program)
+                self.assertEqual(signalsmith._library_path(),
+                                 bundle / 'third_party/signalsmith/SignalsmithStretch_x64.dll')
 
 
 class ReleasePayloadTests(unittest.TestCase):
@@ -111,7 +134,7 @@ class ReleasePayloadTests(unittest.TestCase):
 
 class MirroredManagerTests(unittest.TestCase):
     def test_too_many_or_large_deltas_choose_full_and_report_full_size(self):
-        from app import updater
+        from app.updates import manager as updater
         import velopack
         for sizes in ([1] * 11, [60, 60]):
             with self.subTest(sizes=sizes):
@@ -125,11 +148,11 @@ class MirroredManagerTests(unittest.TestCase):
                 self.assertEqual(updater.download_size(result), 100)
 
     def test_both_sources_use_mirrors_and_custom_feed_stays_local(self):
-        from app import updater
+        from app.updates import manager as updater
         import velopack
         with patch.object(updater.paths, 'IS_VELOPACK_INSTALL', True), \
              patch.object(updater, 'custom_feed', return_value=''), \
-             patch('app.update_download.MirroredUpdateManager') as mirrors:
+             patch('app.updates.download.MirroredUpdateManager') as mirrors:
             self.assertIs(updater.create_manager(0), mirrors.return_value)
             self.assertIs(updater.create_manager(1), mirrors.return_value)
             roots = [updater.GITEE_FEED.rsplit('/', 1)[0], f'{updater.GITHUB_REPO}/releases/download']
@@ -137,7 +160,7 @@ class MirroredManagerTests(unittest.TestCase):
             self.assertEqual(mirrors.call_args_list[1].args[1], roots[::-1])
         with patch.object(updater.paths, 'IS_VELOPACK_INSTALL', True), \
              patch.object(updater, 'custom_feed', return_value='C:/local-feed'), \
-             patch('app.update_download.MirroredUpdateManager') as mirrors, \
+             patch('app.updates.download.MirroredUpdateManager') as mirrors, \
              patch.object(velopack, 'UpdateManager') as native:
             self.assertIs(updater.create_manager(0), native.return_value)
             mirrors.assert_not_called()
@@ -210,8 +233,13 @@ class VelopackHistoryTests(unittest.TestCase):
             RootAppDir=self.root, UpdateExePath=self.root / 'Update.exe', PackagesDir=self.packages,
             ManifestPath=self.root / 'sq.version', CurrentBinaryDir=self.root / 'current', IsPortable=False)
         self.files, self.feed = release.gitee_payload('1.6.3')
+        # 本组只验证 1.6.1—1.6.3；后续本地构建不得改变模拟服务器的最新版本。
+        feed = json.loads(self.feed)
+        feed['Assets'] = [asset for asset in feed['Assets']
+                          if asset['Version'] in ('1.6.0', '1.6.1', '1.6.2', '1.6.3')]
+        self.feed = json.dumps(feed).encode('utf-8')
         factory = tempfile.TemporaryDirectory
-        patcher = patch('app.update_download.tempfile.TemporaryDirectory',
+        patcher = patch('app.updates.download.tempfile.TemporaryDirectory',
                         side_effect=lambda **kwargs: factory(dir=self.root, **kwargs))
         patcher.start()
         self.addCleanup(patcher.stop)

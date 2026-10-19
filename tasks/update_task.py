@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import QThread, Signal
 
-from app import updater
+from app.updates import manager as updater
 
 
 class UpdateCheckTask(QThread):

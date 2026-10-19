@@ -1,4 +1,4 @@
-﻿"""在后台批量生成讲稿音频，并维护缓存与时长元数据。"""
+"""在后台批量生成讲稿音频，并维护缓存与时长元数据。"""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -13,7 +13,8 @@ from mutagen.mp3 import MP3
 
 from PySide6.QtCore import QThread, Signal
 
-from app import audio_processing, paths
+from app.audio import processing as audio_processing, segments as segment_audio
+from app import paths
 from tts_engine import TTSEngine
 
 # 空白讲稿仍需占据一个播放槽位，才能维持“讲稿段—音频—翻页动作”的一一对应；
@@ -39,6 +40,7 @@ class GenerationResult:
     cache_hit_count: int = 0
     generation_profile: dict = field(default_factory=dict)
     speaker: str = ''
+    audio_edits: dict = field(default_factory=dict)
 
 
 class AudioGenerationTask(QThread):
@@ -60,9 +62,10 @@ class AudioGenerationTask(QThread):
         self.notes_list: list[dict] = []
         self.countdown_max_seconds = 0
         self.force_regenerate = False
+        self.audio_edits = {}
 
     def configure(self, notes_list: list[dict], countdown_max_seconds: int,
-                  force_regenerate: bool = False):
+                  force_regenerate: bool = False, audio_edits=None):
         """复制本次任务输入，并设置是否绕过已有缓存。
 
         ``force_regenerate`` 只跳过命中判断，仍按稳定缓存键覆盖原缓存文件。
@@ -71,6 +74,7 @@ class AudioGenerationTask(QThread):
         self.tts_engine = self.source_engine.snapshot()
         self.countdown_max_seconds = int(countdown_max_seconds)
         self.force_regenerate = bool(force_regenerate)
+        self.audio_edits = dict(audio_edits or {})
 
     def run(self):
         """预热倒计时后生成正文，并将异常转换为线程信号。"""
@@ -146,6 +150,16 @@ class AudioGenerationTask(QThread):
         output_ext = self.tts_engine.get_output_extension()
         cache_key = self.tts_engine.build_audio_cache_key(text, generation_profile)
         cache_path = self.audio_cache_path / f'{cache_key}.{output_ext}'
+        edit = self.audio_edits.get(index, {})
+        if (not self.force_regenerate and edit.get('text') == text
+                and edit.get('profile_id') == segment_audio.profile_id(generation_profile)):
+            try:
+                tuned = segment_audio.cache_path(self.audio_cache_path,
+                                                 {'key': edit['audio_key'], 'ext': edit['audio_ext']})
+                if tuned.is_file() and tuned.stat().st_size:
+                    cache_path, cache_key, output_ext = tuned, edit['audio_key'], edit['audio_ext']
+            except (KeyError, ValueError, OSError):
+                pass
         path = self.output_path / f'{note_dict["page"]}_{index + 1}.{output_ext}'
 
         cache_hit = (not self.force_regenerate
@@ -202,6 +216,9 @@ class AudioGenerationTask(QThread):
             result.cache_exts[index] = cache_ext
             if cache_hit:
                 result.cache_hit_count += 1
+            edit = self.audio_edits.get(index, {})
+            if edit.get('audio_key') == cache_key and edit.get('audio_ext') == cache_ext:
+                result.audio_edits[index] = edit
 
         if self.tts_engine.can_parallel_generate() and total > 1:
             max_workers = max(1, min(self.tts_engine.get_parallel_workers(), total))

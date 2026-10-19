@@ -10,7 +10,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer
 
-from app import hotkeys, rewrite, theme
+from app import hotkeys
+from app.ai import rewrite
+from ui import theme
 
 
 class AppSettings:
@@ -23,10 +25,13 @@ class AppSettings:
         'ui_font': '',
         # 讲稿与播放
         'mark': '●',
+        'script_comments_enabled': False,
+        'animation_check_enabled': True,
         'countdown_enabled': True,
         'countdown_seconds': 5,
         'scroll_enabled': False,
         'slideshow_auto_start': True,
+        'slideshow_windowed': False,
         'slideshow_follow_page': True,
         'slideshow_sync_navigation': True,
         'slideshow_stop_on_exit': True,

@@ -7,10 +7,10 @@ import unittest
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent
-from PySide6.QtWidgets import QApplication
 
-from app import presentation_link, theme
-from app.playback import PlaybackBus
+from app.presentation import link as presentation_link
+from ui import theme
+from app.audio.playback import PlaybackBus
 from app.settings_store import AppSettings
 from app.window import Window
 from tts_engine import TTSEngine
@@ -18,11 +18,10 @@ from test_presentation_link import make_ppt
 from ui.pages.reviewer_page import PPTReviewer
 from ui.pages.settings_page import SettingInterface
 
+from qt_test_case import QtTestCase
 
-class SyncPlaybackFixture(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+
+class SyncPlaybackFixture(QtTestCase):
 
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -40,7 +39,7 @@ class SyncPlaybackFixture(unittest.TestCase):
                  playback_bus=PlaybackBus(), hotkeys=Mock(), slideshow_watcher=Mock())
         with patch('app.paths.ensure_runtime_dirs'), \
              patch.object(engine, 'get_voices_list', return_value=['zh-CN-XiaoxiaoNeural']), \
-             patch('app.theme.available_fonts', return_value=(('', theme.DEFAULT_FONT_LABEL),)):
+             patch('ui.theme.available_fonts', return_value=(('', theme.DEFAULT_FONT_LABEL),)):
             page = PPTReviewer(ctx)
             if ready:
                 page.notes = {1: '第一页', 2: '第二页'}
@@ -65,6 +64,26 @@ class SyncPlaybackFixture(unittest.TestCase):
         return page, settings, ctx
 
 class StartupPreferencesTests(SyncPlaybackFixture):
+    def test_script_options_defaults_and_immediate_save_do_not_change_existing_audio(self):
+        self.assertFalse(self.settings.script_comments_switch.isChecked())
+        self.assertTrue(self.settings.animation_check_switch.isChecked())
+        old_segments = list(self.page.notes_list)
+        regenerate = Mock()
+        self.settings.regenerate_requested.connect(regenerate)
+        self.settings.script_comments_switch.setChecked(True)
+        self.settings.animation_check_switch.setChecked(False)
+        self.assertTrue(self.ctx.app_settings.get('script_comments_enabled'))
+        self.assertFalse(self.ctx.app_settings.get('animation_check_enabled'))
+        self.assertEqual(self.ctx.config.save_later.call_count, 2)
+        self.assertEqual(self.page.notes_list, old_segments)
+        self.assertTrue(self.page.is_import)
+        self.assertFalse(self.settings.is_dirty())
+        regenerate.assert_not_called()
+        restored = AppSettings()
+        restored.load_from(self.ctx.app_settings.to_dict())
+        self.assertTrue(restored.get('script_comments_enabled'))
+        self.assertFalse(restored.get('animation_check_enabled'))
+
     def test_resume_defaults_on_and_toggle_saves_without_changing_voice_or_position(self):
         self.assertTrue(AppSettings().get('resume_last_session'))
         self.assertTrue(self.settings.resume_session_switch.isChecked())
@@ -97,6 +116,20 @@ class StartupPreferencesTests(SyncPlaybackFixture):
 
 
 class SlideshowPreferenceTests(SyncPlaybackFixture):
+    def test_display_choice_follows_sync_and_auto_start_gates(self):
+        combo = self.settings.slideshow_display_combo
+        self.assertFalse(combo.isEnabled())
+        combo.setCurrentIndex(1)
+        self.assertEqual(combo.currentIndex(), 0)
+        self.assertFalse(self.ctx.app_settings.get('slideshow_windowed'))
+        self.settings.sync_playback_switch.setChecked(True)
+        self.assertTrue(combo.isEnabled())
+        combo.setCurrentIndex(1)
+        self.assertTrue(self.ctx.app_settings.get('slideshow_windowed'))
+        self.settings.slideshow_preference_switches['slideshow_auto_start'].setChecked(False)
+        self.assertFalse(combo.isEnabled())
+        self.assertTrue(self.ctx.app_settings.get('slideshow_windowed'))
+
     def test_defaults_and_independent_preferences_save_without_regenerating_audio(self):
         self.settings.sync_playback_switch.setChecked(True)
         before = self.ctx.tts_engine.export_persistent_state()
@@ -143,7 +176,7 @@ class SlideshowPreferenceTests(SyncPlaybackFixture):
         self.page.on_slideshow_slide_changed(2)
         self.assertEqual(self.page.current_index, 0)
         self.page.pageJumpSpinBox.setValue(2)
-        with patch('app.slideshow.goto') as jump:
+        with patch('app.presentation.slideshow.goto') as jump:
             self.page.jump_page()
             jump.assert_called_once_with(2, self.source)
         self.settings.slideshow_preference_switches['slideshow_follow_page'].setChecked(True)
@@ -217,7 +250,7 @@ class SyncPlaybackTests(SyncPlaybackFixture):
         self.page.on_slideshow_slide_changed(1)
         self.assertEqual(self.page.current_index, 1)
         self.page.pageJumpSpinBox.setValue(2)
-        with patch('app.slideshow.goto') as jump:
+        with patch('app.presentation.slideshow.goto') as jump:
             self.page.jump_page()
             jump.assert_not_called()
             self.settings.sync_playback_switch.setChecked(True)

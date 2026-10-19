@@ -11,11 +11,13 @@ import unittest
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QThread, QTimer
-from PySide6.QtWidgets import QApplication
 from qfluentwidgets import PushButton
 
-from app import paths, presentation_link, project_package, theme
-from app.playback import PlaybackBus
+from app import paths
+from app.presentation import link as presentation_link
+from app.documents import package as project_package
+from ui import theme
+from app.audio.playback import PlaybackBus
 from app.settings_store import AppSettings
 from app.window import Window
 from tasks.audio_generation_task import AudioGenerationTask, GenerationResult
@@ -28,11 +30,52 @@ from ui.pages.reviewer_page import MissingAudioError, PPTReviewer
 from ui.pages.settings_page import SettingInterface
 from ui.pages.tools_page import ToolsInterface
 
+from qt_test_case import QtTestCase
 
-class WorkflowAuditTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+
+class WorkflowAuditTests(QtTestCase):
+    def test_comment_exports_keep_raw_notes_and_ai_only_receives_body(self):
+        from app.documents import io as script_io
+        self.ctx.app_settings.set('script_comments_enabled', True)
+        self.page.notes[1] = '// 教学提醒●\n第一页\n// 资料'
+        self.page.mark_split()
+        with patch('ui.pages.tools_page.RewriteDialog') as dialog:
+            dialog.return_value.exec.return_value = False
+            self.tools.open_rewrite_dialog()
+        self.assertEqual(dialog.call_args.args[0], {1: '第一页', 3: '第三页'})
+        with patch.object(self.tools, 'choose_export_dir', return_value=self.root), \
+             patch.object(self.tools, 'get_ppt_path', return_value=self.source):
+            self.tools.write_to_word()
+            self.tools.write_to_json()
+            self.tools.write_to_ppt()
+        for suffix in ('docx', 'json'):
+            exported = next(self.root.glob('*_Notes.' + suffix))
+            self.assertEqual(script_io.load_script(exported).notes, self.page.notes)
+        ppt = next(self.root.glob('*_NEW.pptx'))
+        self.assertEqual(script_io.load_script(ppt).notes[1].strip(), self.page.notes[1])
+        self.tools.create_error_info_bar.assert_not_called()
+
+    def test_package_without_audio_regenerates_with_its_comment_rule(self):
+        self.page.notes[1] = '// 教学提醒●\n第一页'
+        package = self.root / 'comments.pprpkg'
+        items = project_package.build_items(self.page.notes_list, self.page.notes_duration_list,
+                                            self.page.note_cache_keys, self.page.note_cache_exts,
+                                            self.page.media_list)
+        project_package.export_package(package, items=items, notes=self.page.notes, mark='●',
+                                       source_name='讲稿', generation_profile={}, speaker='',
+                                       include_audio=False, script_comments_enabled=True)
+        for audio in self.page.media_list:
+            audio.unlink()
+        self.assertFalse(self.ctx.app_settings.get('script_comments_enabled'))
+        with patch.object(self.page.save_thread, 'start') as start, \
+             patch.object(self.page.save_thread, 'configure') as configure, \
+             patch.object(self.page, 'clean_temp_folder'):
+            self.assertTrue(self.page.import_file(package))
+        self.assertTrue(self.page.script_comments_enabled)
+        self.assertEqual(configure.call_args.args[0],
+                         [{'page': 1, 'text': '第一页'}, {'page': 3, 'text': '第三页'}])
+        start.assert_called_once_with()
+
 
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -85,7 +128,7 @@ class WorkflowAuditTests(unittest.TestCase):
     def make_settings(self):
         with patch('app.paths.ensure_runtime_dirs'), \
              patch.object(self.engine, 'get_voices_list', return_value=['zh-CN-XiaoxiaoNeural']), \
-             patch('app.theme.available_fonts', return_value=(('', theme.DEFAULT_FONT_LABEL),)):
+             patch('ui.theme.available_fonts', return_value=(('', theme.DEFAULT_FONT_LABEL),)):
             settings = SettingInterface(self.ctx)
         self.addCleanup(settings.deleteLater)
         return settings
@@ -153,7 +196,7 @@ class WorkflowAuditTests(unittest.TestCase):
         self.page.jump_page()
         self.assertEqual(self.page.current_index, 1)
         self.page.pageJumpSpinBox.setValue(2)
-        with patch.object(self.page, 'stop_audio') as stop, patch('app.slideshow.goto') as goto:
+        with patch.object(self.page, 'stop_audio') as stop, patch('app.presentation.slideshow.goto') as goto:
             self.page.jump_page()
         stop.assert_not_called()
         goto.assert_not_called()
@@ -394,10 +437,7 @@ class WorkflowAuditTests(unittest.TestCase):
         dialog._worker_finished()
 
 
-class EngineSnapshotTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class EngineSnapshotTests(QtTestCase):
 
     def test_snapshot_and_preview_keep_original_mode_and_parameters(self):
         engine = TTSEngine()
@@ -465,10 +505,7 @@ class EngineSnapshotTests(unittest.TestCase):
         self.assertTrue(all(before == after for before, after in observed))
 
 
-class ShutdownTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class ShutdownTests(QtTestCase):
 
     def test_window_waits_for_worker_and_then_closes_without_destroying_it(self):
         engine = TTSEngine()
@@ -477,7 +514,7 @@ class ShutdownTests(unittest.TestCase):
                  config=Mock(), playback_bus=PlaybackBus(), hotkeys=Mock(), slideshow_watcher=Mock())
         with patch('app.paths.ensure_runtime_dirs'), \
              patch.object(engine, 'get_voices_list', return_value=['zh-CN-XiaoxiaoNeural']), \
-             patch('app.theme.available_fonts', return_value=(('', theme.DEFAULT_FONT_LABEL),)):
+             patch('ui.theme.available_fonts', return_value=(('', theme.DEFAULT_FONT_LABEL),)):
             root = Window(ctx)
         release = threading.Event()
         started = threading.Event()

@@ -19,9 +19,11 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
-from app import audio_cache, exporters, project_package, theme
+from app.audio import cache as audio_cache
+from app.documents import export as exporters, package as project_package
+from ui import theme
 from app.app_context import AppContext
-from app.widget_state import set_enabled
+from ui.widget_state import set_enabled
 from toolsInterface import Ui_toolsInterface
 from ui.dialogs.rewrite_dialog import RewriteDialog
 from engines.defs import ENGINE_DEFS
@@ -85,6 +87,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             button = factory(text, card)
             button.setProperty('requires_ppt', slot in (self.write_to_ppt, self.record_video, self.compose_video))
             button.setProperty('requires_audio', slot in (
+                self.open_audio_review,
                 self.export_project_package, self.write_to_srt, self.export_audio_files,
                 self.export_merged_audio, self.record_video, self.compose_video))
             button.clicked.connect(slot)
@@ -100,6 +103,11 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         # 复用 .ui 中的静态标题，避免运行期重建造成样式差异。
         self.SubtitleLabel.setText('讲稿处理')
         self.CaptionLabel_4.setText('处理已导入的讲稿')
+
+        self.processing_cards.append(self.add_card(
+            '配音审听', '逐页逐段试听，调整语速、音量与停顿',
+            [('打开面板', self.open_audio_review)],
+            help_text='选中片段即可试听，调整效果确认采用后用于正常播放和导出。'))
 
         self.processing_cards.append(self.add_card(
             'AI 优化',
@@ -179,13 +187,16 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
     # 讲稿处理
 
+    def open_audio_review(self):
+        self.reviewer_page.open_audio_review()
+
     def open_rewrite_dialog(self):
         """打开逐页改写对照框，并将用户确认的结果写回主页。"""
         if not self.require_notes() or not self.require_idle():
             return
 
         page = self.reviewer_page
-        dialog = RewriteDialog(page.notes, page.mark, self.ctx.app_settings, self)
+        dialog = RewriteDialog(page.reading_notes(), page.mark, self.ctx.app_settings, self)
 
         accepted = dialog.exec()
         # 弹窗中可能只修改了接口或风格，即使未采用结果也应保存这些设置。
@@ -397,6 +408,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         try:
             exporters.write_docx(
                 file_path, page.notes_list, page.notes_duration_list, mark=page.mark,
+                notes=page.notes if page.script_comments_enabled else None,
             )
         except Exception as e:
             print(e)
@@ -451,6 +463,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             source_name=page.note_file_name, mark=page.mark,
             engine_name=engine_name,
             speaker=speaker,
+            notes=page.notes if page.script_comments_enabled else None,
         )
 
         file_path = self.unique_path(dir_path / f'{self.export_name()}_Notes.json')
@@ -475,7 +488,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
         items = project_package.build_items(
             page.notes_list, page.notes_duration_list,
-            page.note_cache_keys, page.note_cache_exts, page.media_list)
+            page.note_cache_keys, page.note_cache_exts, page.media_list, audio_edits=page.audio_edits)
         audio_size = project_package.estimate_size(items)
 
         box = MessageBox('导出工程包',
@@ -501,6 +514,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
                 app_version=self.ctx.version,
                 presentation=page.presentation_link,
                 presentation_path=page.presentation_path,
+                script_comments_enabled=page.script_comments_enabled,
             )
         except Exception as e:
             print(e)
@@ -569,8 +583,19 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         if not dir_path:
             return
 
-        suffix = Path(page.media_list[0]).suffix.lower() or '.wav'
+        direct = exporters.can_merge_audio_directly(page.media_list)
+        suffix = (Path(page.media_list[0]).suffix.lower() or '.wav') if direct else '.wav'
         file_path = self.unique_path(dir_path / f'{self.export_name()}_Full{suffix}')
+        if not direct:
+            from ui.dialogs.audio_merge_dialog import AudioMergeDialog
+            dialog = AudioMergeDialog(list(page.media_list), file_path, self)
+            result = dialog.exec()
+            if dialog.error:
+                self.create_error_info_bar('音频合并失败', dialog.error)
+            elif result:
+                self.create_success_info_bar('导出成功', f'完整音频已导出：{file_path}')
+            dialog.deleteLater()
+            return
         try:
             exporters.merge_audio(page.media_list, file_path)
         except Exception as e:

@@ -13,19 +13,20 @@ from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QPointF,
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent
 from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QWidget
 
-from app import exporters, paths, presentation_link, project_package, script_io
-from app.file_drop import FileDropImport
-from app.playback import PlaybackBus
+from app.documents import export as exporters, package as project_package, io as script_io
+from app import paths
+from app.presentation import link as presentation_link
+from ui.file_drop import FileDropImport
+from app.audio.playback import PlaybackBus
 from app.settings_store import AppSettings
 from app.window import Window
 from test_presentation_link import make_ppt
 from ui.pages.reviewer_page import PPTReviewer
 
+from qt_test_case import QtTestCase
 
-class FileDropTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+
+class FileDropTests(QtTestCase):
 
     def setUp(self):
         self.root = QWidget()
@@ -119,7 +120,7 @@ class FileDropTests(unittest.TestCase):
 
     def test_embedded_modal_color_dialog_blocks_drop_without_replacing_input(self):
         from PySide6.QtGui import QColor
-        from app import theme
+        from ui import theme
         self.root.resize(850, 750)
         self.root.show()
         color = theme.create_color_dialog(QColor('#B7472A'), self.root)
@@ -187,10 +188,7 @@ class FileDropTests(unittest.TestCase):
         self.assertTrue(drop.overlay.isHidden())
 
 
-class FileImportTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class FileImportTests(QtTestCase):
 
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -352,7 +350,7 @@ class FileImportTests(unittest.TestCase):
         self.assertEqual(self.page.presentation_path, source)
         self.assertEqual(self.page.ctx.app_settings.to_dict(), before)
         self.assertEqual(old_record.read_text(encoding='utf-8'), '{"original": true}')
-        self.assertIsNone(self.page.session_record_path)
+        self.assertEqual(self.page.session_record_path, old_record)
         persist.assert_not_called()
 
     def test_unchanged_json_does_not_regenerate_or_clear_record(self):

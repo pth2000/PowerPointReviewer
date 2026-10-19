@@ -12,13 +12,13 @@ import wave
 
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QSizeF, QTimer, QUrl
 from PySide6.QtGui import QImage
-from PySide6.QtMultimedia import QAudioDecoder, QCapturableWindow, QMediaPlayer, QVideoFrame, QVideoSink
+from PySide6.QtMultimedia import QAudioDecoder, QCapturableWindow, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import QApplication
 
-from app.video_mux import MuxCancelled, VideoCaption, build_video_captions, mux_video
-from app.video_recording import VideoRecording, pcm_format
-from app.video_settings import VideoRecordingOptions
-from app.video_timeline import SAMPLE_RATE, VideoTimeline
+from app.video.mux import MuxCancelled, VideoCaption, build_video_captions, mux_video
+from app.video.recording import VideoRecording, pcm_format
+from app.video.settings import VideoRecordingOptions
+from app.video.timeline import SAMPLE_RATE, VideoTimeline
 
 
 def write_wav(path, frames):
@@ -39,6 +39,7 @@ class Presentation:
     def begin(self, page): pass
     def advance(self, page, previous): pass
     def verify(self, page): pass
+    def capture_image(self, image): return image
     def restore(self): pass
     hwnd = 123
     def _verify_window(self): pass
@@ -75,13 +76,13 @@ class VideoMuxTests(unittest.TestCase):
     def record(self):
         target = self.root / '源 视频.mp4'
         timeline = VideoTimeline([1, 1], [self.wav, self.wav], wait_ms=100)
-        recording = VideoRecording(timeline, target, Presentation(), QCapturableWindow(),
+        recording = VideoRecording(timeline, target, Presentation(),
                                     options=VideoRecordingOptions(1280, 720))
         done, errors = [], []
         recording.finished.connect(lambda path: (done.append(path), self.loop.quit()))
         recording.failed.connect(lambda error: (errors.append(error), self.loop.quit()))
-        with patch('app.video_recording.QWindowCapture.start',
-                   lambda capture: recording._capture_frame(QVideoFrame(self.image))):
+        with patch('app.video.recording.WindowCapture.start',
+                   lambda capture: recording._capture_image(self.image)):
             QTimer.singleShot(0, recording.start)
             self.wait()
         if recording.state != 'done': recording.cancel()
@@ -167,7 +168,7 @@ class VideoMuxTests(unittest.TestCase):
         self.assertFalse(any(text for _, text in self.play(target, 0)))
 
     def test_cancel_validation_and_io_failure_preserve_source_and_destination(self):
-        source, timeline = self.record()
+        source, _ = self.record()
         source_bytes = source.read_bytes()
         existing = self.root / '已有视频.mp4'
         existing.write_bytes(b'keep existing video')
@@ -197,14 +198,14 @@ class VideoMuxTests(unittest.TestCase):
         with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]):
             dialog = VideoRecordingDialog([{'page': 1, 'text': '字幕内容'}], [self.wav],
                                           ctx=SimpleNamespace(app_settings=settings, config=Mock()))
-        def capture(_capture): dialog.recording._capture_frame(QVideoFrame(self.image))
+        def capture(_capture): dialog.recording._capture_image(self.image)
         @contextmanager
         def save_and_refresh():
             with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]), \
                  patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName',
                        return_value=(str(destination), f'{container.upper()} 视频 (*.{container})')):
                 yield
-        return dialog, save_and_refresh(), patch('app.video_recording.QWindowCapture.start', capture)
+        return dialog, save_and_refresh(), patch('app.video.recording.WindowCapture.start', capture)
 
     def test_dialog_saves_subtitles_and_cleans_staging_files(self):
         destination = self.root / '最终视频.mkv'
@@ -232,7 +233,7 @@ class VideoMuxTests(unittest.TestCase):
             original_cleanup()
             self.loop.quit()
         with save, capture, patch.object(dialog, '_cleanup', side_effect=cleanup), \
-                patch('app.video_mux.mux_video', side_effect=RuntimeError('模拟磁盘写入失败')):
+                patch('app.video.mux.mux_video', side_effect=RuntimeError('模拟磁盘写入失败')):
             QTimer.singleShot(0, dialog.start)
             self.wait()
         self.assertFalse(dialog.busy)
@@ -261,7 +262,7 @@ class VideoMuxTests(unittest.TestCase):
                 dialog.reject()
             elif dialog.busy:
                 QTimer.singleShot(10, cancel_when_muxing)
-        with save, capture, patch('app.video_mux.mux_video', side_effect=hold):
+        with save, capture, patch('app.video.mux.mux_video', side_effect=hold):
             QTimer.singleShot(0, dialog.start)
             QTimer.singleShot(10, cancel_when_muxing)
             self.wait()

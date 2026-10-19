@@ -6,12 +6,12 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from PySide6.QtCore import QCoreApplication, QEvent
-from PySide6.QtWidgets import QApplication
 
-from app import slideshow
-from app.slideshow_playback import SlideshowPlayback
+from app.presentation import slideshow
+from app.presentation.playback import SlideshowPlayback
 from test_sync_playback import SyncPlaybackFixture
+
+from qt_test_case import QtTestCase
 
 
 def fake_session(source, provider='PowerPoint'):
@@ -26,23 +26,22 @@ def fake_session(source, provider='PowerPoint'):
     view.GotoClick.side_effect = click
     view.GetClickIndex.side_effect = lambda: state.click
     view.GetClickCount.return_value = 3
+    view.State = 1
     view.Next.side_effect = lambda: setattr(state, 'click', state.click + 1)
     document = NS(FullName=str(source.with_name('runtime-copy.pptx')))
-    window = NS(View=view, Presentation=document)
+    window = NS(View=view, Presentation=document, IsFullScreen=True)
     app = Mock()
     app.Presentations.Count = 1
     app.Presentations.Item.return_value = document
     app.SlideShowWindows.Count = 1
     app.SlideShowWindows.Item.return_value = window
     presentation = NS(path=document.FullName, provider=provider, window=window,
-                      slide_count=2, application=app, is_active=Mock(return_value=True))
+                      slide_count=2, application=app, is_active=Mock(return_value=True),
+                      resume_background=Mock())
     return NS(presentation=presentation, close=Mock()), state
 
 
-class SlideshowPlaybackTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class SlideshowPlaybackTests(QtTestCase):
 
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -55,7 +54,7 @@ class SlideshowPlaybackTests(unittest.TestCase):
         self.addCleanup(self.controller.release)
 
     def prepare(self, page=1, offset=0):
-        with patch('app.slideshow_playback.PresentationSession.start', return_value=self.session) as start:
+        with patch('app.presentation.playback.PresentationSession.start', return_value=self.session) as start:
             self.controller.prepare(self.source, page, offset)
             self.controller._prepare_step()
         return start
@@ -76,6 +75,49 @@ class SlideshowPlaybackTests(unittest.TestCase):
         self.session.presentation.window.View.GotoClick.assert_called_once_with(2)
         self.assertEqual(self.state.click, 2)
 
+    def test_connecting_at_actual_position_preserves_running_animation(self):
+        self.state.click = 1
+        self.prepare(offset=1)
+        view = self.session.presentation.window.View
+        view.GotoSlide.assert_not_called()
+        view.GotoClick.assert_not_called()
+        self.assertEqual(self.controller.click_base, 0)
+
+    def test_failed_resume_blocks_audio_without_repositioning(self):
+        self.session.presentation.window.View.State = 2
+        ready, failed = Mock(), Mock()
+        self.controller.ready.connect(ready)
+        self.controller.failed.connect(failed)
+        self.prepare()
+        ready.assert_not_called()
+        self.assertIn('放映已暂停', failed.call_args.args[0])
+        self.session.presentation.resume_background.assert_called_once()
+        self.session.presentation.window.View.GotoSlide.assert_not_called()
+
+    def test_paused_fullscreen_can_resume_before_audio_without_resetting_position(self):
+        presentation = self.session.presentation
+        presentation.window.View.State = 2
+        self.state.click = 1
+        presentation.resume_background.side_effect = lambda: setattr(presentation.window.View, 'State', 1)
+        ready, failed = Mock(), Mock()
+        self.controller.ready.connect(ready)
+        self.controller.failed.connect(failed)
+        self.prepare(offset=1)
+        ready.assert_called_once()
+        failed.assert_not_called()
+        presentation.window.View.GotoSlide.assert_not_called()
+        presentation.window.View.GotoClick.assert_not_called()
+
+    def test_paused_show_does_not_consume_a_click_when_advancing(self):
+        self.prepare()
+        self.session.presentation.resume_background.reset_mock()
+        view = self.session.presentation.window.View
+        view.State = 2
+        with self.assertRaisesRegex(RuntimeError, '已暂停'):
+            self.controller.advance_to(1)
+        view.Next.assert_not_called()
+        self.session.presentation.resume_background.assert_not_called()
+
     def test_connect_only_and_no_alignment_preserve_existing_wps_page_and_animation(self):
         self.session.presentation.provider = 'WPS 演示'
         self.state.page = self.session.presentation.window.View.Slide.SlideIndex = 2
@@ -83,10 +125,10 @@ class SlideshowPlaybackTests(unittest.TestCase):
         ready, restart = Mock(), Mock()
         self.controller.ready.connect(ready)
         self.controller.restart_required.connect(restart)
-        with patch('app.slideshow_playback.PresentationSession.start', return_value=self.session) as start:
+        with patch('app.presentation.playback.PresentationSession.start', return_value=self.session) as start:
             self.controller.prepare(self.source, 1, 1, allow_start=False, align=False)
             self.controller._prepare_step()
-        start.assert_called_once_with(self.source, reuse_open=True, allow_start=False)
+        start.assert_called_once_with(self.source, reuse_open=True, allow_start=False, windowed=False)
         self.session.presentation.window.View.GotoSlide.assert_not_called()
         self.session.presentation.window.View.GotoClick.assert_not_called()
         self.assertEqual((self.state.page, self.state.click), (2, 2))
@@ -120,7 +162,7 @@ class SlideshowPlaybackTests(unittest.TestCase):
         self.controller.set_segment(1, 1)
         view = self.session.presentation.window.View
         view.GotoSlide.reset_mock()
-        with patch('app.slideshow_playback.PresentationSession.start') as start:
+        with patch('app.presentation.playback.PresentationSession.start') as start:
             self.controller.prepare(self.source, 1, 1)
             self.controller._prepare_step()
         start.assert_not_called()
@@ -130,7 +172,7 @@ class SlideshowPlaybackTests(unittest.TestCase):
 
     def test_show_readiness_wait_does_not_relaunch_the_application(self):
         self.session.presentation.is_active.return_value = False
-        with patch('app.slideshow_playback.PresentationSession.start', return_value=self.session) as start:
+        with patch('app.presentation.playback.PresentationSession.start', return_value=self.session) as start:
             self.controller.prepare(self.source, 1, 0)
             self.controller._prepare_step()
             self.controller._prepare_step()
@@ -144,7 +186,7 @@ class SlideshowPlaybackTests(unittest.TestCase):
         ready, failed = Mock(), Mock()
         self.controller.ready.connect(ready)
         self.controller.failed.connect(failed)
-        with patch('app.slideshow_playback.PresentationSession.start', side_effect=RuntimeError('failed')) as start:
+        with patch('app.presentation.playback.PresentationSession.start', side_effect=RuntimeError('failed')) as start:
             self.controller.prepare(self.source, 1, 0)
             self.controller.cancel_preparation()
             self.controller._prepare_step()
@@ -188,7 +230,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         self.ctx.slideshow_watcher.reset_mock()
 
     def launch(self):
-        with patch('app.slideshow_playback.PresentationSession.start', return_value=self.session) as start, \
+        with patch('app.presentation.playback.PresentationSession.start', return_value=self.session) as start, \
              patch.object(self.page, 'play_audio') as audio:
             self.page.init_play()
             audio.assert_not_called()
@@ -198,15 +240,48 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         return start
 
     def test_enabled_com_prepares_before_audio_and_watches_actual_application(self):
-        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=True)
+        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=True, windowed=False)
         self.ctx.slideshow_watcher.start.assert_called_with(
             Path(self.session.presentation.path), application=self.session.presentation.application)
         self.assertEqual(self.settings.page_turn_source(), Path(self.session.presentation.path))
-        self.assertEqual(self.page.describe_slideshow(), 'PowerPoint｜第 1 页')
+        self.assertEqual(self.page.describe_slideshow(), 'PowerPoint｜全屏放映 · 第 1 页')
+
+    def test_existing_show_reports_actual_mode_even_when_windowed_is_selected(self):
+        self.settings.slideshow_display_combo.setCurrentIndex(1)
+        self.launch()
+        self.assertIn('全屏放映', self.page.describe_slideshow())
+        self.session.presentation.window.View.State = 2
+        self.assertIn('已暂停', self.page.describe_slideshow())
+
+    def test_paused_show_stops_current_audio_once_and_keeps_borrowed_show(self):
+        self.launch()
+        self.page._playing_sequence = True
+        self.session.presentation.window.View.State = 2
+        with patch.object(self.page, 'create_warning_info_bar') as notice:
+            self.page.on_slideshow_checked()
+            self.page.on_slideshow_checked()
+        self.assertFalse(self.page._playing_sequence)
+        notice.assert_called_once()
+        self.session.close.assert_not_called()
+        self.assertIs(self.page.playback_show.session, self.session)
+
+    def test_background_window_show_stays_running_without_focus_requirement(self):
+        self.session.presentation.window.IsFullScreen = False
+        self.launch()
+        self.page._playing_sequence = True
+        with patch.object(self.page, 'create_warning_info_bar') as notice:
+            self.page.on_slideshow_checked()
+        self.assertTrue(self.page._playing_sequence)
+        notice.assert_not_called()
+
+    def test_selected_windowed_display_is_used_when_starting_playback(self):
+        self.settings.slideshow_display_combo.setCurrentIndex(1)
+        self.assertTrue(self.ctx.app_settings.get('slideshow_windowed'))
+        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=True, windowed=True)
 
     def test_countdown_starts_after_show_and_stopping_keeps_show(self):
         self.page.currentSwitch.setChecked(True)
-        with patch('app.slideshow_playback.PresentationSession.start', return_value=self.session), \
+        with patch('app.presentation.playback.PresentationSession.start', return_value=self.session), \
              patch.object(self.page, 'play_wait') as countdown:
             self.page.init_play()
             countdown.assert_not_called()
@@ -217,7 +292,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         self.assertIs(self.page.playback_show.session, self.session)
 
     def test_sync_off_or_manual_modes_play_without_starting_office(self):
-        with patch('app.slideshow_playback.PresentationSession.start') as start, \
+        with patch('app.presentation.playback.PresentationSession.start') as start, \
              patch.object(self.page, 'play_audio') as audio:
             self.page.scrollEnableSwitch.setChecked(False)
             self.page.init_play()
@@ -230,7 +305,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
             start.assert_not_called()
 
     def test_cancel_preparation_stops_timer_and_prevents_audio(self):
-        with patch('app.slideshow_playback.PresentationSession.start') as start, \
+        with patch('app.presentation.playback.PresentationSession.start') as start, \
              patch.object(self.page, 'play_audio') as audio:
             self.page.init_play()
             self.page.stop_audio()
@@ -241,7 +316,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         self.assertFalse(self.page.is_busy())
 
     def test_failed_show_only_notifies_and_waits_for_the_next_explicit_play(self):
-        with patch('app.slideshow_playback.PresentationSession.start',
+        with patch('app.presentation.playback.PresentationSession.start',
                    side_effect=[RuntimeError('请先开始放映'), self.session]) as start, \
              patch.object(self.page, 'create_warning_info_bar') as notice, \
              patch.object(self.page, '_bring_playback_dialog_forward') as focus, \
@@ -290,7 +365,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         self.session.presentation.provider = 'WPS 演示'
         self.page.notes_list = [{'page': 1, 'text': 'a'}, {'page': 1, 'text': 'b'}]
         self.page.current_index = 1
-        with patch('app.slideshow_playback.PresentationSession.start', return_value=self.session), \
+        with patch('app.presentation.playback.PresentationSession.start', return_value=self.session), \
              patch('ui.pages.reviewer_page.MessageBox') as box, \
              patch.object(self.page, 'play_audio') as audio:
             box.return_value.exec.return_value = True
@@ -312,7 +387,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
 
     def test_disabling_auto_start_connects_without_launching_and_keeps_countdown_order(self):
         self.ctx.app_settings.set('slideshow_auto_start', False)
-        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=False)
+        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=False, windowed=False)
 
     def test_navigation_off_keeps_show_position_for_start_jump_reset_and_seek(self):
         self.settings.slideshow_preference_switches['slideshow_sync_navigation'].setChecked(False)
@@ -397,17 +472,14 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         self.assertEqual(self.page.presentation_path, self.source)
 
 
-class PreferredWatcherTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class PreferredWatcherTests(QtTestCase):
 
     def test_direct_application_is_used_and_existing_probe_detects_wps_exit(self):
         session, _ = fake_session(Path('lesson.pptx'))
         watcher = slideshow.SlideshowWatcher()
         self.addCleanup(watcher.stop)
         with patch('win32com.client.WithEvents', return_value=Mock()) as events, \
-             patch('app.slideshow._running_apps') as lookup:
+             patch('app.presentation.slideshow._running_apps') as lookup:
             watcher.start(session.presentation.path, application=session.presentation.application)
             events.assert_called_once()
             lookup.assert_not_called()
@@ -422,6 +494,19 @@ class PreferredWatcherTests(unittest.TestCase):
         ended.assert_called_once()
         self.assertFalse(watcher._pump_timer.isActive())
         self.assertFalse(watcher._retry_timer.isActive())
+
+    def test_existing_show_probe_checks_playback_without_an_extra_timer(self):
+        session, _ = fake_session(Path('lesson.pptx'))
+        watcher = slideshow.SlideshowWatcher()
+        self.addCleanup(watcher.stop)
+        watcher._app = session.presentation.application
+        watcher.source_path = session.presentation.path
+        checked = Mock()
+        watcher.show_checked.connect(checked)
+        with patch('pythoncom.PumpWaitingMessages'):
+            for _ in range(watcher.PROBE_EVERY):
+                watcher._pump()
+        checked.assert_called_once()
 
     def test_custom_show_events_use_document_page_instead_of_show_order(self):
         watcher = slideshow.SlideshowWatcher()

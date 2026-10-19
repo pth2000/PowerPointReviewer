@@ -9,7 +9,9 @@ import zipfile
 
 from pptx import Presentation
 
-from app import paths, presentation_link, project_package
+from app import paths
+from app.presentation import link as presentation_link
+from app.documents import package as project_package
 
 
 def make_ppt(path, count=2):
@@ -40,7 +42,7 @@ class PresentationLinkTests(unittest.TestCase):
         candidate = self.root / 'other' / self.source.name
         candidate.parent.mkdir()
         ppt = Presentation()
-        for index in range(2):
+        for _ in range(2):
             ppt.slides.add_slide(ppt.slide_layouts[6])
         ppt.save(candidate)
         self.assertIsNone(presentation_link.resolve(info, [candidate]))

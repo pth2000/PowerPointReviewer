@@ -24,7 +24,7 @@ from qfluentwidgets import (
     SegmentedWidget,
 )
 
-from app import rewrite
+from app.ai import rewrite
 from ui.dialogs.base import ThemedDialog
 
 
@@ -367,10 +367,6 @@ class StyleManagerDialog(ThemedDialog):
         if str(self.app_settings.get('llm_style') or '') not in seen:
             self.app_settings.set('llm_style', self.styles[0]['name'])
         self.accept()
-
-    def get_styles(self) -> list[dict]:
-        """返回确认后写入配置的风格副本。"""
-        return copy.deepcopy(self.styles)
 
     def _info(self, level: str, title: str, text: str):
         factory = {'success': InfoBar.success, 'warning': InfoBar.warning, 'error': InfoBar.error}[level]

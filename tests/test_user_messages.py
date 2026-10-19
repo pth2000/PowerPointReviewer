@@ -6,14 +6,16 @@ import unittest
 from unittest.mock import Mock, patch
 
 import requests
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
-from app import llm_client
+from app.ai import client as llm_client
 from app.settings_store import AppSettings
 from engines.qwen_clone import AUDIO_TTS_MODELS
 from ui.dialogs.llm_config_dialog import LLMConfigMessageBox
 from ui.dialogs.qwen_clone_voice_dialog import QwenCloneVoiceDialog
 from ui.dialogs.rewrite_dialog import RewriteDialog
+
+from qt_test_case import QtTestCase
 
 
 def make_response(status, body):
@@ -76,10 +78,7 @@ class AIResponseTests(unittest.TestCase):
             self.assertEqual(self.call_chat(), '讲稿')
 
 
-class MessageInterfaceTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class MessageInterfaceTests(QtTestCase):
 
     def make_voice_dialog(self, mime='audio/mpeg'):
         engine = Mock()

@@ -1,15 +1,17 @@
-﻿"""创建 Qt 应用、恢复持久化配置并启动主窗口。"""
+"""创建 Qt 应用、恢复持久化配置并启动主窗口。"""
 
 import sys
 from PySide6.QtWidgets import QApplication
 
-from app import logging_setup, paths, theme, updater
+from app import logging_setup, paths
+from ui import theme
+from app.updates import manager as updater
 from app.app_context import AppContext
 from app.window import Window
 from tts_engine import TTSEngine
 
 
-VERSION = '1.7.0'
+VERSION = '1.8.0'
 
 
 def main():

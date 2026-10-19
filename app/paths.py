@@ -8,6 +8,11 @@ import sys
 from pathlib import Path
 
 
+def resource_root() -> Path:
+    """返回源码资源目录或 PyInstaller 内置资源目录。"""
+    return Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent))
+
+
 def app_root() -> Path:
     """返回源码仓库根目录或冻结后的可执行文件目录。"""
     if getattr(sys, 'frozen', False):

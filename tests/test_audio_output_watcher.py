@@ -6,9 +6,10 @@ from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtMultimedia import QMediaPlayer
-from PySide6.QtWidgets import QApplication
 
-from app.playback import AudioOutputWatcher
+from app.audio.playback import AudioOutputWatcher
+
+from qt_test_case import QtTestCase
 
 
 class Player(QObject):
@@ -30,14 +31,11 @@ class Player(QObject):
         self.playbackStateChanged.emit(state)
 
 
-class AudioOutputWatcherTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class AudioOutputWatcherTests(QtTestCase):
 
     def setUp(self):
         self.device = NS(id=lambda: b'old', description=lambda: 'test output')
-        self.default = patch('app.playback.QMediaDevices.defaultAudioOutput',
+        self.default = patch('app.audio.playback.QMediaDevices.defaultAudioOutput',
                              side_effect=lambda: self.device)
         self.default.start()
         self.addCleanup(self.default.stop)

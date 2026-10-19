@@ -4,7 +4,7 @@ import traceback
 
 from PySide6.QtCore import QThread, Signal
 
-from app import llm_client, rewrite
+from app.ai import client as llm_client, rewrite
 
 
 class RewriteTask(QThread):

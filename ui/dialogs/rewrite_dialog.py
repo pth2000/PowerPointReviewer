@@ -24,7 +24,7 @@ from qfluentwidgets import (
     StrongBodyLabel,
 )
 
-from app import rewrite
+from app.ai import rewrite
 from tasks.rewrite_task import RewriteTask
 from ui.dialogs.llm_config_dialog import LLMConfigMessageBox
 from ui.dialogs.style_manager_dialog import StyleManagerDialog

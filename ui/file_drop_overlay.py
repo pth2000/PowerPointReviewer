@@ -9,7 +9,7 @@ from qfluentwidgets import FluentIcon, isDarkTheme, qconfig, themeColor
 from qfluentwidgets.common.font import getFont
 from qfluentwidgets.common.icon import drawIcon
 
-from app import project_package, script_io
+from app.documents import package as project_package, io as script_io
 
 
 class FileDropOverlay(QWidget):

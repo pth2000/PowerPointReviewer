@@ -16,7 +16,7 @@ from qfluentwidgets import (
     TableWidget,
 )
 
-from app import window_target
+from app.presentation import window_target
 from ui.dialogs.base import ThemedDialog
 from ui.dialogs.window_preview import WindowPreview
 
@@ -48,8 +48,8 @@ class WindowTargetDialog(ThemedDialog):
         layout.addWidget(SubtitleLabel(title, self))
 
         tip = CaptionLabel(self)
-        tip.setText('请选择与当前文稿对应的全屏幻灯片画面。此选择仅改变录制画面，'
-                    '翻页和动画仍由当前文稿控制；演讲者控制台、阅读和编辑窗口暂不支持。'
+        tip.setText('请选择与当前文稿对应的放映窗口。翻页和动画由当前文稿控制，'
+                    '演讲者控制台和编辑窗口暂不支持。'
                     if recording else '请在放映开始后选择放映窗口')
         tip.setWordWrap(True)
         layout.addWidget(tip)
@@ -164,7 +164,11 @@ class WindowTargetDialog(ThemedDialog):
             title = window['title'] or window['process'] or '无标题窗口'
             self.status_label.setText(f'{action}：{title}')
             if self.preview is not None:
-                self.preview.show_target(window)
+                crop = getattr(self.presentation, 'capture_image', None)
+                if callable(crop):
+                    self.preview.show_target(window, lambda image: crop(image, window['hwnd']))
+                else:
+                    self.preview.show_target(window)
         elif self.selected:
             remembered = self.selected.get('title') or self.selected.get('process') or '原目标'
             self.status_label.setText(f'上次选择的窗口不在列表中：{remembered}')

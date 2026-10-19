@@ -4,7 +4,7 @@ import math
 import re
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
-from app import audio_processing
+from app.audio import processing as audio_processing
 
 
 DEFAULT_BASE_URL = 'http://127.0.0.1:8080'

@@ -9,8 +9,8 @@ from qfluentwidgets import (
     setCustomStyleSheet,
 )
 
-from app import theme
-from app.presentation_monitor import changed_pages
+from ui import theme
+from app.presentation.monitor import changed_pages
 
 
 def page_ranges(pages):
@@ -54,14 +54,14 @@ class PptUpdateDialog(MessageBoxBase):
         title_row, self.help_icon = theme.make_title_row(
             SubtitleLabel('更新 PPT 讲稿', self),
             '更新后按当前语音设置生成配音。\n'
-            'PPT 备注会替换当前讲稿中的编辑或 AI 改写内容，原历史记录保留。')
+            'PPT 备注会替换当前讲稿中的编辑或 AI 改写内容，生成成功后更新当前历史记录。')
         if edited:
             badge = InfoBadge.warning('已编辑讲稿', self)
             badge.setCustomBackgroundColor('#fff3db', '#44381f')
             setCustomStyleSheet(badge, 'InfoBadge { color: #86590b; }',
                                'InfoBadge { color: #efcd8e; }')
             badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-            badge.setToolTip('更新将替换当前讲稿中的编辑或改写内容，原历史记录保留。')
+            badge.setToolTip('更新将替换当前讲稿中的编辑或改写内容，生成成功后更新当前历史记录。')
             badge.installEventFilter(ToolTipFilter(badge))
             title_row.addWidget(badge)
         self.viewLayout.addLayout(title_row)

@@ -22,7 +22,9 @@ from qfluentwidgets import (
     TableWidget,
 )
 
-from app import icons, audio_cache, presentation_link
+from ui import icons
+from app.audio import cache as audio_cache
+from app.presentation import link as presentation_link
 from ui.dialogs.delete_record_dialog import DeleteRecordMessageBox
 from ui.dialogs.base import ThemedDialog
 from ui.dialogs.presentation_link_dialog import PresentationLinkDialog
@@ -35,7 +37,9 @@ class SessionHistoryDialog(ThemedDialog):
 
     def __init__(self, session_root_path: Path, parent=None):
         super().__init__(parent)
-        self.active_cache_keys = set(getattr(parent, 'note_cache_keys', ()) or ())
+        protector = getattr(parent, 'protected_audio_keys', None)
+        self.active_cache_keys = (protector() if callable(protector)
+                                  else set(getattr(parent, 'note_cache_keys', ()) or ()))
         self.session_root_path = Path(session_root_path)
         self.selected_record_path: Path | None = None
 
@@ -47,7 +51,7 @@ class SessionHistoryDialog(ThemedDialog):
         self.table = TableWidget(self)
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
-            '创建时间', '来源文件', '配音段数', '引擎', '发音人', '分隔符', 'PPT'
+            '更新时间', '来源文件', '配音段数', '引擎', '发音人', '分隔符', 'PPT'
         ])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -62,7 +66,7 @@ class SessionHistoryDialog(ThemedDialog):
         
         # 每列单独声明尺寸策略，避免短字段浪费空间。
         resize_modes = [
-            (0, QHeaderView.ResizeMode.ResizeToContents),  # 创建时间
+            (0, QHeaderView.ResizeMode.ResizeToContents),  # 更新时间
             (1, QHeaderView.ResizeMode.Stretch),  # 来源文件
             (2, QHeaderView.ResizeMode.ResizeToContents),  # 条目数
             (3, QHeaderView.ResizeMode.ResizeToContents),  # 引擎
@@ -325,7 +329,7 @@ class SessionHistoryDialog(ThemedDialog):
         self.table.insertRow(row)
 
         values = [
-            row_data['created_at'],
+            row_data['updated_at'],
             row_data['source_name'],
             str(row_data['items_count']),
             row_data['engine_mode'],
@@ -356,6 +360,7 @@ class SessionHistoryDialog(ThemedDialog):
             'file_path': record_path,
             'file_name': record_path.name,
             'created_at': fallback_time,
+            'updated_at': fallback_time,
             'source_name': '-',
             'items_count': 0,
             'engine_mode': '-',
@@ -410,6 +415,7 @@ class SessionHistoryDialog(ThemedDialog):
             'file_path': record_path,
             'file_name': record_path.name,
             'created_at': created_at,
+            'updated_at': str(data.get('updated_at') or created_at).replace('T', ' '),
             'source_name': source_name,
             'items_count': items_count,
             'engine_mode': mode,

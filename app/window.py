@@ -1,4 +1,4 @@
-﻿"""装配主窗口导航，并协调页面之间的少量跨页事件。"""
+"""装配主窗口导航，并协调页面之间的少量跨页事件。"""
 
 from PySide6.QtCore import QSize, QThread, QTimer
 from PySide6.QtGui import QIcon
@@ -8,8 +8,8 @@ from qfluentwidgets import (
 )
 
 from app.app_context import AppContext
-from app.file_drop import FileDropImport
-from app.widget_state import active_modal_dialog
+from ui.file_drop import FileDropImport
+from ui.widget_state import active_modal_dialog
 from ui.pages.reviewer_page import PPTReviewer
 from ui.pages.settings_page import SettingInterface
 from ui.pages.tools_page import ToolsInterface
@@ -54,6 +54,7 @@ class Window(FluentWindow):
         self.context.slideshow_watcher.slide_changed.connect(
             self.ppt_r.on_slideshow_slide_changed)
         self.context.slideshow_watcher.show_ended.connect(self.ppt_r.on_slideshow_ended)
+        self.context.slideshow_watcher.show_checked.connect(self.ppt_r.on_slideshow_checked)
         self.setting_interface.page_turn_mode_changed.connect(
             self.ppt_r.refresh_slideshow_watch)
         self._bind_sync_playback()
@@ -107,6 +108,9 @@ class Window(FluentWindow):
                 self.setting_interface.on_stop_requested(self)
                 if self.ppt_r.save_thread.isRunning():
                     self.ppt_r.save_thread.requestInterruption()
+                audio_review = getattr(self.ppt_r, 'audio_review_dialog', None)
+                if audio_review is not None and audio_review.task is not None:
+                    audio_review.task.requestInterruption()
                 for worker in workers:
                     worker.finished.connect(self._finish_pending_close)
                 InfoBar.warning('正在退出', '正在结束当前任务，完成后将自动退出。',
@@ -116,6 +120,10 @@ class Window(FluentWindow):
             return
         self._waiting_to_close = False
         self.setEnabled(True)
+        audio_review = getattr(self.ppt_r, 'audio_review_dialog', None)
+        if audio_review is not None and audio_review.isVisible() and not audio_review.close():
+            event.ignore()
+            return
         # 窗口即将关闭，此时重新生成音频没有可见收益。
         if self.setting_interface.prompt_unsaved_changes(allow_regenerate=False) is False:
             event.ignore()

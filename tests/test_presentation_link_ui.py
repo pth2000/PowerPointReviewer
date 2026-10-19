@@ -5,22 +5,21 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace as NS
 import unittest
+
 import zipfile
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent
-from PySide6.QtWidgets import QApplication
 
-from app import presentation_link, slideshow
-from app.playback import PlaybackBus
+from app.presentation import link as presentation_link, slideshow
+from app.audio.playback import PlaybackBus
 from app.settings_store import AppSettings
 from test_presentation_link import make_ppt
 
+from qt_test_case import QtTestCase
 
-class LinkInterfaceTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+
+class LinkInterfaceTests(QtTestCase):
 
     def setUp(self):
         from ui.pages.reviewer_page import PPTReviewer
@@ -53,7 +52,7 @@ class LinkInterfaceTests(unittest.TestCase):
         from ui.pages.tools_page import ToolsInterface
         self.tools = ToolsInterface(self.context, self.page)
         self.addCleanup(self.tools.deleteLater)
-        with patch('app.slideshow.list_open_presentations', return_value=[]):
+        with patch('app.presentation.slideshow.list_open_presentations', return_value=[]):
             self.page.load_session_record(self.record_path)
 
     def dispose(self):
@@ -77,14 +76,14 @@ class LinkInterfaceTests(unittest.TestCase):
         self.assertEqual(record['generation_profile'], self.record['generation_profile'])
         self.assertEqual(record['items'], self.record['items'])
         self.assertEqual(record['notes'], self.record['notes'])
-        with patch('app.slideshow.advance', return_value=True) as advance:
+        with patch('app.presentation.slideshow.advance', return_value=True) as advance:
             self.page.send_page_down()
         advance.assert_called_once_with(self.copy)
 
     def test_deleted_original_allows_history_audio_and_relink(self):
         self.source.unlink()
         self.record_path.write_text(json.dumps(self.record), encoding='utf-8')
-        with patch('app.slideshow.list_open_presentations', return_value=[]):
+        with patch('app.presentation.slideshow.list_open_presentations', return_value=[]):
             self.page.load_session_record(self.record_path)
         self.assertTrue(self.page.is_import)
         self.assertIsNone(self.page.presentation_path)
@@ -99,14 +98,14 @@ class LinkInterfaceTests(unittest.TestCase):
         record = dict(self.record, presentation=presentation_link.describe(self.source))
         self.record_path.write_text(json.dumps(record), encoding='utf-8')
         self.source.unlink()
-        with patch('app.slideshow.list_open_presentations', return_value=[]):
+        with patch('app.presentation.slideshow.list_open_presentations', return_value=[]):
             self.page.load_session_record(self.record_path)
         self.assertEqual(self.page.presentation_path, self.copy)
         self.assertEqual(json.loads(self.record_path.read_text(encoding='utf-8'))['presentation']['path'], str(self.copy))
 
     def test_persist_failure_preserves_previous_association(self):
         previous = self.page.presentation_path
-        with patch('app.presentation_link.update_record', side_effect=OSError('read only')):
+        with patch('app.presentation.link.update_record', side_effect=OSError('read only')):
             with self.assertRaises(OSError):
                 self.page.set_presentation_link(presentation_link.describe(self.copy))
         self.assertEqual(self.page.presentation_path, previous)
@@ -114,7 +113,7 @@ class LinkInterfaceTests(unittest.TestCase):
     def test_choose_open_document_displays_and_uses_its_saved_path(self):
         from ui.dialogs.presentation_link_dialog import PresentationLinkDialog
         opened = [{'path': str(self.copy), 'name': self.copy.name, 'provider': 'WPS 演示'}]
-        with patch('app.slideshow.list_open_presentations', return_value=opened):
+        with patch('app.presentation.slideshow.list_open_presentations', return_value=opened):
             dialog = PresentationLinkDialog(self.page.presentation_link, [1])
         try:
             self.assertIn(self.copy.name, dialog.open_combo.currentText())
@@ -151,7 +150,7 @@ class LinkInterfaceTests(unittest.TestCase):
         watcher._app = wrong
         try:
             self.assertFalse(watcher._alive())
-            with patch('app.slideshow._running_apps', return_value=iter([('PP', wrong), ('WPS', selected)])), \
+            with patch('app.presentation.slideshow._running_apps', return_value=iter([('PP', wrong), ('WPS', selected)])), \
                  patch('win32com.client.WithEvents', return_value=Mock()) as events:
                 self.assertTrue(watcher._try_attach())
             self.assertIs(events.call_args.args[0], selected)
@@ -162,7 +161,7 @@ class LinkInterfaceTests(unittest.TestCase):
 
     def test_home_retains_original_card_size_and_layout(self):
         from qfluentwidgets import FluentIcon, FluentWindow
-        from app import theme
+        from ui import theme
         theme.apply_theme('light', theme.DEFAULT_COLOR)
         theme.apply_font('')
         window = FluentWindow()
@@ -192,7 +191,7 @@ class LinkInterfaceTests(unittest.TestCase):
 
     def history_dialog(self):
         from ui.dialogs.session_history_dialog import SessionHistoryDialog
-        with patch('app.audio_cache.summary', return_value='1 条'):
+        with patch('app.audio.cache.summary', return_value='1 条'):
             dialog = SessionHistoryDialog(self.root, self.page)
         dialog.presentation_link_changed.connect(self.page._history_presentation_changed)
         self.addCleanup(dialog.deleteLater)
@@ -217,8 +216,8 @@ class LinkInterfaceTests(unittest.TestCase):
             self.assertFalse(buttons[name].isEnabled(), name)
         for name in ('Word', 'Markdown', 'JSON', 'SRT 字幕', '逐条音频', '合并音频', '导出工程包', '前往优化'):
             self.assertTrue(buttons[name].isEnabled(), name)
-        with patch('app.slideshow.advance') as advance, \
-             patch('app.window_target.send_scroll') as window_turn, \
+        with patch('app.presentation.slideshow.advance') as advance, \
+             patch('app.presentation.window_target.send_scroll') as window_turn, \
              patch('ui.pages.reviewer_page._press_page_down') as keyboard:
             for mode in ('com', 'window', 'foreground'):
                 self.context.app_settings.set('page_turn_mode', mode)
@@ -226,7 +225,7 @@ class LinkInterfaceTests(unittest.TestCase):
             advance.assert_not_called()
             window_turn.assert_not_called()
             keyboard.assert_not_called()
-        with patch('app.slideshow.goto') as jump:
+        with patch('app.presentation.slideshow.goto') as jump:
             self.page.jump_page()
             jump.assert_not_called()
         with patch('ui.dialogs.video_recording_dialog.VideoRecordingDialog') as video, \
@@ -298,7 +297,7 @@ class LinkInterfaceTests(unittest.TestCase):
         self.assertEqual(self.record_path.read_bytes(), before)
         picker.exec.return_value = True
         with patch('ui.dialogs.session_history_dialog.PresentationLinkDialog', return_value=picker), \
-             patch('app.presentation_link.update_record', side_effect=OSError('read only')), \
+             patch('app.presentation.link.update_record', side_effect=OSError('read only')), \
              patch.object(dialog, '_show_error') as error:
             dialog.associate_selected()
         error.assert_called_once()
@@ -326,7 +325,7 @@ class LinkInterfaceTests(unittest.TestCase):
     def test_different_content_requires_confirmation_and_bad_page_count_is_rejected(self):
         from ui.dialogs.presentation_link_dialog import PresentationLinkDialog
         wrong = make_ppt(self.root / 'other.pptx', 1)
-        with patch('app.slideshow.list_open_presentations', return_value=[]):
+        with patch('app.presentation.slideshow.list_open_presentations', return_value=[]):
             dialog = PresentationLinkDialog(presentation_link.describe(self.source), [1, 2])
             try:
                 dialog.select_path(wrong)
@@ -354,7 +353,7 @@ class LinkedSlideshowTests(unittest.TestCase):
         pp.SlideShowWindows.side_effect = lambda index: NS(Presentation=NS(FullName='other.pptx'), View=wrong_view)
         wps = NS(SlideShowWindows=Mock(Count=1))
         wps.SlideShowWindows.side_effect = lambda index: NS(Presentation=NS(FullName=str(path)), View=selected_view)
-        with patch('app.slideshow._running_apps', side_effect=lambda: iter([('PowerPoint', pp), ('WPS', wps)])):
+        with patch('app.presentation.slideshow._running_apps', side_effect=lambda: iter([('PowerPoint', pp), ('WPS', wps)])):
             self.assertTrue(slideshow.advance(path))
             self.assertTrue(slideshow.goto(2, path))
         wrong_view.Next.assert_not_called()

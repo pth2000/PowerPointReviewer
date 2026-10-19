@@ -5,13 +5,15 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from PySide6.QtCore import QCoreApplication, QEvent
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtCore import QCoreApplication, QEvent, QRect
+from PySide6.QtWidgets import QDialog
 from PySide6.QtGui import QImage, QWindow
 from PySide6.QtMultimedia import QVideoFrame
 
-from app.com_window import slideshow_hwnd
-from app.recording_presentation import RecordingPresentation, list_presentations
+from app.presentation.com_window import slideshow_hwnd
+from app.presentation.control import PresentationControl, list_presentations
+
+from qt_test_case import QtTestCase
 
 
 class PresentationTests(unittest.TestCase):
@@ -32,19 +34,20 @@ class PresentationTests(unittest.TestCase):
             self.view.GetClickIndex.return_value = index
         self.view.GotoSlide.side_effect = jump
         self.view.GotoClick.side_effect = click
+        self.view.Next.side_effect = lambda: click(self.view.GetClickIndex.return_value + 1)
         self.presentation = NS(Name='test.pptx', FullName='D:/test.pptx', Slides=NS(Count=3),
                                PageSetup=NS(SlideWidth=960, SlideHeight=540),
                                SlideShowSettings=NS(AdvanceMode=2))
         self.show = NS(Presentation=self.presentation, View=self.view, IsFullScreen=True)
         for name, value in (
-                ('app.recording_presentation.slideshow_hwnd', 123),
-                ('app.recording_presentation.window_target.window_info', self.identity),
-                ('app.recording_presentation.window_target.is_fullscreen_window', True),
-                ('app.recording_presentation.ctypes.windll.user32', self.user32)):
+                ('app.presentation.control.slideshow_hwnd', 123),
+                ('app.presentation.control.window_target.window_info', self.identity),
+                ('app.presentation.control.window_target.is_fullscreen_window', True),
+                ('app.presentation.control.ctypes.windll.user32', self.user32)):
             patcher = patch(name, value) if name.endswith('user32') else patch(name, return_value=value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        self.adapter = RecordingPresentation(self.show)
+        self.adapter = PresentationControl(self.show)
 
     def test_untitled_native_window_binds_without_title_guessing(self):
         self.assertEqual(self.adapter.hwnd, 123)
@@ -89,9 +92,9 @@ class PresentationTests(unittest.TestCase):
         self.adapter.begin(1)
         self.adapter.advance(1, 1)
         self.adapter.advance(1, 1)
-        self.assertEqual(self.view.GotoClick.call_args_list[0].args, (1,))
-        self.assertEqual(self.view.GotoClick.call_args_list[1].args, (2,))
-        self.view.Next.assert_not_called()
+        self.assertEqual(self.view.Next.call_count, 2)
+        self.assertEqual(self.adapter.click_index, 2)
+        self.view.GotoClick.assert_not_called()
 
     def test_extra_segment_does_not_advance_to_next_page(self):
         self.adapter.begin(1)
@@ -100,7 +103,7 @@ class PresentationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, '只有 2 次点击'):
             self.adapter.advance(1, 1)
         self.assertEqual(self.view.Slide.SlideIndex, 1)
-        self.view.Next.assert_not_called()
+        self.assertEqual(self.view.Next.call_count, 2)
 
     def test_manual_click_and_page_changes_stop_recording(self):
         self.adapter.begin(1)
@@ -124,7 +127,7 @@ class PresentationTests(unittest.TestCase):
 
     def test_stale_or_recycled_window_identity_is_rejected(self):
         for identity in ({}, dict(self.identity, pid=999), dict(self.identity, class_name='editor')):
-            with patch('app.recording_presentation.window_target.window_info', return_value=identity):
+            with patch('app.presentation.control.window_target.window_info', return_value=identity):
                 with self.assertRaisesRegex(RuntimeError, '窗口已关闭或改变'):
                     self.adapter.verify(1)
 
@@ -137,7 +140,7 @@ class PresentationTests(unittest.TestCase):
         for identity in (dict(self.identity, process='notepad.exe'),
                          dict(self.identity, hwnd=789, class_name='PPTFrameClass')):
             self.user32.GetAncestor.return_value = identity['hwnd']
-            with patch('app.recording_presentation.window_target.window_info', return_value=identity):
+            with patch('app.presentation.control.window_target.window_info', return_value=identity):
                 with self.assertRaises(RuntimeError):
                     self.adapter.bind_capture_window(identity)
         self.assertEqual(self.adapter.hwnd, 123)
@@ -145,7 +148,7 @@ class PresentationTests(unittest.TestCase):
     def test_manual_override_changes_capture_and_keeps_com_control(self):
         target = dict(self.identity, hwnd=789)
         self.user32.GetAncestor.return_value = 789
-        with patch('app.recording_presentation.window_target.window_info', return_value=target):
+        with patch('app.presentation.control.window_target.window_info', return_value=target):
             self.adapter.bind_capture_window(target)
             self.assertEqual(self.adapter.hwnd, 789)
             self.assertEqual(self.adapter.capture_mode, 'manual')
@@ -160,12 +163,12 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(self.adapter.capture_mode, 'auto')
 
     def test_failed_manual_or_auto_binding_keeps_previous_selection(self):
-        with patch('app.recording_presentation.window_target.is_fullscreen_window', return_value=False):
+        with patch('app.presentation.control.window_target.is_fullscreen_window', return_value=False):
             with self.assertRaisesRegex(RuntimeError, '全屏'):
                 self.adapter.bind_capture_window(self.identity)
         self.assertEqual(self.adapter.capture_mode, 'auto')
         self.adapter.capture_mode = 'manual'
-        with patch('app.recording_presentation.window_target.window_info', return_value={}):
+        with patch('app.presentation.control.window_target.window_info', return_value={}):
             with self.assertRaises(RuntimeError):
                 self.adapter.restore_auto_window()
         self.assertEqual(self.adapter.capture_mode, 'manual')
@@ -177,15 +180,91 @@ class PresentationTests(unittest.TestCase):
                 self.adapter.bind_capture_window(target)
 
     def test_exiting_fullscreen_stops_capture(self):
-        with patch('app.recording_presentation.window_target.is_fullscreen_window', return_value=False):
+        with patch('app.presentation.control.window_target.is_fullscreen_window', return_value=False):
             with self.assertRaisesRegex(RuntimeError, '退出全屏'):
                 self.adapter.verify(1)
+
+    def test_paused_show_is_rejected_without_treating_all_background_shows_as_paused(self):
+        self.view.State = 1
+        self.adapter.verify(1)
+        self.view.State = 2
+        with self.assertRaisesRegex(RuntimeError, '已暂停'):
+            self.adapter.verify(1)
+
+    def test_begin_resumes_paused_fullscreen_without_activating_window(self):
+        self.view.State = 2
+        run = Mock(side_effect=lambda: setattr(self.view, 'State', 1))
+        self.presentation.SlideShowSettings.Run = run
+        self.show.Activate = Mock()
+        self.adapter.begin(1)
+        run.assert_called_once_with()
+        self.show.Activate.assert_not_called()
+        self.adapter.verify(1)
+
+    def test_resume_preserves_existing_page_and_click_position(self):
+        self.view.State = 2
+        self.view.Slide.SlideIndex = 2
+        self.view.GetClickIndex.return_value = 1
+        self.presentation.SlideShowSettings.Run = Mock(side_effect=lambda: setattr(self.view, 'State', 1))
+        self.adapter.resume_background()
+        self.assertEqual(self.view.Slide.SlideIndex, 2)
+        self.assertEqual(self.view.GetClickIndex(), 1)
+        self.view.GotoSlide.assert_not_called()
+        self.view.GotoClick.assert_not_called()
+
+    def test_running_windowed_or_wps_shows_are_not_resumed(self):
+        self.presentation.SlideShowSettings.Run = Mock()
+        for provider, fullscreen, state in (('PowerPoint', True, 1),
+                                            ('PowerPoint', False, 2), ('WPS 演示', True, 2)):
+            with self.subTest(provider=provider, fullscreen=fullscreen, state=state):
+                self.adapter.provider = provider
+                self.show.IsFullScreen = fullscreen
+                self.view.State = state
+                self.adapter.resume_background()
+        self.presentation.SlideShowSettings.Run.assert_not_called()
+
+    def test_failed_resume_still_reports_paused_show(self):
+        self.view.State = 2
+        self.presentation.SlideShowSettings.Run = Mock(side_effect=RuntimeError('COM rejected'))
+        with self.assertRaisesRegex(RuntimeError, '已暂停'):
+            self.adapter.begin(1)
+
+    def test_windowed_show_binds_its_parent_and_rejects_editing_windows(self):
+        self.show.IsFullScreen = False
+        self.identity['class_name'] = 'PPTFrameClass'
+        with patch('app.presentation.control.slideshow_hwnd', return_value=321), \
+             patch('app.presentation.window_target._user32.GetAncestor', return_value=123), \
+             patch('app.presentation.control.window_target.is_fullscreen_window', return_value=False):
+            adapter = PresentationControl(self.show)
+            self.assertEqual(adapter.hwnd, 123)
+            self.assertEqual(adapter.viewport_hwnd, 321)
+            self.assertFalse(adapter.require_fullscreen)
+            adapter.verify(1)
+            image = QImage(100, 80, QImage.Format.Format_RGB32)
+            with patch('app.presentation.window_target.capture_client_rect', return_value=QRect(10, 20, 60, 40)):
+                self.assertEqual(adapter.capture_image(image).size().toTuple(), (60, 40))
+            with patch('app.presentation.window_target.capture_client_rect', return_value=QRect()):
+                self.assertTrue(adapter.capture_image(image).isNull())
+            with patch('app.presentation.window_target._user32.GetAncestor', return_value=999):
+                with self.assertRaisesRegex(RuntimeError, '编辑窗口'):
+                    adapter.bind_capture_window(self.identity)
+
+    def test_next_can_finish_updating_its_index_after_returning(self):
+        self.adapter.begin(1)
+        self.view.Next.side_effect = None
+        self.adapter.advance(1, 1)
+        self.assertEqual(self.adapter.click_index, 1)
+        self.view.GetClickIndex.return_value = 1
+        self.adapter.advance(1, 1)
+        self.assertEqual(self.view.Next.call_count, 2)
 
     def test_wps_process_and_unbound_shows_are_discoverable(self):
         application = NS(SlideShowWindows=Mock(return_value=self.show))
         application.SlideShowWindows.Count = 1
-        with patch('app.recording_presentation.slideshow_hwnd', return_value=0), \
-                patch('win32com.client.GetActiveObject', return_value=application):
+        with patch('app.presentation.control.slideshow_hwnd', return_value=0), \
+                patch('app.presentation.control.running_applications', return_value=iter([
+                    ('PowerPoint.Application', 'PowerPoint', application),
+                    ('Kwpp.Application', 'WPS 演示', NS(SlideShowWindows=application.SlideShowWindows))])):
             found = list_presentations()
         self.assertEqual([p.provider for p in found], ['PowerPoint', 'WPS 演示'])
         self.assertEqual([p.hwnd for p in found], [0, 0])
@@ -197,8 +276,8 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(found[1].hwnd, 123)
 
     def test_restore_auto_retries_lookup_when_initial_discovery_failed(self):
-        with patch('app.recording_presentation.slideshow_hwnd', return_value=0):
-            adapter = RecordingPresentation(self.show)
+        with patch('app.presentation.control.slideshow_hwnd', return_value=0):
+            adapter = PresentationControl(self.show)
         self.assertFalse(adapter.hwnd)
         adapter.bind_capture_window(self.identity)
         adapter.restore_auto_window()
@@ -315,9 +394,10 @@ class NativeGetterTests(unittest.TestCase):
         dispatch = Mock()
         dispatch.GetTypeInfo.return_value = info
         dispatch.QueryInterface.return_value = instance
-        application = NS(SlideShowWindows=NS(Item=lambda index: NS(_comobj=dispatch)))
-        with patch('comtypes.client.GetActiveObject', return_value=application):
-            result = slideshow_hwnd('test', 1)
+        window = object()
+        with patch('app.presentation.com_window._dispatch_from_window', return_value=dispatch) as bridge:
+            result = slideshow_hwnd(window)
+        bridge.assert_called_once_with(window)
         return result, calls
 
     def test_win32_and_win64_type_offsets_use_same_native_proxy_slot(self):
@@ -334,10 +414,7 @@ class NativeGetterTests(unittest.TestCase):
         self.assertEqual(self._invoke(3, failed=True), (0, [True]))
 
 
-class WindowSelectionTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class WindowSelectionTests(QtTestCase):
 
     def tearDown(self):
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
@@ -382,7 +459,7 @@ class WindowSelectionTests(unittest.TestCase):
     def test_shared_picker_keeps_ordinary_mode_and_can_pick_untitled_recording_window(self):
         from ui.dialogs.window_target_dialog import WindowTargetDialog
         window = dict(hwnd=123, pid=456, title='', process='wpp.exe', class_name='Qt5QWindowIcon', area=100)
-        with patch('app.window_target.list_windows', return_value=[window]) as enumerate_windows:
+        with patch('app.presentation.window_target.list_windows', return_value=[window]) as enumerate_windows:
             dialog = WindowTargetDialog(recording=True)
             enumerate_windows.assert_called_with(include_untitled=True)
         with patch('ui.dialogs.window_preview.WindowPreview.show_target',
@@ -392,7 +469,7 @@ class WindowSelectionTests(unittest.TestCase):
         self.assertEqual(dialog.selected['pid'], 456)
         self.assertEqual(dialog.windowTitle(), '选择录制窗口')
         dialog.deleteLater()
-        with patch('app.window_target.list_windows', return_value=[]):
+        with patch('app.presentation.window_target.list_windows', return_value=[]):
             ordinary = WindowTargetDialog()
         self.assertEqual(ordinary.windowTitle(), '选择翻页目标')
         ordinary.deleteLater()
@@ -453,7 +530,7 @@ class WindowSelectionTests(unittest.TestCase):
         target = dict(hwnd=123, title='Edit window', process='powerpnt.exe', class_name='PPTFrameClass')
         presentation = NS(capture_processes={'powerpnt.exe'},
                           validate_capture_window=Mock(side_effect=RuntimeError('编辑窗口暂不支持')))
-        with patch('app.window_target.list_windows', return_value=[target]):
+        with patch('app.presentation.window_target.list_windows', return_value=[target]):
             dialog = WindowTargetDialog(recording=True, presentation=presentation)
         dialog.table.selectRow(0)
         self.assertFalse(dialog.confirm_button.isEnabled())
@@ -465,10 +542,7 @@ class WindowSelectionTests(unittest.TestCase):
         dialog.deleteLater()
 
 
-class WindowPreviewTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class WindowPreviewTests(QtTestCase):
 
     def setUp(self):
         from ui.dialogs.window_preview import WindowPreview
@@ -476,7 +550,7 @@ class WindowPreviewTests(unittest.TestCase):
         self.window = QWindow()
         self.window.create()
         self.target = dict(hwnd=int(self.window.winId()), pid=456, class_name='test')
-        self.patchers = [patch('app.window_target.window_info', return_value=self.target),
+        self.patchers = [patch('app.presentation.window_target.window_info', return_value=self.target),
                          patch('ui.dialogs.window_preview.QCapturableWindow.isValid', return_value=True),
                          patch('ui.dialogs.window_preview.QWindowCapture.start')]
         for patcher in self.patchers:
@@ -534,8 +608,47 @@ class WindowPreviewTests(unittest.TestCase):
 
 
 class FullscreenWindowTests(unittest.TestCase):
+    def test_capture_crops_window_chrome_in_physical_pixels_and_waits_for_resize(self):
+        from app.presentation import window_target
+        from PySide6.QtCore import QSize
+        user32 = Mock()
+        def window_rect(hwnd, pointer):
+            pointer._obj.left, pointer._obj.top = -8, -8
+            pointer._obj.right, pointer._obj.bottom = 1288, 728
+            return True
+        def visible_rect(hwnd, attr, pointer, size):
+            pointer._obj.left, pointer._obj.top = 0, 0
+            pointer._obj.right, pointer._obj.bottom = 1280, 720
+            return 0
+        user32.GetWindowRect.side_effect = window_rect
+        with patch('app.presentation.window_target._user32', user32), \
+             patch('app.presentation.window_target.client_rect', return_value=QRect(10, 40, 1260, 660)), \
+             patch('app.presentation.window_target.ctypes.windll.dwmapi.DwmGetWindowAttribute', side_effect=visible_rect):
+            self.assertEqual(window_target.capture_client_rect(123, 456, QSize(1280, 720)),
+                             QRect(10, 40, 1260, 660))
+            self.assertEqual(window_target.capture_client_rect(123, 456, QSize(1260, 660)),
+                             QRect(0, 0, 1260, 660))
+            self.assertTrue(window_target.capture_client_rect(123, 456, QSize(1100, 800)).isEmpty())
+
+    def test_capture_excludes_native_browse_scrollbar_without_color_detection(self):
+        from app.presentation import window_target
+        from PySide6.QtCore import QSize
+        user32 = Mock()
+        def window_rect(hwnd, pointer):
+            rect = (0, 0, 1000, 800) if hwnd == 123 else (980, 30, 1000, 800)
+            pointer._obj.left, pointer._obj.top, pointer._obj.right, pointer._obj.bottom = rect
+            return True
+        user32.GetWindowRect.side_effect = window_rect
+        user32.EnumChildWindows.side_effect = lambda hwnd, callback, param: callback(456, 0)
+        with patch('app.presentation.window_target._user32', user32), \
+             patch('app.presentation.window_target.client_rect', return_value=QRect(0, 30, 1000, 770)), \
+             patch('app.presentation.window_target._window_class', return_value='NUIScrollbar'), \
+             patch('app.presentation.window_target.ctypes.windll.dwmapi.DwmGetWindowAttribute', return_value=-1):
+            self.assertEqual(window_target.capture_client_rect(123, 789, QSize(1000, 800)),
+                             QRect(0, 30, 980, 770))
+
     def test_fullscreen_on_second_monitor_and_windowed_client_area(self):
-        from app import window_target
+        from app.presentation import window_target
         user32 = Mock()
         user32.IsWindow.return_value = True
         user32.MonitorFromWindow.return_value = 123
@@ -553,7 +666,7 @@ class FullscreenWindowTests(unittest.TestCase):
         user32.GetClientRect.side_effect = client_rect
         user32.ClientToScreen.side_effect = screen_point
         user32.GetMonitorInfoW.side_effect = monitor_info
-        with patch('app.window_target._user32', user32):
+        with patch('app.presentation.window_target._user32', user32):
             self.assertTrue(window_target.is_fullscreen_window(123))
             def title_bar_offset(hwnd, pointer):
                 pointer._obj.x, pointer._obj.y = -1920, 30

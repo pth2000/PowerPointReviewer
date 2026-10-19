@@ -11,20 +11,213 @@ from unittest.mock import Mock, patch
 from pptx import Presentation
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QTimer
 from PySide6.QtMultimedia import QMediaPlayer
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
-from app import presentation_link, script_io
-from app.playback import PlaybackBus
-from app.presentation_monitor import PresentationMonitor, changed_pages
+from app.presentation import link as presentation_link
+from app.documents import io as script_io
+from app.audio.playback import PlaybackBus
+from app.presentation.monitor import changed_pages
 from app.settings_store import AppSettings
+from tasks.audio_generation_task import GenerationResult
 from test_presentation_link import make_ppt
 from ui.pages.reviewer_page import PPTReviewer
 
+from qt_test_case import QtTestCase
 
-class WorkflowResumeTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+
+class WorkflowResumeTests(QtTestCase):
+    def start_update(self, notes):
+        self.ctx.app_settings.set('animation_check_enabled', False)
+        self.page.notes = dict(notes)
+        with patch.object(self.page.save_thread, 'configure'), \
+             patch.object(self.page.save_thread, 'start'), \
+             patch.object(self.page, 'clean_temp_folder'):
+            self.assertTrue(self.page.regenerate())
+
+    def finish_update(self):
+        count = len(self.page.notes_list)
+        result = GenerationResult([self.page.audio_cache_path / 'key1.wav'] * count,
+                                  [0.1] * count, ['key1'] * count, ['wav'] * count,
+                                  generation_profile={'voice': 'original'}, speaker='测试声音')
+        self.page.thread_save_finish(result)
+
+    def test_update_retains_page_and_segment_when_earlier_pages_change(self):
+        self.load()
+        self.page.notes_list = [{'page': 1, 'text': '前页'}, {'page': 2, 'text': '第一段'},
+                                {'page': 2, 'text': '第二段'}]
+        self.page.current_index = 2
+        self.start_update({1: '新增第一段●新增第二段●新增第三段', 2: '第一段●修改后的第二段'})
+        self.assertEqual(self.page.current_index, 0)
+        self.finish_update()
+        self.assertEqual(self.page.current_index, 4)
+        self.assertEqual(self.ctx.app_settings.get('last_session')['index'], 4)
+        self.assertEqual(self.page.currentPageLabel.text(), '2 / 2')
+        self.assertFalse(self.page._playing_sequence)
+
+    def test_changed_page_segmentation_returns_to_that_page_start(self):
+        self.load()
+        self.page.notes_list = [{'page': 1, 'text': '前页'}, {'page': 2, 'text': '第一段'},
+                                {'page': 2, 'text': '第二段'}]
+        self.page.current_index = 2
+        self.start_update({1: '前页', 2: '合并后的讲稿'})
+        self.finish_update()
+        self.assertEqual(self.page.current_index, 1)
+        self.assertEqual(self.page.notes_list[1]['page'], 2)
+
+    def test_removed_page_falls_back_to_nearest_remaining_page(self):
+        self.load()
+        self.page.current_index = 1
+        self.start_update({1: '保留的讲稿'})
+        self.finish_update()
+        self.assertEqual(self.page.current_index, 0)
+        self.assertEqual(self.page.notes_list[0]['page'], 1)
+
+    def test_repeated_updates_keep_one_record_and_preserve_its_identity(self):
+        self.record.update(session_id='stable-id', created_at='2026-10-01T10:00:00', custom='keep')
+        self.write_record()
+        self.load()
+        for text in ('第一轮修改', '第二轮修改'):
+            self.start_update({1: self.baseline[1], 2: text})
+            self.finish_update()
+            self.assertEqual(self.page.session_record_path, self.record_path)
+            self.assertEqual(list(self.root.glob('*.json')), [self.record_path])
+            saved = json.loads(self.record_path.read_text(encoding='utf-8'))
+            self.assertEqual(saved['session_id'], 'stable-id')
+            self.assertEqual(saved['created_at'], '2026-10-01T10:00:00')
+            self.assertEqual(saved['custom'], 'keep')
+            self.assertEqual(saved['notes']['2'], text)
+            self.assertIn('updated_at', saved)
+
+    def test_failed_update_keeps_record_and_retry_restores_original_position(self):
+        self.load()
+        self.page.current_index = 1
+        original = self.record_path.read_bytes()
+        self.ctx.app_settings.set('script_comments_enabled', True)
+        self.start_update({1: '前页新增一段●前页新增二段', 2: '第二页更新'})
+        with patch.object(self.page, 'create_error_info_bar'):
+            self.page.thread_save_error('temporary synthesis failure')
+        self.assertEqual(self.record_path.read_bytes(), original)
+        self.assertEqual(self.page.session_record_path, self.record_path)
+        annotations = script_io.ScriptData(notes={1: '// 新提示\n' + self.page.notes[1],
+                                                 2: self.page.notes[2]})
+        self.page._sync_ppt_comments((annotations, self.page.presentation_link))
+        self.page._accept_ppt_baseline(self.page.presentation_link, annotations.notes)
+        self.assertEqual(self.record_path.read_bytes(), original)
+        self.start_update(self.page.notes)
+        self.finish_update()
+        self.assertEqual(self.page.current_index, 2)
+        self.assertEqual(len(list(self.root.glob('*.json'))), 1)
+
+    def test_atomic_record_write_failure_preserves_previous_record(self):
+        self.load()
+        original = self.record_path.read_bytes()
+        with patch.object(Path, 'replace', side_effect=OSError('disk failure')):
+            with self.assertRaises(OSError):
+                self.page.save_session_record()
+        self.assertEqual(self.record_path.read_bytes(), original)
+        self.assertEqual(list(self.root.glob('*.tmp')), [])
+        self.assertEqual(self.page.session_record_path, self.record_path)
+
+    def test_importing_another_ppt_creates_a_separate_record(self):
+        self.load()
+        self.page.current_index = 1
+        original = self.record_path.read_bytes()
+        other = make_ppt(self.root / 'other.pptx')
+        self.ctx.app_settings.set('animation_check_enabled', False)
+        with patch.object(self.page.save_thread, 'configure'), \
+             patch.object(self.page.save_thread, 'start'), \
+             patch.object(self.page, 'clean_temp_folder'):
+            self.assertTrue(self.page.import_file(other))
+        self.assertIsNone(self.page.session_record_path)
+        self.finish_update()
+        self.assertNotEqual(self.page.session_record_path, self.record_path)
+        self.assertEqual(self.page.current_index, 0)
+        self.assertEqual(self.record_path.read_bytes(), original)
+        self.assertEqual(len(list(self.root.glob('*.json'))), 2)
+
+    def test_reimporting_current_ppt_retains_record_and_position(self):
+        self.load()
+        self.page.current_index = 1
+        self.edit_ppt()
+        self.ctx.app_settings.set('animation_check_enabled', False)
+        with patch.object(self.page.save_thread, 'configure'), \
+             patch.object(self.page.save_thread, 'start'), \
+             patch.object(self.page, 'clean_temp_folder'):
+            self.assertTrue(self.page.import_file(self.source))
+        self.assertEqual(self.page.session_record_path, self.record_path)
+        self.finish_update()
+        self.assertEqual(self.page.current_index, 1)
+        self.assertEqual(len(list(self.root.glob('*.json'))), 1)
+
+    def test_history_shows_update_time_and_supports_older_records(self):
+        from ui.dialogs.session_history_dialog import SessionHistoryDialog
+        self.record.update(created_at='2026-10-01T10:00:00', updated_at='2026-10-18T12:00:00')
+        self.write_record()
+        with patch('app.audio.cache.summary', return_value='0 条'):
+            dialog = SessionHistoryDialog(self.root, self.page)
+        self.addCleanup(dialog.deleteLater)
+        self.assertEqual(dialog.table.horizontalHeaderItem(0).text(), '更新时间')
+        self.assertEqual(dialog.table.item(0, 0).text(), '2026-10-18 12:00:00')
+        self.record.pop('updated_at')
+        self.write_record()
+        dialog.reload_records()
+        self.assertEqual(dialog.table.item(0, 0).text(), '2026-10-01 10:00:00')
+
+    def test_comment_history_and_package_keep_generation_rule_and_raw_notes(self):
+        from app.documents import package as project_package
+        self.record['script_comments_enabled'] = True
+        self.record['notes'] = {int(page): '// 提示●\n' + text for page, text in self.baseline.items()}
+        self.write_record()
+        self.load()
+        self.assertFalse(self.ctx.app_settings.get('script_comments_enabled'))
+        self.assertTrue(self.page.script_comments_enabled)
+        self.assertNotIn('//', ''.join(self.page.reading_notes().values()))
+        self.assertIn('// 提示', self.page.notes[1])
+        self.page.save_session_record()
+        saved = json.loads(self.page.session_record_path.read_text(encoding='utf-8'))
+        self.assertTrue(saved['script_comments_enabled'])
+        self.assertEqual(saved['notes'], {str(page): text for page, text in self.page.notes.items()})
+        target = self.root / 'comments.pprpkg'
+        project_package.export_package(target, items=self.record['items'], notes=self.page.notes,
+                                       mark='●', source_name='讲稿', generation_profile={}, speaker='',
+                                       include_audio=False, script_comments_enabled=True)
+        manifest = project_package.read_manifest(target)
+        self.assertTrue(manifest['script_comments_enabled'])
+        self.assertIn('// 提示', manifest['notes']['1'])
+        with patch('app.paths.ensure_runtime_dirs'), patch('app.paths.SESSION_DIR', self.root):
+            result = project_package.import_package(target)
+        imported = json.loads(result['record_path'].read_text(encoding='utf-8'))
+        self.assertTrue(imported['script_comments_enabled'])
+
+    def test_monitor_syncs_comments_without_prompting_or_replacing_ai_body(self):
+        self.record['script_comments_enabled'] = True
+        self.write_record()
+        self.load()
+        self.page.notes[2] = 'AI 改写后的讲稿'
+        old_media = list(self.page.media_list)
+        self.edit_ppt('// 新的教学提示●\n' + self.baseline[2])
+        with patch.object(self.page, 'regenerate') as generate:
+            self.check_monitor()
+        self.assertIsNone(self.page._ppt_update_bar)
+        generate.assert_not_called()
+        self.assertEqual(self.page.media_list, old_media)
+        self.assertEqual(self.page.notes[2], '// 新的教学提示●\nAI 改写后的讲稿')
+        saved = json.loads(self.record_path.read_text(encoding='utf-8'))
+        self.assertEqual(saved['items'], self.record['items'])
+        self.assertEqual(saved['notes']['2'], self.page.notes[2])
+
+    def test_ai_rewrite_preserves_comments_in_current_notes(self):
+        self.record['script_comments_enabled'] = True
+        self.record['notes'] = {**self.baseline, 1: '// 保留教学提示\n原文\n// 保留资料'}
+        self.write_record()
+        self.load()
+        with patch.object(self.page, 'regenerate') as generate:
+            self.assertEqual(self.page.apply_rewritten_notes({1: '改写后的正文'}), 1)
+        self.assertEqual(self.page.reading_notes()[1], '改写后的正文')
+        self.assertIn('// 保留教学提示', self.page.notes[1])
+        self.assertIn('// 保留资料', self.page.notes[1])
+        generate.assert_called_once_with()
+
 
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -198,7 +391,7 @@ class WorkflowResumeTests(unittest.TestCase):
         self.assertEqual(self.record_path.read_bytes(), old_record)
         self.assertTrue(self.page.is_import)
 
-    def test_confirm_update_uses_saved_ppt_and_preserves_old_history(self):
+    def test_confirm_update_keeps_record_until_generation_finishes(self):
         self.load()
         original = self.record_path.read_bytes()
         self.edit_ppt()
@@ -208,12 +401,13 @@ class WorkflowResumeTests(unittest.TestCase):
             self.page.update_ppt_notes()
             generate.assert_called_once_with()
         self.assertEqual(self.page.notes[2].strip(), '新的第二页备注')
-        self.assertIsNone(self.page.session_record_path)
+        self.assertEqual(self.page.session_record_path, self.record_path)
         self.assertEqual(self.record_path.read_bytes(), original)
         self.assertEqual(self.page.presentation_monitor.baseline, self.page.notes)
 
     def test_actual_update_generation_reuses_unchanged_audio(self):
         self.load()
+        self.page.current_index = 1
         engine = self.ctx.tts_engine
         engine.get_generation_profile.return_value = {'voice': 'original'}
         engine.get_output_extension.return_value = 'wav'
@@ -252,8 +446,14 @@ class WorkflowResumeTests(unittest.TestCase):
         self.assertEqual(engine.save_file.call_count, 1)
         self.assertEqual(engine.save_file.call_args.args[0], '新的第二页备注')
         self.assertEqual((self.page.audio_cache_path / 'key1.wav').read_bytes(), old_audio)
-        self.assertEqual(self.record_path.read_bytes(), old_record)
-        self.assertNotEqual(self.page.session_record_path, self.record_path)
+        self.assertNotEqual(self.record_path.read_bytes(), old_record)
+        self.assertEqual(self.page.session_record_path, self.record_path)
+        self.assertEqual(len(list(self.root.glob('*.json'))), 1)
+        updated = json.loads(self.record_path.read_text(encoding='utf-8'))
+        self.assertEqual(updated['notes']['2'].strip(), '新的第二页备注')
+        self.assertEqual(self.page.current_index, 1)
+        self.assertFalse(self.page._playing_sequence)
+        self.assertEqual(self.page.player.playbackState(), QMediaPlayer.PlaybackState.StoppedState)
         self.assertEqual(self.ctx.app_settings.get('last_session')['record_path'],
                          str(self.page.session_record_path.resolve()))
 
@@ -341,7 +541,7 @@ class WorkflowResumeTests(unittest.TestCase):
         self.ctx.app_settings.set('last_session', {'record_path': str(self.record_path), 'index': 1})
         with patch('ui.pages.reviewer_page.MessageBox') as box, \
              patch.object(self.page.save_thread, 'start') as generate, \
-             patch('app.slideshow.goto') as go:
+             patch('app.presentation.slideshow.goto') as go:
             box.return_value.exec.return_value = True
             self.page.prompt_resume_session()
             self.assertIn('第 2 页', box.call_args.args[1])
@@ -376,7 +576,7 @@ class WorkflowResumeTests(unittest.TestCase):
 
     def test_resume_waits_for_embedded_color_dialog_and_only_prompts_once(self):
         from PySide6.QtGui import QColor
-        from app import theme
+        from ui import theme
         root = self.window_with_hidden_home()
         self.ctx.app_settings.set('last_session', {'record_path': str(self.record_path)})
         color = theme.create_color_dialog(QColor('#B7472A'), root)
@@ -400,7 +600,7 @@ class WorkflowResumeTests(unittest.TestCase):
 
     def test_deferred_resume_preserves_script_imported_while_waiting(self):
         from PySide6.QtGui import QColor
-        from app import theme
+        from ui import theme
         root = self.window_with_hidden_home()
         self.ctx.app_settings.set('last_session', {'record_path': str(self.record_path)})
         color = theme.create_color_dialog(QColor('#B7472A'), root)
@@ -452,7 +652,7 @@ class WorkflowResumeTests(unittest.TestCase):
         payload = self.source.read_bytes()
         self.source.unlink()
         with patch('ui.pages.reviewer_page.MessageBox') as box, \
-             patch('app.slideshow.list_open_presentations', return_value=[]):
+             patch('app.presentation.slideshow.list_open_presentations', return_value=[]):
             box.return_value.exec.return_value = True
             self.page.prompt_resume_session()
         self.assertEqual(self.page.current_index, 1)

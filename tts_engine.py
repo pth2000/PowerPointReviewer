@@ -1,4 +1,4 @@
-﻿"""统一调度 TTS 引擎，并维护按引擎隔离的配置、音色选择和缓存身份。"""
+"""统一调度 TTS 引擎，并维护按引擎隔离的配置、音色选择和缓存身份。"""
 
 import copy
 import time
@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 from typing import Optional
 
-from app import audio_processing
+from app.audio import processing as audio_processing
 from engines import defs
 from engines import pyttsx3 as pyttsx3_engine
 from engines import edge_tts as edge_tts_engine
@@ -93,14 +93,6 @@ class TTSEngine:
         """返回当前引擎建议的并行任务数。"""
         return int(self.get_current_engine_definition().get('parallel_workers', 1))
 
-    def get_retry_policy(self):
-        """返回当前引擎的重试次数和基础退避时间。"""
-        engine_def = self.get_current_engine_definition()
-        return {
-            'retry_times': int(engine_def.get('retry_times', 0)),
-            'retry_delay': float(engine_def.get('retry_delay', 0.0)),
-        }
-
     # 引擎选项
 
     def get_current_options_schema(self):
@@ -169,11 +161,6 @@ class TTSEngine:
             settings['voice'] = self._voice_name_map.get(self.get_voice_scope(), '')
             return
         self._engine_settings[mode][key] = value
-
-    def apply_current_options(self, option_values):
-        """批量写入当前引擎设置。"""
-        for key, value in option_values.items():
-            self.set_current_option(key, value)
 
     # 持久化
 
@@ -474,7 +461,7 @@ class TTSEngine:
 
         target = Path(path)
         if mode == 'edge':
-            from app.audio_decode import decode_edge_wav
+            from app.audio.decode import decode_edge_wav
             if target.suffix.lower() != '.wav':
                 raise RuntimeError('无法生成带留白的配音，请关闭留白设置后重试。')
             with tempfile.TemporaryDirectory(prefix='ppt-edge-audio-') as folder:

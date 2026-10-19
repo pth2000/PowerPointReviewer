@@ -32,10 +32,14 @@ from qfluentwidgets import (
     isDarkTheme,
 )
 
-from app import audio_cache, icons, paths, slideshow, theme, updater, window_target
+from app.audio import cache as audio_cache
+from ui import icons, theme
+from app import paths
+from app.presentation import slideshow, window_target
+from app.updates import manager as updater
 from app.app_context import AppContext
-from app.playback import AudioOutputWatcher
-from app.widget_state import set_enabled
+from app.audio.playback import AudioOutputWatcher
+from ui.widget_state import set_enabled
 from settingInterface import Ui_settingInterface
 from tasks.preview_task import PreviewTask
 from tasks.voice_catalog_task import VoiceCatalogTask
@@ -49,6 +53,9 @@ from ui.dialogs.qwen_clone_voice_dialog import QwenCloneVoiceDialog
 
 class SettingInterface(QWidget, Ui_settingInterface):
     """管理显式保存的语音设置和即时生效的外观设置。"""
+
+    CONTROL_WIDTH = 180
+    CONTROL_SPACING = 8
 
     # 设置页只发出重新生成意图，主窗口负责将其转接给主页。
     regenerate_requested = Signal()
@@ -64,6 +71,9 @@ class SettingInterface(QWidget, Ui_settingInterface):
         super().__init__(parent=parent)
         self.ctx = context
         self.setupUi(self)
+        self.savePushButton.setFixedWidth(self.CONTROL_WIDTH)
+        self.versionPrimaryPushButton.setFixedWidth(self.CONTROL_WIDTH)
+        self.engineSelectComboBox.setFixedWidth(self.CONTROL_WIDTH)
 
         paths.ensure_runtime_dirs()
 
@@ -91,10 +101,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self._qwentts_refresh_button = None
         self._qwentts_voice_combo = None
         self._qwentts_error = ''
-        self._closing_after_service_check = False
         self._qwen_clone_manage_card = None
         self._preview_text_card = None
-        self._preview_text_caption = None
         self.saved_state = None
         self._prompting_unsaved = False
         # 由主窗口注入，避免设置页直接依赖主页对象。
@@ -127,6 +135,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
         self.engineSelectComboBox.clear()
         self.engineSelectComboBox.addItems(self.ctx.tts_engine.get_engine_names())
+        self.engineSelectComboBox.currentTextChanged.connect(self.engineSelectComboBox.setToolTip)
         self.engineSelectComboBox.currentIndexChanged.connect(self.change_tts_engine)
 
         self.horizontalLayout_14.setStretch(0, 1)
@@ -136,6 +145,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.engineSelectComboBox.blockSignals(True)
         self.engineSelectComboBox.setCurrentIndex(self.ctx.tts_engine.get_mode_index())
         self.engineSelectComboBox.blockSignals(False)
+        self.engineSelectComboBox.setToolTip(self.engineSelectComboBox.currentText())
 
         # 固定尾部只创建一次；切换引擎时仅重建 schema 选项和音色卡片。
         self.apply_engine_schema_to_ui()
@@ -159,6 +169,10 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
         # 全部控件渲染后再记录基线，避免将初值规范化误判为用户修改。
         self.capture_saved_state()
+
+    def _size_action_button(self, button, width=None):
+        """单个操作占一列，成组按钮按同一列宽分配空间。"""
+        button.setFixedSize(QSize(self.CONTROL_WIDTH if width is None else width, 33))
 
     # 未保存状态
 
@@ -232,6 +246,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.engineSelectComboBox.setCurrentIndex(self.ctx.tts_engine.get_mode_index())
         self.engineSelectComboBox.blockSignals(False)
 
+        self.engineSelectComboBox.setToolTip(self.engineSelectComboBox.currentText())
         self.apply_engine_schema_to_ui()
         self.setup_voices_list()
         self.update_dirty_indicator()
@@ -307,7 +322,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
             preview_path = paths.PREVIEW_DIR / f'preview_{time.time_ns()}.{preview_ext}'
 
             set_enabled(self.previewButton, False)
-            self.previewButton.setText('正在生成…')
+            self.previewButton.setText('生成中…')
 
             self.preview_thread = PreviewTask(self.ctx.tts_engine, text, str(preview_path), self)
             self.preview_thread.signal_finish.connect(self.on_preview_generated)
@@ -412,8 +427,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
             '主题模式', '切换界面的浅色或深色外观',
             help_text='选择“跟随系统”时，随 Windows 的深浅色设置自动切换。')
         self.theme_mode_combo = ComboBox(mode_card)
-        self.theme_mode_combo.setMinimumSize(QSize(180, 33))
-        self.theme_mode_combo.setMaximumSize(QSize(180, 33))
+        self.theme_mode_combo.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
         self.theme_mode_combo.addItems(theme.mode_labels())
         self.theme_mode_combo.setCurrentText(
             theme.label_for_mode(str(self.ctx.app_settings.get('theme_mode'))))
@@ -421,6 +435,11 @@ class SettingInterface(QWidget, Ui_settingInterface):
         mode_card.layout().addWidget(self.theme_mode_combo)
 
         color_card = self._make_appearance_card('主题色', '设置按钮、选中项等处的强调色')
+        color_controls = QWidget(color_card)
+        color_controls.setFixedWidth(self.CONTROL_WIDTH)
+        color_layout = QHBoxLayout(color_controls)
+        color_layout.setContentsMargins(0, 0, 0, 0)
+        color_layout.setSpacing(self.CONTROL_SPACING)
         self._color_dots = []
         for value, name in theme.PRESET_COLORS:
             dot = QPushButton(color_card)
@@ -428,15 +447,15 @@ class SettingInterface(QWidget, Ui_settingInterface):
             dot.setCursor(Qt.CursorShape.PointingHandCursor)
             dot.setToolTip(f'{name}  {value}')
             dot.clicked.connect(lambda _checked=False, c=value: self.set_theme_color(c))
-            color_card.layout().addWidget(dot)
+            color_layout.addWidget(dot)
             self._color_dots.append((value, dot))
 
-        color_card.layout().addSpacing(8)
         pick_button = PushButton('自定义', color_card)
-        pick_button.setMinimumSize(QSize(90, 33))
-        pick_button.setMaximumSize(QSize(90, 33))
+        self._size_action_button(
+            pick_button, self.CONTROL_WIDTH - len(theme.PRESET_COLORS) * (22 + self.CONTROL_SPACING))
         pick_button.clicked.connect(self.pick_theme_color)
-        color_card.layout().addWidget(pick_button)
+        color_layout.addWidget(pick_button)
+        color_card.layout().addWidget(color_controls)
 
         self.refresh_color_dots()
 
@@ -451,8 +470,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         if current and current not in [family for family, _label in fonts]:
             labels.append(theme.label_for_font(current))
         self.ui_font_combo = ComboBox(font_card)
-        self.ui_font_combo.setMinimumSize(QSize(180, 33))
-        self.ui_font_combo.setMaximumSize(QSize(180, 33))
+        self.ui_font_combo.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
         self.ui_font_combo.addItems(labels)
         self.ui_font_combo.setCurrentText(theme.label_for_font(current))
         self.ui_font_combo.currentTextChanged.connect(self.on_ui_font_changed)
@@ -544,6 +562,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.setup_preview_text_card()
         self.add_section_label('常规', append=True)
         self.setup_resume_session_card()
+        self.setup_script_preferences_cards()
         self.add_section_label('放映控制', append=True)
         self.setup_sync_playback_card()
         self.setup_page_turn_card()
@@ -554,6 +573,29 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.setup_log_card()
 
     PAGE_TURN_MODES = (('com', '演示软件接口（COM）'), ('foreground', '前台按键'), ('window', '指定窗口'))
+
+    def setup_script_preferences_cards(self):
+        options = (
+            ('script_comments_enabled', '识别讲稿注释', '朗读时跳过以 // 开头的整行文字',
+             '允许 // 前有空格或缩进；正文中的网址和行末 // 不受影响。'
+             '注释仍保留在备注中。调整后在下次生成配音时生效，已有配音保持不变。'),
+            ('animation_check_enabled', '生成前校验点击动画', '检查 PPT 点击动画与讲稿分段是否一致',
+             '发现数量不一致或需要确认的页面时，可查看结果后继续生成或取消。'
+             '检查前请先保存对 PPT 的修改。'),
+        )
+        for key, title, caption, help_text in options:
+            card = self._make_appearance_card(title, caption, help_text=help_text)
+            control = SwitchButton(card)
+            control.setOnText('启用')
+            control.setOffText('停用')
+            control.setChecked(bool(self.ctx.app_settings.get(key)))
+            control.checkedChanged.connect(partial(self.on_script_preference_changed, key))
+            card.layout().addWidget(control)
+            setattr(self, key.removesuffix('_enabled') + '_switch', control)
+
+    def on_script_preference_changed(self, key, checked):
+        self.ctx.app_settings.set(key, bool(checked))
+        self.ctx.config.save_later()
 
     def setup_resume_session_card(self):
         card = self._make_appearance_card(
@@ -577,7 +619,6 @@ class SettingInterface(QWidget, Ui_settingInterface):
             '同步翻页', '朗读讲稿时同步控制 PPT 放映',
             help_text='与主页的同步翻页开关保持一致，调整后立即生效。'
                       '未关联 PPT 时，请先在“历史记录列表”中关联文稿。')
-        self.sync_playback_card = card
         self.sync_playback_switch = SwitchButton(card)
         self.sync_playback_switch.setOnText('启用')
         self.sync_playback_switch.setOffText('停用')
@@ -636,6 +677,21 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.slideshow_preferences_card = card
         self.slideshow_preference_switches = {}
         self.slideshow_preference_labels = {}
+        item = QWidget(card)
+        row = QHBoxLayout(item)
+        row.setContentsMargins(0, 12, 0, 12)
+        row.addWidget(BodyLabel('放映显示', item), 1)
+        self.slideshow_display_combo = ComboBox(item)
+        self.slideshow_display_combo.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
+        self.slideshow_display_combo.addItem('全屏放映', userData=False)
+        self.slideshow_display_combo.addItem('窗口放映', userData=True)
+        self.slideshow_display_combo.setCurrentIndex(int(bool(self.ctx.app_settings.get('slideshow_windowed'))))
+        self.slideshow_display_combo.setToolTip('仅影响新启动的 PowerPoint 放映，已有放映保持当前方式。\n'
+                                               'F5 开始的全屏放映不会自动转成窗口；窗口放映可在后台播放动画。')
+        self.slideshow_display_combo.currentIndexChanged.connect(self.on_slideshow_display_changed)
+        row.addWidget(self.slideshow_display_combo)
+        layout.addWidget(item)
+        layout.addWidget(HorizontalSeparator(card))
         for key, title, caption, help_text in self.SLIDESHOW_PREFERENCES:
             if self.slideshow_preference_switches:
                 layout.addWidget(HorizontalSeparator(card))
@@ -675,6 +731,10 @@ class SettingInterface(QWidget, Ui_settingInterface):
         enabled = com and available and bool(self.ctx.app_settings.get('scroll_enabled'))
         hint = (self.sync_playback_unavailable_hint() if not available else
                 '请先启用同步翻页' if not enabled else '')
+        self.slideshow_display_combo.blockSignals(True)
+        self.slideshow_display_combo.setCurrentIndex(int(bool(self.ctx.app_settings.get('slideshow_windowed'))))
+        self.slideshow_display_combo.blockSignals(False)
+        self.slideshow_display_combo.setEnabled(enabled and bool(self.ctx.app_settings.get('slideshow_auto_start')))
         for key, control in self.slideshow_preference_switches.items():
             control.blockSignals(True)
             control.setChecked(bool(self.ctx.app_settings.get(key)))
@@ -697,27 +757,40 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self.ctx.app_settings.set(key, bool(checked))
             self.ctx.config.save_later()
             self.slideshow_preferences_changed.emit()
+        self.refresh_slideshow_preferences_state()
+
+    def on_slideshow_display_changed(self, index):
+        if not self.slideshow_display_combo.isEnabled():
+            self.refresh_slideshow_preferences_state()
+            return
+        self.ctx.app_settings.set('slideshow_windowed', bool(self.slideshow_display_combo.currentData()))
+        self.ctx.config.save_later()
+        self.slideshow_preferences_changed.emit()
 
     def setup_page_turn_card(self):
         """创建翻页方式卡片。"""
         card = self._make_appearance_card('翻页方式', '')
         self.page_turn_card = card
         self.page_turn_caption = card.findChildren(CaptionLabel)[0]
-        self.page_turn_combo = ComboBox(card)
-        self.page_turn_combo.setMinimumSize(QSize(180, 33))
-        self.page_turn_combo.setMaximumSize(QSize(180, 33))
+        controls = QWidget(card)
+        controls.setFixedWidth(self.CONTROL_WIDTH)
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(self.CONTROL_SPACING)
+        self.page_turn_combo = ComboBox(controls)
+        self.page_turn_combo.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
         self.page_turn_combo.addItems([label for _mode, label in self.PAGE_TURN_MODES])
         current = str(self.ctx.app_settings.get('page_turn_mode') or 'com')
         labels = dict(self.PAGE_TURN_MODES)
         self.page_turn_combo.setCurrentText(labels.get(current, labels['com']))
         self.page_turn_combo.currentTextChanged.connect(self.on_page_turn_mode_changed)
-        card.layout().addWidget(self.page_turn_combo)
+        controls_layout.addWidget(self.page_turn_combo)
 
-        self.page_turn_pick_button = PushButton('选择窗口', card)
-        self.page_turn_pick_button.setMinimumSize(QSize(110, 33))
-        self.page_turn_pick_button.setMaximumSize(QSize(110, 33))
+        self.page_turn_pick_button = PushButton('选择窗口', controls)
+        self._size_action_button(self.page_turn_pick_button)
         self.page_turn_pick_button.clicked.connect(self.open_window_target_dialog)
-        card.layout().addWidget(self.page_turn_pick_button)
+        controls_layout.addWidget(self.page_turn_pick_button)
+        card.layout().addWidget(controls)
         # 构造阶段不探测放映状态，避免为此在启动时加载 COM 依赖
         self.refresh_page_turn_status(probe=False)
         self.page_turn_status_timer = QTimer(self)
@@ -787,12 +860,15 @@ class SettingInterface(QWidget, Ui_settingInterface):
                 self._set_card_badge(self.page_turn_card, '')
                 return
             source = self.page_turn_source()
+            if not source:
+                self._set_card_badge(self.page_turn_card, '')
+                return
             detected = self.page_turn_description()
             if detected:
-                self._set_card_badge(self.page_turn_card, detected, InfoLevel.SUCCESS)
+                self._set_card_badge(self.page_turn_card, detected,
+                                     InfoLevel.WARNING if detected.endswith('已暂停') else InfoLevel.SUCCESS)
             else:
-                self._set_card_badge(self.page_turn_card, '未检测到对应放映' if source else '未检测到放映',
-                                     InfoLevel.WARNING)
+                self._set_card_badge(self.page_turn_card, '未放映', InfoLevel.INFOAMTION)
         elif mode == 'window':
             target = self.ctx.app_settings.get('page_turn_window')
             if target and window_target.describe(target):
@@ -811,8 +887,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
             help_text='讲稿合成完成后生效。可设置播放、停止、上一段、下一段与重播当前段的组合键。')
         self.hotkey_card = card
         self.hotkey_button = PushButton('配置', card)
-        self.hotkey_button.setMinimumSize(QSize(120, 33))
-        self.hotkey_button.setMaximumSize(QSize(120, 33))
+        self._size_action_button(self.hotkey_button)
         self.hotkey_button.clicked.connect(self.open_hotkey_dialog)
         card.layout().addWidget(self.hotkey_button)
         self.refresh_hotkey_status()
@@ -866,8 +941,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         h_layout.addSpacing(20)
 
         open_button = PushButton('打开目录', card)
-        open_button.setMinimumSize(QSize(120, 33))
-        open_button.setMaximumSize(QSize(120, 33))
+        self._size_action_button(open_button)
         open_button.clicked.connect(self.open_log_dir)
         h_layout.addWidget(open_button)
 
@@ -909,21 +983,25 @@ class SettingInterface(QWidget, Ui_settingInterface):
         h_layout.addLayout(info_layout, stretch=1)
         h_layout.addSpacing(20)
 
-        edit_button = PushButton('编辑', card)
-        edit_button.setMinimumSize(QSize(90, 33))
-        edit_button.setMaximumSize(QSize(90, 33))
+        controls = QWidget(card)
+        controls.setFixedWidth(self.CONTROL_WIDTH)
+        controls_layout = QHBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(self.CONTROL_SPACING)
+        button_width = (self.CONTROL_WIDTH - self.CONTROL_SPACING) // 2
+        edit_button = PushButton('编辑', controls)
+        self._size_action_button(edit_button, button_width)
         edit_button.clicked.connect(self.edit_preview_text)
-        h_layout.addWidget(edit_button)
+        controls_layout.addWidget(edit_button)
 
         # Qt 在 addWidget 时接管按钮父对象，原有信号连接不会丢失。
-        self.previewButton.setMinimumSize(QSize(90, 33))
-        self.previewButton.setMaximumSize(QSize(90, 33))
-        h_layout.addWidget(self.previewButton)
+        self._size_action_button(self.previewButton, button_width)
+        controls_layout.addWidget(self.previewButton)
+        h_layout.addWidget(controls)
 
         insert_idx = self.verticalLayout_2.indexOf(self.CardWidget_4)
         self.verticalLayout_2.insertWidget(max(insert_idx, 0), card)
         self._preview_text_card = card
-        self._preview_text_caption = cap_lbl
 
     def edit_preview_text(self):
         """在独立弹窗中编辑并暂存试听文本。"""
@@ -962,22 +1040,19 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
         if option_type == 'int':
             control = SpinBox(card)
-            control.setMinimumSize(QSize(180, 33))
-            control.setMaximumSize(QSize(180, 33))
+            control.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
             control.setRange(int(option_schema.get('min', -9999)), int(option_schema.get('max', 9999)))
             control.setSingleStep(int(option_schema.get('step', 1)))
             control.setValue(int(default_value if default_value is not None else 0))
         elif option_type == 'float':
             control = DoubleSpinBox(card)
-            control.setMinimumSize(QSize(180, 33))
-            control.setMaximumSize(QSize(180, 33))
+            control.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
             control.setRange(float(option_schema.get('min', -9999.0)), float(option_schema.get('max', 9999.0)))
             control.setSingleStep(float(option_schema.get('step', 0.1)))
             control.setValue(float(default_value if default_value is not None else 0.0))
         elif option_type == 'choice':
             control = ComboBox(card)
-            control.setMinimumSize(QSize(240, 0))
-            control.setMaximumSize(QSize(240, 16777215))
+            control.setFixedWidth(self.CONTROL_WIDTH)
             # choice 可由引擎在运行期提供，例如 Edge 地区目录。
             choices = self.ctx.tts_engine.get_option_choices(option_schema)
             control.addItems(choices)
@@ -1154,21 +1229,22 @@ class SettingInterface(QWidget, Ui_settingInterface):
         h_layout.addSpacing(20)
 
         combo = ComboBox(card)
-        combo.setMinimumSize(QSize(240, 0))
-        combo.setMaximumSize(QSize(240, 16777215))
+        combo.setFixedWidth(self.CONTROL_WIDTH)
+        combo.currentTextChanged.connect(combo.setToolTip)
         combo.addItems(voices_list)
         combo.currentIndexChanged.connect(self._on_voice_combo_changed)
-        h_layout.addWidget(combo)
 
         # 只有 Edge 音色目录会由服务端持续更新，因此只为该引擎提供刷新按钮。
         self._voice_refresh_button = None
         if self.ctx.tts_engine.get_mode() == 'edge':
+            h_layout.setSpacing(self.CONTROL_SPACING)
             refresh_button = ToolButton(FluentIcon.SYNC, card)
             refresh_button.setFixedSize(QSize(33, 33))
             refresh_button.setToolTip('联网刷新音色列表')
             refresh_button.clicked.connect(self.refresh_voice_catalog)
             h_layout.addWidget(refresh_button)
             self._voice_refresh_button = refresh_button
+        h_layout.addWidget(combo)
 
         self.verticalLayout_2.insertWidget(self.tail_index(), card)
 
@@ -1180,6 +1256,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         matched_index = combo.findText(target_voice) if target_voice else -1
         combo.setCurrentIndex(
             matched_index if matched_index >= 0 else self.ctx.tts_engine.resolve_voice_index(voices_list))
+        combo.setToolTip(combo.currentText())
 
         self._voice_card = card
         self._voice_combo = combo
@@ -1206,20 +1283,23 @@ class SettingInterface(QWidget, Ui_settingInterface):
             info.addWidget(self._qwentts_status)
             row.addLayout(info, 1)
             self._qwentts_test_button = PrimaryPushButton('测试连接', card)
+            self._size_action_button(self._qwentts_test_button)
             self._qwentts_test_button.clicked.connect(self.test_qwentts_connection)
             row.addWidget(self._qwentts_test_button)
             layout.addLayout(row)
             voice_row = QHBoxLayout()
+            voice_row.setSpacing(self.CONTROL_SPACING)
             voice_row.addWidget(theme.make_card_title('发音人选择', card), 1)
             self._qwentts_voice_combo = ComboBox(card)
-            self._qwentts_voice_combo.setFixedWidth(240)
+            self._qwentts_voice_combo.setFixedWidth(self.CONTROL_WIDTH)
+            self._qwentts_voice_combo.currentTextChanged.connect(self._qwentts_voice_combo.setToolTip)
             self._qwentts_voice_combo.currentIndexChanged.connect(self.on_qwentts_voice_changed)
-            voice_row.addWidget(self._qwentts_voice_combo)
             self._qwentts_refresh_button = ToolButton(FluentIcon.SYNC, card)
             self._qwentts_refresh_button.setFixedSize(QSize(33, 33))
             self._qwentts_refresh_button.setToolTip('重新连接并刷新模型与音色')
             self._qwentts_refresh_button.clicked.connect(self.test_qwentts_connection)
             voice_row.addWidget(self._qwentts_refresh_button)
+            voice_row.addWidget(self._qwentts_voice_combo)
             layout.addLayout(voice_row)
             self.verticalLayout_2.insertWidget(self.tail_index(), card)
             self._qwentts_card = card
@@ -1318,18 +1398,6 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def finish_qwentts_connection(self):
         self._qwentts_task = None
         self.update_qwentts_service_card()
-        if self._closing_after_service_check:
-            self._closing_after_service_check = False
-            self.window().close()
-
-    def finish_service_check_before_close(self):
-        """等当前短请求退出后再关窗，避免销毁仍运行的 QThread。"""
-        if self._qwentts_task is None or not self._qwentts_task.isRunning():
-            return True
-        self._closing_after_service_check = True
-        self._qwentts_task.requestInterruption()
-        return False
-
 
     def refresh_voice_catalog(self):
         """启动后台任务，强制刷新 Edge-TTS 音色目录。"""
@@ -1399,6 +1467,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         h_layout.addSpacing(20)
 
         open_button = PrimaryPushButton('打开音色管理', card)
+        self._size_action_button(open_button)
         open_button.clicked.connect(self.open_qwen_clone_voice_dialog)
         h_layout.addWidget(open_button)
 

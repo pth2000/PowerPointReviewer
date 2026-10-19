@@ -4,7 +4,7 @@ from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QDialog
 from qfluentwidgets import qconfig
 
-from app import theme
+from ui import theme
 
 
 class ThemedDialog(QDialog):

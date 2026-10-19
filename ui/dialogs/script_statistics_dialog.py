@@ -8,8 +8,8 @@ from qfluentwidgets import (
     SubtitleLabel, TableWidget, isDarkTheme, setCustomStyleSheet, setFont,
 )
 
-from app import theme
-from app.script_statistics import format_duration
+from ui import theme
+from app.documents.statistics import format_duration
 
 
 class _OverviewCard(CardWidget):

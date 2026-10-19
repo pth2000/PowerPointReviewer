@@ -7,9 +7,10 @@ import unittest
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent
-from PySide6.QtWidgets import QApplication
 
-from app.recording_session import RecordingSession
+from app.presentation.session import PresentationSession as RecordingSession
+
+from qt_test_case import QtTestCase
 
 
 class RecordingSessionTests(unittest.TestCase):
@@ -32,14 +33,15 @@ class RecordingSessionTests(unittest.TestCase):
         self.application.SlideShowWindows.Count = 1
         self.application.SlideShowWindows.Item.return_value = self.show
         self.patchers = [
-            patch('app.presentation_session._ensure_com', return_value=True),
-            patch('app.presentation_session.list_presentations', return_value=[]),
-            patch('app.presentation_session._application_pid', return_value=567),
+            patch('app.presentation.com._rot_applications', return_value=[]),
+            patch('app.presentation.session.ensure_com', return_value=True),
+            patch('app.presentation.session.list_presentations', return_value=[]),
+            patch('app.presentation.session.application_pid', return_value=567),
             patch('win32process.EnumProcesses', return_value=[1]),
             patch('win32com.client.GetActiveObject', side_effect=RuntimeError('not running')),
             patch('win32com.client.DispatchEx', return_value=self.application),
             patch('win32com.client.dynamic.Dispatch', side_effect=lambda app: app),
-            patch('app.presentation_session.RecordingPresentation', return_value=self.adapter),
+            patch('app.presentation.session.PresentationControl', return_value=self.adapter),
         ]
         for patcher in self.patchers:
             patcher.start()
@@ -75,10 +77,66 @@ class RecordingSessionTests(unittest.TestCase):
             raise RuntimeError('not running')
         return active
 
+    def test_new_windowed_recording_uses_copy_without_scrollbar(self):
+        session = RecordingSession.start(self.source, windowed=True)
+        self.assertEqual(self.settings.ShowType, 2)
+        self.assertEqual(self.settings.ShowScrollbar, 0)
+        session.close()
+        self.assertEqual(self.source.read_bytes(), b'original presentation')
+
+    def test_open_document_in_second_wps_instance_is_used_without_starting_another(self):
+        idle = Mock()
+        idle.Presentations.Count = 0
+        self.document.FullName = str(self.source)
+        self.application.Presentations.Count = 1
+        self.application.Presentations.Item.return_value = self.document
+        with patch('app.presentation.session.running_applications', return_value=iter([
+                ('Kwpp.Application', 'WPS 演示', idle),
+                ('Kwpp.Application', 'WPS 演示', self.application)])):
+            session = RecordingSession.start(self.source, reuse_open=True)
+        self.assertIs(session.application, self.application)
+        self.settings.Run.assert_called_once()
+        idle.Presentations.Open.assert_not_called()
+        self.application.Presentations.Open.assert_not_called()
+        session.close(restore_position=False)
+        self.document.Close.assert_not_called()
+
+    def test_windowed_playback_restores_open_document_settings_and_dirty_state(self):
+        self.settings.ShowType = 1
+        self.settings.ShowScrollbar = -1
+        self.document.FullName = str(self.source)
+        self.application.Presentations.Count = 1
+        self.application.Presentations.Item.return_value = self.document
+        launched = []
+        self.settings.Run.side_effect = lambda: launched.append(
+            (self.settings.ShowType, self.settings.ShowScrollbar)) or self.show
+        for saved in (True, False):
+            self.document.Saved = saved
+            with patch('win32com.client.GetActiveObject', side_effect=self.application_for('PowerPoint.Application')):
+                session = RecordingSession.start(self.source, reuse_open=True, windowed=True)
+            self.assertEqual(self.settings.ShowType, 1)
+            self.assertEqual(self.settings.ShowScrollbar, -1)
+            self.assertEqual(self.document.Saved, saved)
+            session.close(restore_position=False)
+        self.assertEqual(launched, [(2, 0), (2, 0)])
+        self.document.Save.assert_not_called()
+        self.document.Close.assert_not_called()
+
+    def test_windowed_launch_failure_restores_settings_and_unsaved_edits(self):
+        self.document.Saved = False
+        self.settings.ShowType = 1
+        self.settings.ShowScrollbar = -1
+        self.settings.Run.side_effect = RuntimeError('failed')
+        with self.assertRaisesRegex(RuntimeError, 'failed'):
+            RecordingSession._run_open_document(self.document, True)
+        self.assertEqual(self.settings.ShowType, 1)
+        self.assertEqual(self.settings.ShowScrollbar, -1)
+        self.assertFalse(self.document.Saved)
+
     def test_reuses_matching_show_and_restores_position_without_exit(self):
         unrelated = Mock(matches_source=Mock(return_value=False))
         self.adapter.matches_source.return_value = True
-        with patch('app.presentation_session.list_presentations', return_value=[unrelated, self.adapter]), \
+        with patch('app.presentation.session.list_presentations', return_value=[unrelated, self.adapter]), \
              patch('win32com.client.DispatchEx') as launch:
             session = RecordingSession.start(self.source)
         launch.assert_not_called()
@@ -95,7 +153,7 @@ class RecordingSessionTests(unittest.TestCase):
             raise RuntimeError('not running')
         with patch('win32com.client.GetActiveObject', side_effect=active), \
              patch('win32com.client.DispatchEx') as launch, \
-             patch('app.presentation_session.RecordingPresentation', return_value=self.adapter) as adapter:
+             patch('app.presentation.session.PresentationControl', return_value=self.adapter) as adapter:
             session = RecordingSession.start(self.source)
         launch.assert_not_called()
         self.assertEqual(adapter.call_args.args[1:3], ('WPS 演示', 'Kwpp.Application'))
@@ -104,7 +162,7 @@ class RecordingSessionTests(unittest.TestCase):
 
     def test_playback_cleanup_keeps_borrowed_show_at_current_page(self):
         self.adapter.matches_source.return_value = True
-        with patch('app.presentation_session.list_presentations', return_value=[self.adapter]):
+        with patch('app.presentation.session.list_presentations', return_value=[self.adapter]):
             session = RecordingSession.start(self.source)
         session.close(restore_position=False)
         self.view.GotoSlide.assert_not_called()
@@ -117,7 +175,7 @@ class RecordingSessionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '先.*开始放映'):
                 RecordingSession.start(self.source, reuse_open=True, allow_start=False)
             self.adapter.matches_source.return_value = True
-            with patch('app.presentation_session.list_presentations', return_value=[self.adapter]):
+            with patch('app.presentation.session.list_presentations', return_value=[self.adapter]):
                 session = RecordingSession.start(self.source, reuse_open=True, allow_start=False)
             launch.assert_not_called()
             running.assert_not_called()
@@ -180,7 +238,7 @@ class RecordingSessionTests(unittest.TestCase):
         self.adapter.matches_source.return_value = True
         self.adapter.provider = 'WPS 演示'
         self.view.GetClickIndex.return_value = 0
-        with patch('app.presentation_session.list_presentations', return_value=[self.adapter]):
+        with patch('app.presentation.session.list_presentations', return_value=[self.adapter]):
             session = RecordingSession.start(self.source)
         session.close()
         self.view.GotoSlide.assert_called_once_with(2, True)
@@ -222,10 +280,7 @@ class RecordingSessionTests(unittest.TestCase):
         launch.assert_not_called()
 
 
-class AutomatedDialogTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt = QApplication.instance() or QApplication([])
+class AutomatedDialogTests(QtTestCase):
 
     def setUp(self):
         from ui.dialogs.video_recording_dialog import VideoRecordingDialog
@@ -267,7 +322,7 @@ class AutomatedDialogTests(unittest.TestCase):
         with patch('ui.dialogs.video_recording_dialog.RecordingSession.start', return_value=session) as start, \
              patch.object(self.dialog, '_start_live_recording') as record:
             self.dialog._record(['ready.wav'])
-            start.assert_called_once_with(self.source)
+            start.assert_called_once_with(self.source, windowed=True)
             self.assertTrue(self.dialog.show_timer.isActive())
             self.dialog._await_show()
             record.assert_called_once_with(['ready.wav'])
