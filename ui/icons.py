@@ -6,19 +6,53 @@ qfluentwidgets 只会处理内置图标，而项目资源中的单色 SVG 使用
 品牌色和多色图标不参与改写，因为其配色本身也是图标语义的一部分。
 """
 
-from PySide6.QtCore import QByteArray, QFile, QIODevice, Qt
-from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtCore import QByteArray, QFile, QIODevice, QRectF, QSize, Qt
+from PySide6.QtGui import QIcon, QIconEngine, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from qfluentwidgets import isDarkTheme
 
 # 只替换资源中约定的单色填充，避免破坏多色图标。
 MONOCHROME_FILLS = ('#2c2c2c', '#2C2C2C', '#31303D', '#31303d')
 
-RENDER_SIZE = 64
-
 # 登记项为“支持 setIcon 的对象 + Qt 资源路径”。
 _registry = []
 _cache = {}
+
+
+class _SvgIconEngine(QIconEngine):
+    """按最终尺寸绘制 SVG，避免固定尺寸位图在分数缩放下反复采样。"""
+
+    def __init__(self, svg):
+        super().__init__()
+        self.svg = svg
+        self.renderer = QSvgRenderer(QByteArray(svg.encode('utf-8')))
+
+    def clone(self):
+        return _SvgIconEngine(self.svg)
+
+    def isNull(self):
+        return not self.renderer.isValid()
+
+    def paint(self, painter, rect, mode, state):
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if mode == QIcon.Mode.Disabled:
+            painter.setOpacity(painter.opacity() * 0.5)
+        self.renderer.render(painter, QRectF(rect))
+        painter.restore()
+
+    def pixmap(self, size, mode, state):
+        return self.scaledPixmap(size, mode, state, 1.0)
+
+    def scaledPixmap(self, size, mode, state, scale):
+        pixels = QSize(max(1, round(size.width() * scale)), max(1, round(size.height() * scale)))
+        pixmap = QPixmap(pixels)
+        pixmap.setDevicePixelRatio(scale)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        self.paint(painter, QRectF(0, 0, size.width(), size.height()), mode, state)
+        painter.end()
+        return pixmap
 
 
 def _read_svg(path: str) -> str:
@@ -48,13 +82,7 @@ def themed_icon(path: str) -> QIcon:
     for fill in MONOCHROME_FILLS:
         svg = svg.replace(fill, color)
 
-    pixmap = QPixmap(RENDER_SIZE, RENDER_SIZE)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    QSvgRenderer(QByteArray(svg.encode('utf-8'))).render(painter)
-    painter.end()
-
-    icon = QIcon(pixmap)
+    icon = QIcon(_SvgIconEngine(svg))
     _cache[key] = icon
     return icon
 

@@ -69,8 +69,9 @@ def _clicks(slide):
 
 
 def check_alignment(source, segments):
-    """只检查有讲稿的页；数量一致的页不返回，页码采用文稿实际顺序。"""
+    """检查讲稿涉及的页，报告空讲稿和点击不匹配；页码采用文稿实际顺序。"""
     counts = Counter(int(item['page']) for item in segments)
+    spoken_pages = {int(item['page']) for item in segments if item['text'].strip()}
     if not counts or not source:
         return []
     source = Path(source)
@@ -93,11 +94,17 @@ def check_alignment(source, segments):
             part = (target.lstrip('/') if target.startswith('/') else
                     posixpath.normpath(posixpath.join('ppt', target)))
             clicks, reason = _clicks(ET.fromstring(archive.read(part)))
+            reasons = []
+            empty = page not in spoken_pages
+            if empty:
+                reasons.append('此页没有可朗读的讲稿')
             if clicks is None:
-                issues.append(AnimationIssue(page, count, None, reason))
+                reasons.append(reason)
             elif clicks != count - 1:
                 difference = count - 1 - clicks
                 reason = (f'讲稿多出 {difference} 个点击步骤' if difference > 0 else
                           f'还有 {-difference} 个点击步骤未对应讲稿')
-                issues.append(AnimationIssue(page, count, clicks, reason))
+                reasons.append(reason)
+            if reasons:
+                issues.append(AnimationIssue(page, 0 if empty else count, clicks, '；'.join(reasons)))
         return issues

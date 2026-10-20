@@ -63,6 +63,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
     page_turn_mode_changed = Signal()
     sync_playback_changed = Signal(bool)
     slideshow_preferences_changed = Signal()
+    usage_guide_requested = Signal()
+    advanced_guide_requested = Signal()
 
     # 这些字段与语音设置一起参加脏状态比较；其它偏好由其所属页面即时保存。
     OWNED_APP_KEYS = ('preview_text',)
@@ -561,6 +563,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         """构建不随引擎切换重建的固定设置区块。"""
         self.setup_preview_text_card()
         self.add_section_label('常规', append=True)
+        self.setup_usage_guide_card()
         self.setup_resume_session_card()
         self.setup_script_preferences_cards()
         self.add_section_label('放映控制', append=True)
@@ -574,13 +577,31 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
     PAGE_TURN_MODES = (('com', '演示软件接口（COM）'), ('foreground', '前台按键'), ('window', '指定窗口'))
 
+    def setup_usage_guide_card(self):
+        card = self._make_appearance_card('使用指引', '了解基础操作，探索讲稿与配音的更多用法')
+        actions = QWidget(card)
+        actions.setFixedWidth(self.CONTROL_WIDTH)
+        layout = QHBoxLayout(actions)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(self.CONTROL_SPACING)
+        width = (self.CONTROL_WIDTH - self.CONTROL_SPACING) // 2
+        self.usage_guide_button = PushButton('入门指引', actions)
+        self.advanced_guide_button = PushButton('进阶技巧', actions)
+        for button in (self.usage_guide_button, self.advanced_guide_button):
+            self._size_action_button(button, width)
+            layout.addWidget(button)
+        self.usage_guide_button.clicked.connect(lambda: self.usage_guide_requested.emit())
+        self.advanced_guide_button.clicked.connect(lambda: self.advanced_guide_requested.emit())
+        card.layout().addWidget(actions)
+
     def setup_script_preferences_cards(self):
         options = (
             ('script_comments_enabled', '识别讲稿注释', '朗读时跳过以 // 开头的整行文字',
              '允许 // 前有空格或缩进；正文中的网址和行末 // 不受影响。'
              '注释仍保留在备注中。调整后在下次生成配音时生效，已有配音保持不变。'),
-            ('animation_check_enabled', '生成前校验点击动画', '检查 PPT 点击动画与讲稿分段是否一致',
-             '发现数量不一致或需要确认的页面时，可查看结果后继续生成或取消。'
+            ('animation_check_enabled', '生成前校验点击动画', '检查空讲稿及点击动画与分段的对应情况',
+             '没有可朗读讲稿、点击次数与分段不一致或需要确认的页面会列出提醒，'
+             '可查看结果后继续生成或取消。'
              '检查前请先保存对 PPT 的修改。'),
         )
         for key, title, caption, help_text in options:

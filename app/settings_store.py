@@ -37,6 +37,9 @@ class AppSettings:
         'slideshow_stop_on_exit': True,
         'resume_last_session': True,
         'last_session': {},
+        # 使用指引
+        'onboarding_seen': False,
+        'onboarding_tools_seen': False,
         # 全局热键
         'hotkeys_enabled': False,
         # 翻页方式：foreground 前台按键，com 演示软件接口，window 指定窗口
@@ -105,6 +108,10 @@ class AppSettings:
                 print(f'[配置] 忽略无法解析的字段 {key}={value!r}')
                 continue
             self._values[key] = value
+
+        styles, selected, templates = rewrite.migrate_presets(
+            self.get('llm_styles'), self.get('llm_style'), self.get('llm_templates'))
+        self._values.update(llm_styles=styles, llm_style=selected, llm_templates=templates)
 
 
 class ConfigStore(QObject):

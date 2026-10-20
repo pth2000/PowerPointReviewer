@@ -72,6 +72,7 @@ class LinkInterfaceTests(QtTestCase):
         self.assertEqual(self.page.media_list, media)
         self.assertEqual(self.page.note_file_path, self.source)
         self.assertEqual(self.page.presentation_path, self.copy)
+        self.assertEqual(self.page.notes_path_text.text, str(self.copy))
         record = json.loads(self.record_path.read_text(encoding='utf-8'))
         self.assertEqual(record['generation_profile'], self.record['generation_profile'])
         self.assertEqual(record['items'], self.record['items'])
@@ -91,8 +92,10 @@ class LinkInterfaceTests(QtTestCase):
         self.assertTrue(self.page.playButton.isEnabled())
         self.assertFalse(self.page.scrollEnableSwitch.isEnabled())
         self.assertEqual(self.page.media_list, [self.audio])
+        self.assertEqual(self.page.notes_path_text.text, f'{self.source}（文件不可用）')
         self.page.set_presentation_link(presentation_link.validate(self.copy, [1]))
         self.assertEqual(self.page.presentation_path, self.copy)
+        self.assertEqual(self.page.notesPathLabel.toolTip(), str(self.copy))
 
     def test_history_finds_renamed_copy_by_content_and_saves_new_location(self):
         record = dict(self.record, presentation=presentation_link.describe(self.source))
@@ -101,7 +104,35 @@ class LinkInterfaceTests(QtTestCase):
         with patch('app.presentation.slideshow.list_open_presentations', return_value=[]):
             self.page.load_session_record(self.record_path)
         self.assertEqual(self.page.presentation_path, self.copy)
+        self.assertEqual(self.page.notes_path_text.text, str(self.copy))
         self.assertEqual(json.loads(self.record_path.read_text(encoding='utf-8'))['presentation']['path'], str(self.copy))
+
+    def test_loaded_history_displays_source_path_instead_of_record_filename(self):
+        self.assertEqual(self.page.notes_path_text.text, str(self.source))
+        self.assertEqual(self.page.notesPathLabel.toolTip(), str(self.source))
+
+    def test_standalone_history_shows_original_script_path(self):
+        source = self.root / '讲稿.docx'
+        source.write_bytes(b'original script')
+        self.record_path.write_text(json.dumps(dict(self.record, source_file=str(source), presentation={})), encoding='utf-8')
+        self.page.load_session_record(self.record_path)
+        self.assertEqual(self.page.notes_path_text.text, str(source))
+
+    def test_history_without_source_shows_name_and_association_status(self):
+        self.record_path.write_text(json.dumps(dict(self.record, source_file='', presentation={})), encoding='utf-8')
+        self.page.load_session_record(self.record_path)
+        self.assertEqual(self.page.notes_path_text.text, '原文件（未关联原文件）')
+        self.assertNotIn('history.json', self.page.notesPathLabel.toolTip())
+
+    def test_missing_associated_ppt_path_takes_priority_over_original_script_path(self):
+        source = self.root / '讲稿.docx'
+        source.write_bytes(b'original script')
+        linked = self.root / '已移动的文稿.pptx'
+        self.page.note_file_path = source
+        self.page.presentation_path = None
+        self.page.presentation_link = {'path': str(linked)}
+        self.page.refresh_presentation_state()
+        self.assertEqual(self.page.notes_path_text.text, f'{linked}（文件不可用）')
 
     def test_persist_failure_preserves_previous_association(self):
         previous = self.page.presentation_path

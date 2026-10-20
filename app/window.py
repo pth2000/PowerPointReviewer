@@ -9,6 +9,7 @@ from qfluentwidgets import (
 
 from app.app_context import AppContext
 from ui.file_drop import FileDropImport
+from ui.onboarding import UsageGuide
 from ui.widget_state import active_modal_dialog
 from ui.pages.reviewer_page import PPTReviewer
 from ui.pages.settings_page import SettingInterface
@@ -61,10 +62,18 @@ class Window(FluentWindow):
         self.ppt_r.refresh_slideshow_watch()
         self.setting_interface.hotkeys_changed.connect(self.ppt_r.refresh_hotkeys)
 
+        self.usage_guide = UsageGuide(self)
+
         self.splashScreen.finish()
         if self.context.updated_to:
             QTimer.singleShot(300, self.show_updated_tip)
-        QTimer.singleShot(750, self.ppt_r.prompt_resume_session)
+        QTimer.singleShot(750, self, self._show_startup_guidance)
+
+    def _show_startup_guidance(self):
+        if self.usage_guide.step is not None:
+            return
+        self.ppt_r.prompt_resume_session()
+        self.usage_guide.maybe_offer()
 
     def _bind_sync_playback(self):
         page, settings = self.ppt_r, self.setting_interface

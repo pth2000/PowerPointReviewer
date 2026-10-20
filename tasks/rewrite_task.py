@@ -54,6 +54,8 @@ class RewriteTask(QThread):
 
                 if not content:
                     raise llm_client.LLMError('模型返回了空内容')
+                if content.strip() == text.strip():
+                    content = text
 
                 self.signal_page_done.emit(
                     page, content, rewrite.check_segments(text, content, self.mark))

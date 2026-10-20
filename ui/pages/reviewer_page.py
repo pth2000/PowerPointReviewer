@@ -19,7 +19,6 @@ from qfluentwidgets import (
     InfoLevel,
     MessageBox,
     PushButton,
-    RoundMenu,
     ToolTipFilter,
 )
 
@@ -27,6 +26,7 @@ from Ui_mainwindow import Ui_mainwindow
 from app.presentation import animation as animation_check, link as presentation_link, slideshow, window_target
 from app import hotkeys, paths
 from ui import icons, theme
+from ui.icon_menu import IconMenu
 from app.documents import package as project_package, io as script_io
 from app.audio import segments as segment_audio
 from app.app_context import AppContext
@@ -137,7 +137,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.presentation_link = {}
         self.presentation_path = None
         self.session_record_path = None
-        self._generation_position = None
+        self._generation_page = None
         self._presentation_state = None
         self._ppt_update_bar = None
         self._resume_waiting_for_dialog = False
@@ -172,7 +172,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         icons.apply(self.getFileButton, ':/image/image/ppt.svg')
         self.getFileButton.setToolTip('也可将 PPTX、Word、JSON 讲稿或工程包拖入窗口')
-        self.file_button_menu = RoundMenu(parent=self)
+        self.file_button_menu = IconMenu(parent=self)
         self.file_button_menu.addAction(icons.apply(
             Action('导入 Word 讲稿', triggered=self.import_word), ':/image/image/word.svg'))
         self.file_button_menu.addAction(
@@ -480,6 +480,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         return not self.sync_playback_unavailable_reason()
 
     def refresh_presentation_state(self):
+        self._refresh_history_source_path()
         self.regenerate_action.setEnabled(self.is_import and bool(self.notes) and not self.is_busy())
         set_enabled(self.editMarkPushButton, not self.is_busy())
         available = self.has_presentation()
@@ -503,6 +504,23 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         if state != self._presentation_state:
             self._presentation_state = state
             self.presentation_state_changed.emit()
+
+    def _refresh_history_source_path(self):
+        if not self.session_record_path:
+            return
+        source = self.presentation_path
+        if source is None and self.presentation_link.get('path'):
+            source = Path(self.presentation_link['path'])
+        if source is None:
+            source = self.note_file_path
+        if source is not None:
+            text = str(source)
+            if not source.is_file():
+                text += '（文件不可用）'
+        else:
+            text = f'{self.note_file_name}（未关联原文件）' if self.note_file_name else '未关联原文件'
+        if text != self.notes_path_text.text:
+            self.notes_path_text.set_text(text)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -930,7 +948,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                                  and Path(self.presentation_path).resolve() == path.resolve())
         if not (same_source or same_presentation):
             self.session_record_path = None
-            self._generation_position = None
+            self._generation_page = None
             self.audio_edits = {}
         self.note_file_path = path
         self.presentation_link = link
@@ -1035,7 +1053,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                 self.note_file_path = None
                 self.note_file_name = str(record.get('source_name') or path.stem)
                 self.session_record_path = None
-                self._generation_position = None
+                self._generation_page = None
                 self.audio_edits = {}
                 self._restore_presentation_link(record)
                 self._bind_presentation_monitor(baseline=record.get('presentation_notes'))
@@ -1062,11 +1080,9 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         """规范化当前讲稿、重建分段并启动后台音频生成。"""
         previous_segments = self.notes_list
         if self.session_record_path and previous_segments and (
-                self.is_import or self._generation_position is None):
+                self.is_import or self._generation_page is None):
             index = min(max(self.current_index, 0), len(previous_segments) - 1)
-            page = previous_segments[index]['page']
-            positions = [i for i, segment in enumerate(previous_segments) if segment['page'] == page]
-            self._generation_position = (page, positions.index(index), len(positions))
+            self._generation_page = previous_segments[index]['page']
         try:
             self.mark_split(comments_enabled=comments_enabled)
             self.audio_edits = segment_audio.match_edits(previous_segments, self.audio_edits, self.notes_list)
@@ -1245,18 +1261,15 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.audio_changed.emit()
 
     def _restore_generation_position(self):
-        position, self._generation_position = self._generation_position, None
-        if position is None or not self.notes_list:
+        """更新后保留所在页，从本页第一段重新开始。"""
+        page, self._generation_page = self._generation_page, None
+        if page is None or not self.notes_list:
             return
-        page, offset, count = position
-        positions = [i for i, segment in enumerate(self.notes_list) if segment['page'] == page]
-        if not positions:
+        if not any(segment['page'] == page for segment in self.notes_list):
             page = min((segment['page'] for segment in self.notes_list),
                        key=lambda candidate: (abs(candidate - page), candidate < page))
-            self.current_index = next(i for i, segment in enumerate(self.notes_list)
-                                      if segment['page'] == page)
-            return
-        self.current_index = positions[offset] if len(positions) == count else positions[0]
+        self.current_index = next(i for i, segment in enumerate(self.notes_list)
+                                  if segment['page'] == page)
 
     def save_session_record(self):
         """保存讲稿、生成配置和缓存引用，供历史记录恢复。"""
@@ -1434,7 +1447,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             restored = {k: mark.join(v) for k, v in rebuilt_notes.items()}
 
         self.clean_and_reset()
-        self._generation_position = None
+        self._generation_page = None
         self.note_file_name = str(record.get('source_name', ''))
         self.note_file_path = Path(source_file) if source_file else None
         self.mark = mark
@@ -1464,7 +1477,6 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         if self.notes_list:
             self.set_current_label_text()
 
-        self.notes_path_text.set_text(f'历史记录：{record_path.name}')
         self.create_success_info_bar('加载成功', '历史记录已恢复，可直接播放')
         self.refresh_hotkeys()
         self.refresh_slideshow_watch()
@@ -1806,9 +1818,9 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         if self.is_busy():
             self.create_warning_info_bar('暂时无法修改', '请等待当前任务完成后再修改分隔符')
             return
-        box = EditMarkMessageBox(self.mark, self)
+        box = EditMarkMessageBox(self.mark, self.window(), has_script=bool(self.notes))
         if box.exec():
-            text = box.urlLineEdit.text().strip()
+            text = box.get_mark()
             if not text or text == self.mark:
                 return
             print(f'分隔符：{text}')

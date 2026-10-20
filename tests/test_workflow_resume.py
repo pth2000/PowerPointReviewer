@@ -41,7 +41,7 @@ class WorkflowResumeTests(QtTestCase):
                                   generation_profile={'voice': 'original'}, speaker='测试声音')
         self.page.thread_save_finish(result)
 
-    def test_update_retains_page_and_segment_when_earlier_pages_change(self):
+    def test_update_returns_to_page_start_even_when_segment_count_is_unchanged(self):
         self.load()
         self.page.notes_list = [{'page': 1, 'text': '前页'}, {'page': 2, 'text': '第一段'},
                                 {'page': 2, 'text': '第二段'}]
@@ -49,10 +49,17 @@ class WorkflowResumeTests(QtTestCase):
         self.start_update({1: '新增第一段●新增第二段●新增第三段', 2: '第一段●修改后的第二段'})
         self.assertEqual(self.page.current_index, 0)
         self.finish_update()
-        self.assertEqual(self.page.current_index, 4)
-        self.assertEqual(self.ctx.app_settings.get('last_session')['index'], 4)
+        self.assertEqual(self.page.current_index, 3)
+        self.assertEqual(self.ctx.app_settings.get('last_session')['index'], 3)
         self.assertEqual(self.page.currentPageLabel.text(), '2 / 2')
+        self.assertEqual(self.page._segment_offset(), 0)
         self.assertFalse(self.page._playing_sequence)
+        self.assertEqual(self.page.player.playbackState(), QMediaPlayer.PlaybackState.StoppedState)
+
+        self.page.scrollEnableSwitch.setChecked(True)
+        with patch.object(self.page.playback_show, 'prepare') as prepare:
+            self.page.init_play()
+        self.assertEqual(prepare.call_args.args, (self.source, 2, 0))
 
     def test_changed_page_segmentation_returns_to_that_page_start(self):
         self.load()
@@ -90,10 +97,12 @@ class WorkflowResumeTests(QtTestCase):
 
     def test_failed_update_keeps_record_and_retry_restores_original_position(self):
         self.load()
-        self.page.current_index = 1
+        self.page.notes_list = [{'page': 1, 'text': '前页'}, {'page': 2, 'text': '第一段'},
+                                {'page': 2, 'text': '第二段'}]
+        self.page.current_index = 2
         original = self.record_path.read_bytes()
         self.ctx.app_settings.set('script_comments_enabled', True)
-        self.start_update({1: '前页新增一段●前页新增二段', 2: '第二页更新'})
+        self.start_update({1: '前页新增一段●前页新增二段', 2: '第二页更新第一段●第二页更新第二段'})
         with patch.object(self.page, 'create_error_info_bar'):
             self.page.thread_save_error('temporary synthesis failure')
         self.assertEqual(self.record_path.read_bytes(), original)
@@ -137,8 +146,10 @@ class WorkflowResumeTests(QtTestCase):
 
     def test_reimporting_current_ppt_retains_record_and_position(self):
         self.load()
-        self.page.current_index = 1
-        self.edit_ppt()
+        self.page.notes_list = [{'page': 1, 'text': '前页'}, {'page': 2, 'text': '第一段'},
+                                {'page': 2, 'text': '第二段'}]
+        self.page.current_index = 2
+        self.edit_ppt('更新第一段●更新第二段')
         self.ctx.app_settings.set('animation_check_enabled', False)
         with patch.object(self.page.save_thread, 'configure'), \
              patch.object(self.page.save_thread, 'start'), \

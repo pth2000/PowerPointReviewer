@@ -1,4 +1,4 @@
-"""配音生成前，仅展示点击动画与讲稿分段的待确认页。"""
+"""配音生成前，展示空讲稿及点击动画与分段的待确认页。"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHeaderView, QTableWidgetItem
@@ -12,8 +12,8 @@ class AnimationCheckDialog(MessageBoxBase):
     def __init__(self, issues, parent=None):
         super().__init__(parent)
         self.viewLayout.setSpacing(14)
-        self.viewLayout.addWidget(SubtitleLabel('检查点击动画与讲稿分段', self))
-        description = BodyLabel('以下页面的点击动画与讲稿分段需要确认。', self)
+        self.viewLayout.addWidget(SubtitleLabel('检查讲稿与点击动画', self))
+        description = BodyLabel('请确认以下页面的讲稿及点击动画安排。', self)
         description.setWordWrap(True)
         self.viewLayout.addWidget(description)
         self.table = TableWidget(self)

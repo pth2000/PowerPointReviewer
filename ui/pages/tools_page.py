@@ -104,23 +104,26 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         self.SubtitleLabel.setText('讲稿处理')
         self.CaptionLabel_4.setText('处理已导入的讲稿')
 
-        self.processing_cards.append(self.add_card(
+        self.audio_review_card = self.add_card(
             '配音审听', '逐页逐段试听，调整语速、音量与停顿',
             [('打开面板', self.open_audio_review)],
-            help_text='选中片段即可试听，调整效果确认采用后用于正常播放和导出。'))
+            primary_first=True,
+            help_text='选中片段即可试听，调整效果确认采用后用于正常播放和导出。')
+        self.processing_cards.append(self.audio_review_card)
 
-        self.processing_cards.append(self.add_card(
+        self.ai_rewrite_card = self.add_card(
             'AI 优化',
-            '按所选风格逐页优化讲稿',
+            '纠正朗读歧义，或按讲解场景优化表达',
             [('前往优化', self.open_rewrite_dialog)],
             primary_first=True,
-            help_text='支持 OpenAI 兼容接口，例如 DeepSeek 或本地部署的 Ollama。'
-                      '首次使用需在“接口配置”中填写服务地址与模型名称。改写结果经确认后才会写回讲稿。',
-        ))
+            help_text='可通过兼容 OpenAI 的接口处理，也可导出含提示词的任务，在其他 AI 中处理后导回审查。'
+                      '优化结果经确认后才会应用。',
+        )
+        self.processing_cards.append(self.ai_rewrite_card)
 
         self.add_section('导出')
 
-        self.export_cards.append(self.add_card(
+        self.script_export_card = self.add_card(
             '讲稿文档',
             '导出为文档或写回 PPT 备注',
             [
@@ -130,16 +133,18 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
                 ('JSON', self.write_to_json),
             ],
             help_text='写回 PowerPoint 时另存为新文件，不覆盖原文件。Word 与 JSON 文件修改后可重新导入。',
-        ))
+        )
+        self.export_cards.append(self.script_export_card)
 
-        self.export_cards.append(self.add_card(
+        self.project_package_card = self.add_card(
             '工程包',
             '打包讲稿、音频与配置',
             [('导出工程包', self.export_project_package)],
             help_text='包含讲稿与已生成的音频，在其他设备导入后即可播放。PPT 文稿可在“历史记录列表”中关联。',
-        ))
+        )
+        self.export_cards.append(self.project_package_card)
 
-        self.export_cards.append(self.add_card(
+        self.audio_export_card = self.add_card(
             '字幕与音频',
             '导出 SRT 字幕与合成的语音',
             [
@@ -148,9 +153,10 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
                 ('合并音频', self.export_merged_audio),
             ],
             help_text='SRT 字幕的时间轴按各语句的音频时长生成。合并音频将全部语句依次拼接为一个文件。',
-        ))
+        )
+        self.export_cards.append(self.audio_export_card)
 
-        self.export_cards.append(self.add_card(
+        self.video_export_card = self.add_card(
             'PPT 演示视频',
             '将 PPT 画面与讲稿配音制作为视频',
             [
@@ -160,7 +166,8 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             help_text='放映录制：保留 PPT 动画，跟随讲稿配音展示内容。\n'
                       '静态合成：以逐页静态画面搭配讲稿配音。\n'
                       '请在 Windows 上使用，并安装 PowerPoint 或 WPS 演示。',
-        ))
+        )
+        self.export_cards.append(self.video_export_card)
 
 
     # 状态同步

@@ -100,6 +100,29 @@ class AnimationCheckTests(unittest.TestCase):
         self.assertEqual(check_alignment(None, segments(2)), [])
         self.assertIsNone(check_alignment(self.source.with_suffix('.ppt'), segments(2))[0].clicks)
 
+    def test_blank_pages_are_reported_without_click_animations(self):
+        make_deck(self.source, [None, None, None])
+        current = [{'page': 1, 'text': '正常讲稿'},
+                   {'page': 2, 'text': ' \n\t'},
+                   {'page': 3, 'text': ''}]
+        issues = check_alignment(self.source, current)
+        self.assertEqual([(i.page, i.segments, i.clicks, i.reason) for i in issues],
+                         [(page, 0, 0, '此页没有可朗读的讲稿') for page in (2, 3)])
+
+    def test_blank_pages_keep_animation_findings_in_the_same_row(self):
+        make_deck(self.source, [[('clickEffect',)], [('interactiveSeq',)]])
+        issues = check_alignment(self.source, [{'page': 1, 'text': ''}, {'page': 2, 'text': ''}])
+        self.assertEqual([(i.page, i.segments, i.clicks) for i in issues], [(1, 0, 1), (2, 0, None)])
+        self.assertTrue(all('此页没有可朗读的讲稿' in i.reason for i in issues))
+        self.assertIn('还有 1 个点击步骤', issues[0].reason)
+        self.assertIn('点击指定对象', issues[1].reason)
+
+    def test_empty_segments_warn_even_when_click_counts_match(self):
+        make_deck(self.source, [[('clickEffect',)]])
+        issues = check_alignment(self.source, [{'page': 1, 'text': ''}, {'page': 1, 'text': ' '}])
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0], AnimationIssue(1, 0, 1, '此页没有可朗读的讲稿'))
+
 
 class AnimationGenerationTests(QtTestCase):
 
@@ -211,6 +234,23 @@ class AnimationGenerationTests(QtTestCase):
         self.page.notes = {1: '// 提示●\n\t// 资料●'}
         self.page.mark_split()
         self.assertEqual(self.page.notes_list, [{'page': 1, 'text': ''}])
+
+    def test_blank_and_comment_only_pages_require_confirmation_before_generation(self):
+        self.page.ctx.app_settings.set('script_comments_enabled', True)
+        for text in (' \n\t', '// 提示●\n\t// 资料●'):
+            for decision in (0, 1):
+                with self.subTest(text=text, decision=decision):
+                    self.page.notes = {1: text}
+                    result, dialog, configure, start, clean = self.generate(decision)
+                    self.assertEqual(result, bool(decision))
+                    dialog.assert_called_once()
+                    self.assertEqual(self.page.notes_list, [{'page': 1, 'text': ''}])
+                    if decision:
+                        start.assert_called_once_with()
+                        configure.assert_called_once()
+                    else:
+                        start.assert_not_called()
+                        configure.assert_not_called()
 
     def test_read_failure_still_allows_user_to_continue(self):
         self.source.write_bytes(b'broken ppt')

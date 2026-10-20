@@ -385,7 +385,7 @@ class WorkflowAuditTests(QtTestCase):
         with patch('ui.pages.reviewer_page.EditMarkMessageBox') as dialog, \
              patch.object(self.page, 'regenerate') as generate:
             dialog.return_value.exec.return_value = True
-            dialog.return_value.urlLineEdit.text.return_value = '|'
+            dialog.return_value.get_mark.return_value = '|'
             self.page.show_edit_mark_dialog()
         self.assertEqual(self.page.mark, '|')
         generate.assert_called_once_with()
@@ -403,6 +403,17 @@ class WorkflowAuditTests(QtTestCase):
             dialog.return_value.exec.return_value = True
             self.assertFalse(settings.prompt_unsaved_changes(allow_regenerate=False))
         self.assertTrue(settings.is_dirty())
+
+    def test_cancelling_separator_edit_or_saving_same_mark_does_not_regenerate(self):
+        original = self.page.mark
+        for accepted in (False, True):
+            with patch('ui.pages.reviewer_page.EditMarkMessageBox') as dialog, \
+                 patch.object(self.page, 'regenerate') as generate:
+                dialog.return_value.exec.return_value = accepted
+                dialog.return_value.get_mark.return_value = original
+                self.page.show_edit_mark_dialog()
+                generate.assert_not_called()
+                self.assertEqual(self.page.mark, original)
 
     def test_late_preview_does_not_interrupt_playback_started_in_another_page(self):
         settings = self.make_settings()
@@ -432,7 +443,7 @@ class WorkflowAuditTests(QtTestCase):
         dialog.task.cancel.assert_called_once()
         dialog.task.wait.assert_not_called()
         self.assertTrue(dialog._closing)
-        self.assertFalse(dialog.close_button.isEnabled())
+        self.assertFalse(dialog.cancel_task_button.isEnabled())
         dialog.task = None
         dialog._worker_finished()
 
