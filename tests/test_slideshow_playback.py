@@ -128,7 +128,7 @@ class SlideshowPlaybackTests(QtTestCase):
         with patch('app.presentation.playback.PresentationSession.start', return_value=self.session) as start:
             self.controller.prepare(self.source, 1, 1, allow_start=False, align=False)
             self.controller._prepare_step()
-        start.assert_called_once_with(self.source, reuse_open=True, allow_start=False, windowed=False)
+        start.assert_called_once_with(self.source, reuse_open=True, allow_start=False, windowed=False, preference='auto')
         self.session.presentation.window.View.GotoSlide.assert_not_called()
         self.session.presentation.window.View.GotoClick.assert_not_called()
         self.assertEqual((self.state.page, self.state.click), (2, 2))
@@ -221,8 +221,8 @@ class SlideshowPlaybackTests(QtTestCase):
 class ReviewerAutoShowTests(SyncPlaybackFixture):
     def setUp(self):
         super().setUp()
-        self.page.notes_list = [{'page': 1, 'text': '第一页'}, {'page': 2, 'text': '第二页'}]
-        self.page.media_list = [self.source.with_suffix('.wav')] * 2
+        self.page.project.notes_list = [{'page': 1, 'text': '第一页'}, {'page': 2, 'text': '第二页'}]
+        self.page.project.media_list = [self.source.with_suffix('.wav')] * 2
         self.session, self.state = fake_session(self.source)
         self.addCleanup(self.page.playback_show.release)
         self.page.currentSwitch.setChecked(False)
@@ -240,7 +240,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         return start
 
     def test_enabled_com_prepares_before_audio_and_watches_actual_application(self):
-        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=True, windowed=False)
+        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=True, windowed=False, preference='auto')
         self.ctx.slideshow_watcher.start.assert_called_with(
             Path(self.session.presentation.path), application=self.session.presentation.application)
         self.assertEqual(self.settings.page_turn_source(), Path(self.session.presentation.path))
@@ -277,7 +277,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
     def test_selected_windowed_display_is_used_when_starting_playback(self):
         self.settings.slideshow_display_combo.setCurrentIndex(1)
         self.assertTrue(self.ctx.app_settings.get('slideshow_windowed'))
-        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=True, windowed=True)
+        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=True, windowed=True, preference='auto')
 
     def test_countdown_starts_after_show_and_stopping_keeps_show(self):
         self.page.currentSwitch.setChecked(True)
@@ -353,7 +353,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         view.GotoSlide.reset_mock()
         self.page.pageJumpSpinBox.setValue(2)
         self.page.jump_page()
-        self.assertEqual(self.page.current_index, 1)
+        self.assertEqual(self.page.project.current_index, 1)
         view.GotoSlide.assert_not_called()
         with patch.object(self.page, 'play_audio') as audio, \
              patch.object(self.page, '_prepare_playback_show') as prepare:
@@ -363,15 +363,15 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
 
     def test_wps_restart_confirmation_rewinds_to_page_first_segment(self):
         self.session.presentation.provider = 'WPS 演示'
-        self.page.notes_list = [{'page': 1, 'text': 'a'}, {'page': 1, 'text': 'b'}]
-        self.page.current_index = 1
+        self.page.project.notes_list = [{'page': 1, 'text': 'a'}, {'page': 1, 'text': 'b'}]
+        self.page.project.current_index = 1
         with patch('app.presentation.playback.PresentationSession.start', return_value=self.session), \
              patch('ui.pages.reviewer_page.MessageBox') as box, \
              patch.object(self.page, 'play_audio') as audio:
             box.return_value.exec.return_value = True
             self.page.init_play()
             self.page.playback_show._prepare_step()
-            self.assertEqual(self.page.current_index, 0)
+            self.assertEqual(self.page.project.current_index, 0)
             self.page.playback_show._prepare_step()
             audio.assert_called_once()
         self.session.presentation.window.View.GotoClick.assert_not_called()
@@ -387,7 +387,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
 
     def test_disabling_auto_start_connects_without_launching_and_keeps_countdown_order(self):
         self.ctx.app_settings.set('slideshow_auto_start', False)
-        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=False, windowed=False)
+        self.launch().assert_called_once_with(self.source, reuse_open=True, allow_start=False, windowed=False, preference='auto')
 
     def test_navigation_off_keeps_show_position_for_start_jump_reset_and_seek(self):
         self.settings.slideshow_preference_switches['slideshow_sync_navigation'].setChecked(False)
@@ -405,12 +405,12 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         view.GotoSlide.assert_not_called()
         view.GotoClick.assert_not_called()
         # Automatic advances remain controlled by the master switch.
-        self.page.current_index = 0
+        self.page.project.current_index = 0
         self.page.is_play_notes = True
         self.page._playing_sequence = True
         with patch.object(self.page, 'play_audio'):
             self.page.timeout_play_next_audio()
-        self.assertEqual(self.page.current_index, 1)
+        self.assertEqual(self.page.project.current_index, 1)
         view.Next.assert_called_once()
 
     def test_exit_without_stop_continues_audio_and_never_controls_the_closed_show(self):
@@ -429,7 +429,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
             self.page.timeout_play_next_audio()
             audio.assert_called_once()
             keys.assert_not_called()
-        self.assertEqual(self.page.current_index, 1)
+        self.assertEqual(self.page.project.current_index, 1)
         self.session.close.assert_called_once_with(restore_position=False)
         self.assertIsNone(self.page.playback_show.session)
 
@@ -444,14 +444,14 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
             self.page.timeout_play_next_audio()
             audio.assert_called_once()
             keys.assert_not_called()
-        self.assertEqual(self.page.current_index, 1)
+        self.assertEqual(self.page.project.current_index, 1)
         self.assertTrue(self.page._audio_only_playback)
         self.assertIsNone(self.page.playback_show.session)
 
     def test_end_of_script_keeps_last_slide_and_stop_cancels_pending_next(self):
         self.launch()
         view = self.session.presentation.window.View
-        self.page.current_index = 1
+        self.page.project.current_index = 1
         self.state.page = view.Slide.SlideIndex = 2
         self.page.is_play_notes = True
         self.page._playing_sequence = True
@@ -469,7 +469,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         self.launch()
         self.page.clean_and_reset()
         self.session.close.assert_called_once_with(restore_position=False)
-        self.assertEqual(self.page.presentation_path, self.source)
+        self.assertEqual(self.page.project.presentation_path, self.source)
 
 
 class PreferredWatcherTests(QtTestCase):

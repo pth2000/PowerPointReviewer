@@ -35,7 +35,7 @@ class Window(FluentWindow):
         # 启动页在 finish() 之前得不到绘制机会，用户看到的就是一片空窗。
         QApplication.processEvents()
 
-        self.ppt_r = PPTReviewer(self.context, self)
+        self.ppt_r = PPTReviewer(self.context, self, project=self.context.project)
         self.setting_interface = SettingInterface(self.context, self)
         self.tools_interface = ToolsInterface(self.context, self.ppt_r, self)
 
@@ -48,8 +48,9 @@ class Window(FluentWindow):
 
         # 设置页通过回调和信号表达意图，避免直接依赖主页实例。
         self.setting_interface.can_regenerate_check = (
-            lambda: bool(self.ppt_r.notes) and not self.ppt_r.is_busy())
+            lambda: bool(self.ppt_r.project.notes) and not self.ppt_r.is_busy())
         self.setting_interface.regenerate_requested.connect(self.ppt_r.regenerate)
+        self.setting_interface.resume_session_changed.connect(self.ppt_r.on_resume_preference_changed)
 
         self.context.hotkeys.triggered.connect(self.ppt_r.handle_hotkey)
         self.context.slideshow_watcher.slide_changed.connect(
@@ -68,6 +69,7 @@ class Window(FluentWindow):
         if self.context.updated_to:
             QTimer.singleShot(300, self.show_updated_tip)
         QTimer.singleShot(750, self, self._show_startup_guidance)
+        QTimer.singleShot(4000, self.setting_interface, self.setting_interface.check_updates_automatically)
 
     def _show_startup_guidance(self):
         if self.usage_guide.step is not None:

@@ -9,6 +9,7 @@ from PySide6.QtMultimedia import QAudioDecoder, QAudioFormat
 
 from app.audio import segments as segment_audio
 from tasks.audio_generation_task import AudioGenerationTask
+from app.logging_setup import get_logger
 
 
 def decode_wav(source, target, cancelled=lambda: False, *, normalize=False):
@@ -125,4 +126,5 @@ class AudioReviewTask(QThread):
         except InterruptedError:
             pass
         except Exception as exc:
+            get_logger().exception('片段配音处理失败')
             self.failed.emit(str(exc))

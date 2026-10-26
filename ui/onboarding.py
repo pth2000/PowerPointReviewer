@@ -214,7 +214,7 @@ class UsageGuide(QObject):
         if self.settings.get('onboarding_seen') or self.step is not None:
             return
         # 已有历史的用户仍从原来的恢复流程进入，可随时在设置中查看引导。
-        if self.settings.get('last_session') or self.window.ppt_r.notes:
+        if self.settings.get('last_session') or self.window.ppt_r.project.notes:
             self._save('onboarding_seen')
             return
         if self.window.ppt_r.is_busy() or not self.window.isVisible():
@@ -307,7 +307,7 @@ class UsageGuide(QObject):
                 'audio_export': (tools, tools.audio_export_card, '按用途导出字幕和音频',
                                  '“逐条音频”适合逐段使用配音，“合并音频”会将整篇讲稿连成一个文件。SRT 字幕按配音时长生成时间轴，可导入视频剪辑软件继续制作。'),
                 'video_export': (tools, tools.video_export_card, '选择适合的演示视频',
-                                 '需要展示点击动画时，选择“放映录制”。逐页画面配合讲解时，可选择“静态合成”。打开导出窗口后，可设置字幕，并在高级设置中调整分辨率和帧率。'),
+                                 '在“导出”的“演示视频”中，可用“PowerPoint 导出”生成带动画的视频，或用“OBS 录制”录制 PowerPoint 和 WPS 放映。导出时可设置清晰度、帧率和字幕。'),
                 'project_package': (tools, tools.project_package_card, '把讲稿与配音带到其他设备',
                                     '工程包可保留讲稿、配音及已采用的调整。将 PPT 文稿另行发送，接收方导入工程包后，可在“历史记录列表”中点击“关联 PPT”。文稿移动或改名后，也可从这里重新关联。'),
             }
@@ -395,7 +395,7 @@ class UsageGuide(QObject):
 
     def _on_audio_changed(self):
         page = self.window.ppt_r
-        if self.step == 'import' and page.is_import and page.media_list and not page.is_busy():
+        if self.step == 'import' and page.project.audio_loaded and page.project.media_list and not page.is_busy():
             self.step = 'play'
             self._present()
 
@@ -409,7 +409,7 @@ class UsageGuide(QObject):
                 self._present()
             return
         self._generated = False
-        if not self.window.ppt_r.is_import:
+        if not self.window.ppt_r.project.audio_loaded:
             return
         if self.step in ('separator', 'basics_complete'):
             self._present()

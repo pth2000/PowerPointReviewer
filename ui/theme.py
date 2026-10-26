@@ -9,12 +9,11 @@ import json
 import sys
 from functools import cmp_to_key
 
-from PySide6.QtCore import QCollator, QEvent, QLocale, QObject, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter
+from PySide6.QtCore import QCollator, QEvent, QLocale, QObject, QPoint, QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QImage, QPainter
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QToolButton, QWidget
 from qfluentwidgets import (
     ColorDialog,
-    FluentIcon,
     IconWidget,
     PrimaryDropDownPushButton,
     PrimaryDropDownToolButton,
@@ -304,18 +303,15 @@ def create_color_dialog(color, parent, title: str = '选择主题色'):
     return dialog
 
 
-# 动态标题需与 Qt Designer 中的静态标题保持相同字号。
 CARD_TITLE_POINT_SIZE = 10
+COMPACT_CARD_TITLE_POINT_SIZE = 9
 
 
-def make_card_title(text: str, parent=None) -> StrongBodyLabel:
-    """创建主题感知且与静态界面样式一致的卡片标题。
-
-    使用字体属性而非样式表调整字号和字重，从而保留组件自带的主题文字色。
-    """
+def make_card_title(text: str, parent=None, *, point_size=CARD_TITLE_POINT_SIZE) -> StrongBodyLabel:
+    """沿用 Designer 页面的标题风格，同一区域共用字号和粗体。"""
     label = StrongBodyLabel(text, parent)
     font = label.font()
-    font.setPointSize(CARD_TITLE_POINT_SIZE)
+    font.setPointSize(point_size)
     font.setWeight(QFont.Weight.Bold)
     label.setFont(font)
     return label
@@ -350,18 +346,27 @@ HELP_ICON_MARGIN = 4
 class _HelpIcon(IconWidget):
     """在控件内部留出绘制边距，容纳分数缩放下的抗锯齿边缘。"""
 
+    title = None
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHints(QPainter.RenderHint.Antialiasing |
                                QPainter.RenderHint.SmoothPixmapTransform)
         margin = HELP_ICON_MARGIN
         rect = QRectF(self.rect()).adjusted(margin, margin, -margin, -margin)
+        if self.title is not None and self.title.text():
+            metrics = QFontMetricsF(self.title.font())
+            contents = self.title.contentsRect()
+            baseline = contents.top() + (contents.height() - metrics.height()) / 2 + metrics.ascent()
+            center = baseline + metrics.tightBoundingRect(self.title.text()).center().y()
+            center += self.title.mapTo(self.parentWidget(), QPoint()).y() - self.y()
+            rect.moveCenter(QPointF(rect.center().x(), center))
         drawIcon(self._icon, painter, rect)
 
 
 def make_help_icon(text: str = '', parent=None) -> QWidget:
     """创建悬停时显示说明的信息图标；没有说明时隐藏。"""
-    holder = _HelpIcon(FluentIcon.INFO, parent)
+    holder = _HelpIcon(icons.SystemIcon.HELP, parent)
     extent = HELP_ICON_SIZE + HELP_ICON_MARGIN * 2
     holder.setFixedSize(extent, extent)
     holder.installEventFilter(ToolTipFilter(holder, 300, ToolTipPosition.TOP))
@@ -379,9 +384,10 @@ def make_title_row(title: QWidget, help_text: str = ''):
     """把标题与说明图标排成一行，返回行布局与说明图标。"""
     row = QHBoxLayout()
     row.setSpacing(8)
-    row.addWidget(title)
+    row.addWidget(title, alignment=Qt.AlignmentFlag.AlignVCenter)
     icon = make_help_icon(help_text, title.parentWidget())
-    row.addWidget(icon)
+    icon.title = title
+    row.addWidget(icon, alignment=Qt.AlignmentFlag.AlignVCenter)
     row.addStretch(1)
     return row, icon
 

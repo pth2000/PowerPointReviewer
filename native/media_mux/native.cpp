@@ -229,3 +229,170 @@ extern "C" __declspec(dllexport) int mm_mux(const char* input_path, const char* 
     if (input) p_avformat_close_input(&input);
     return result;
 }
+
+// Additive API: existing mm_mux callers and ABI 1 remain unchanged.
+struct MediaInfo {
+    int64_t duration_us, video_packets, tick_us;
+    int32_t width, height, audio_streams;
+};
+
+extern "C" __declspec(dllexport) int mm_probe(const char* path, MediaInfo* info,
+    Progress progress, char* error, int capacity) {
+    if (!initialized || !path || !info) { message(error, capacity, "Invalid probe parameters"); return -1; }
+    AVFormatContext* input = nullptr;
+    AVPacket* packet = nullptr;
+    Operation operation{progress};
+    AVIOInterruptCB callback{interrupt, &operation};
+    int result = 0;
+    try {
+        *info = {};
+        input = p_avformat_alloc_context();
+        if (!input) throw AVERROR(ENOMEM);
+        input->interrupt_callback = callback;
+        check_cancelled(operation);
+        check(p_avformat_open_input(&input, path, nullptr, nullptr));
+        check(p_avformat_find_stream_info(input, nullptr));
+        info->duration_us = operation.duration = input->duration;
+        int video = -1;
+        for (unsigned i = 0; i < input->nb_streams; ++i) {
+            auto* codec = input->streams[i]->codecpar;
+            if (codec->codec_type == AVMEDIA_TYPE_VIDEO) {
+                if (video != -1) throw AVERROR(EINVAL);
+                video = static_cast<int>(i); info->width = codec->width; info->height = codec->height;
+            }
+            if (codec->codec_type == AVMEDIA_TYPE_AUDIO) ++info->audio_streams;
+        }
+        packet = p_av_packet_alloc();
+        if (!packet) throw AVERROR(ENOMEM);
+        int64_t previous = AV_NOPTS_VALUE;
+        int64_t first_video = AV_NOPTS_VALUE, video_end = AV_NOPTS_VALUE;
+        bool uniform = true;
+        while ((result = p_av_read_frame(input, packet)) >= 0) {
+            check_cancelled(operation);
+            if (packet->stream_index == video) {
+                ++info->video_packets;
+                if (packet->pts == AV_NOPTS_VALUE) uniform = false;
+                else {
+                    auto stamp = p_av_rescale_q(packet->pts, input->streams[video]->time_base, AVRational{1, 1000000});
+                    auto duration = packet->duration > 0
+                        ? p_av_rescale_q(packet->duration, input->streams[video]->time_base, AVRational{1, 1000000})
+                        : (previous != AV_NOPTS_VALUE && stamp > previous ? stamp - previous : 0);
+                    if (first_video == AV_NOPTS_VALUE || stamp < first_video) first_video = stamp;
+                    if (video_end == AV_NOPTS_VALUE || stamp + duration > video_end) video_end = stamp + duration;
+                    operation.position = stamp;
+                    if (previous != AV_NOPTS_VALUE) {
+                        int64_t delta = stamp - previous;
+                        if (info->video_packets == 2) info->tick_us = delta;
+                        if (delta <= 0 || delta != info->tick_us) uniform = false;
+                    }
+                    previous = stamp;
+                }
+            }
+            p_av_packet_unref(packet);
+        }
+        if (result != AVERROR_EOF) check(result);
+        if (!uniform) info->tick_us = 0;
+        // 原生画面时钟只取视频包，排除内嵌媒体音轨的 AAC 填充和容器尾部。
+        if (first_video != AV_NOPTS_VALUE && video_end > first_video)
+            info->duration_us = video_end - first_video;
+        check_cancelled(operation);
+        result = 0;
+    } catch (int code) { result = code; }
+      catch (...) { result = AVERROR_UNKNOWN; }
+    p_av_packet_free(&packet);
+    if (input) p_avformat_close_input(&input);
+    if (result && error && capacity > 0) p_av_strerror(result, error, capacity);
+    return result;
+}
+
+extern "C" __declspec(dllexport) int mm_join(const char* video_path, const char* audio_path,
+    const char* output_path, Progress progress, char* error, int capacity) {
+    if (!initialized || !video_path || !audio_path || !output_path) {
+        message(error, capacity, "Invalid join parameters"); return -1;
+    }
+    AVFormatContext* inputs[2] = {};
+    AVFormatContext* output = nullptr;
+    AVPacket* packets[2] = {};
+    int streams[2] = {-1, -1};
+    bool ready[2] = {};
+    Operation operation{progress};
+    AVIOInterruptCB callback{interrupt, &operation};
+    int result = 0;
+    try {
+        check_cancelled(operation);
+        check(p_avformat_alloc_output_context2(&output, nullptr, "mp4", output_path));
+        output->interrupt_callback = callback;
+        for (int i = 0; i < 2; ++i) {
+            inputs[i] = p_avformat_alloc_context();
+            if (!inputs[i]) throw AVERROR(ENOMEM);
+            inputs[i]->interrupt_callback = callback;
+            check(p_avformat_open_input(&inputs[i], i == 0 ? video_path : audio_path, nullptr, nullptr));
+            check(p_avformat_find_stream_info(inputs[i], nullptr));
+            if (inputs[i]->duration > operation.duration) operation.duration = inputs[i]->duration;
+            for (unsigned n = 0; n < inputs[i]->nb_streams; ++n) {
+                if (inputs[i]->streams[n]->codecpar->codec_type == (i == 0 ? AVMEDIA_TYPE_VIDEO : AVMEDIA_TYPE_AUDIO)) {
+                    streams[i] = static_cast<int>(n); break;
+                }
+            }
+            if (streams[i] < 0) throw AVERROR_STREAM_NOT_FOUND;
+            AVStream* source = inputs[i]->streams[streams[i]];
+            AVStream* dest = p_avformat_new_stream(output, nullptr);
+            if (!dest) throw AVERROR(ENOMEM);
+            check(p_avcodec_parameters_copy(dest->codecpar, source->codecpar));
+            dest->codecpar->codec_tag = 0;
+            dest->time_base = source->time_base;
+            dest->avg_frame_rate = source->avg_frame_rate;
+            dest->r_frame_rate = source->r_frame_rate;
+            dest->sample_aspect_ratio = source->sample_aspect_ratio;
+            packets[i] = p_av_packet_alloc();
+            if (!packets[i]) throw AVERROR(ENOMEM);
+        }
+        check(p_avio_open2(&output->pb, output_path, AVIO_FLAG_WRITE, &callback, nullptr));
+        check(p_avformat_write_header(output, nullptr));
+        auto next = [&](int i) {
+            int code;
+            while ((code = p_av_read_frame(inputs[i], packets[i])) >= 0) {
+                check_cancelled(operation);
+                if (packets[i]->stream_index == streams[i]) return true;
+                p_av_packet_unref(packets[i]);
+            }
+            if (code != AVERROR_EOF) check(code);
+            return false;
+        };
+        auto stamp = [&](int i) {
+            int64_t value = packets[i]->dts != AV_NOPTS_VALUE ? packets[i]->dts : packets[i]->pts;
+            return value == AV_NOPTS_VALUE ? int64_t(0) :
+                p_av_rescale_q(value, inputs[i]->streams[streams[i]]->time_base, AVRational{1, 1000000});
+        };
+        ready[0] = next(0); ready[1] = next(1);
+        while (ready[0] || ready[1]) {
+            check_cancelled(operation);
+            int i = ready[0] ? 0 : 1;
+            if (ready[0] && ready[1] && stamp(1) < stamp(0)) i = 1;
+            if (stamp(i) > operation.position) operation.position = stamp(i);
+            p_av_packet_rescale_ts(packets[i], inputs[i]->streams[streams[i]]->time_base, output->streams[i]->time_base);
+            packets[i]->stream_index = i;
+            packets[i]->pos = -1;
+            check(p_av_interleaved_write_frame(output, packets[i]));
+            p_av_packet_unref(packets[i]);
+            ready[i] = next(i);
+        }
+        check_cancelled(operation);
+        check(p_av_write_trailer(output));
+        check_cancelled(operation);
+    } catch (int code) { result = code; }
+      catch (...) { result = AVERROR_UNKNOWN; }
+    for (int i = 0; i < 2; ++i) {
+        p_av_packet_free(&packets[i]);
+        if (inputs[i]) p_avformat_close_input(&inputs[i]);
+    }
+    if (output) {
+        if (output->pb) {
+            int closed = p_avio_closep(&output->pb);
+            if (!result && closed < 0) result = closed;
+        }
+        p_avformat_free_context(output);
+    }
+    if (result && error && capacity > 0) p_av_strerror(result, error, capacity);
+    return result;
+}

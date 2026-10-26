@@ -78,8 +78,8 @@ class StatisticsInterfaceTests(QtTestCase):
         with patch('app.paths.ensure_runtime_dirs'):
             page = PPTReviewer(ctx, self.root)
         self.addCleanup(page.presentation_monitor.shutdown)
-        page.notes = {1: '第一段●第二段', 3: '第三页'}
-        page.mark_split()
+        page.project.notes = {1: '第一段●第二段', 3: '第三页'}
+        page.project.split_notes(comments_enabled=page.ctx.app_settings.get('script_comments_enabled'))
         return page
 
     def test_statistics_available_before_audio_but_page_jump_stays_disabled(self):
@@ -89,28 +89,28 @@ class StatisticsInterfaceTests(QtTestCase):
         self.assertFalse(page.pageJumpSpinBox.isEnabled())
         self.assertFalse(page.pageJumpToolButton.isEnabled())
         self.assertFalse(page.playButton.isEnabled())
-        page.notes_duration_list = [9, 9, 9]  # 尚未就绪时不能展示旧配音时长。
+        page.project.notes_duration_list = [9, 9, 9]  # 尚未就绪时不能展示旧配音时长。
         with patch('ui.pages.reviewer_page.ScriptStatisticsDialog') as dialog, \
-             patch.object(page, 'refresh_notes_duration_list') as read_audio:
+             patch('ui.pages.reviewer_page.AudioGenerationTask.get_audio_duration') as read_audio:
             page.show_info_dialog()
         read_audio.assert_not_called()
         self.assertIsNone(dialog.call_args.args[0].duration)
         self.assertIs(dialog.call_args.args[1], self.root)
-        self.assertFalse(page.is_import)
+        self.assertFalse(page.project.audio_loaded)
 
     def test_ready_statistics_does_not_reset_playback_position_or_audio(self):
         page = self.make_page()
-        page.is_import = True
-        page.current_index = 2
-        page.notes_duration_list = [1.5, 2.5, 3]
+        page.project.audio_loaded = True
+        page.project.current_index = 2
+        page.project.notes_duration_list = [1.5, 2.5, 3]
         page.check_import()
         with patch('ui.pages.reviewer_page.ScriptStatisticsDialog') as dialog, \
-             patch.object(page, 'refresh_notes_duration_list') as read_audio, \
+             patch('ui.pages.reviewer_page.AudioGenerationTask.get_audio_duration') as read_audio, \
              patch.object(page, 'stop_audio') as stop:
             page.show_info_dialog()
         self.assertEqual(dialog.call_args.args[0].duration, 7)
-        self.assertEqual(page.current_index, 2)
-        self.assertTrue(page.is_import)
+        self.assertEqual(page.project.current_index, 2)
+        self.assertTrue(page.project.audio_loaded)
         self.assertTrue(page.pageJumpSpinBox.isEnabled())
         stop.assert_not_called()
         read_audio.assert_not_called()

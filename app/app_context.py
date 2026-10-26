@@ -6,13 +6,14 @@ from app import paths
 from app.hotkeys import HotkeyManager
 from app.presentation.slideshow import SlideshowWatcher
 from app.audio.playback import PlaybackBus
+from app.project.model import ProjectSession
 from app.settings_store import AppSettings, ConfigStore
 from tts_engine import TTSEngine
 
 
 @dataclass
 class AppContext:
-    """保存 TTS、播放总线和配置仓库等进程级依赖。"""
+    """保存当前工程，以及 TTS、播放总线和配置仓库等共享依赖。"""
 
     version: str
     tts_engine: TTSEngine
@@ -22,6 +23,7 @@ class AppContext:
     slideshow_watcher: SlideshowWatcher = field(default_factory=SlideshowWatcher)
     # 由 Velopack 更新后重启时为新版本号
     updated_to: str = ''
+    project: ProjectSession = field(default_factory=ProjectSession)
     config: ConfigStore = field(init=False)
 
     def __post_init__(self):

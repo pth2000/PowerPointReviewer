@@ -5,11 +5,12 @@ from pathlib import Path
 from PySide6.QtCore import QEasingCurve, QRectF, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
-from qfluentwidgets import FluentIcon, isDarkTheme, qconfig, themeColor
+from qfluentwidgets import isDarkTheme, qconfig, themeColor
 from qfluentwidgets.common.font import getFont
 from qfluentwidgets.common.icon import drawIcon
 
 from app.documents import package as project_package, io as script_io
+from ui.icons import SystemIcon
 
 
 class FileDropOverlay(QWidget):
@@ -122,14 +123,14 @@ class FileDropOverlay(QWidget):
         tile.setAlpha(28 if dark else 18)
         painter.setBrush(tile)
         painter.drawRoundedRect(icon_box, 15, 15)
-        drawIcon(FluentIcon.DOCUMENT if self.state == 'ready' else FluentIcon.INFO,
+        drawIcon(SystemIcon.DOCUMENT if self.state == 'ready' else SystemIcon.INFO,
                  painter, icon_box.adjusted(14, 14, -14, -14), fill=accent.name())
         if self.state == 'ready':
             badge = QRectF(icon_box.right() - 17, icon_box.bottom() - 17, 24, 24)
             painter.setBrush(accent)
             painter.setPen(QPen(QColor('#26292E' if dark else '#FFFFFF'), 3))
             painter.drawEllipse(badge)
-            drawIcon(FluentIcon.DOWNLOAD, painter, badge.adjusted(6, 6, -6, -6), fill='#FFFFFF')
+            drawIcon(SystemIcon.DOWNLOAD, painter, badge.adjusted(6, 6, -6, -6), fill='#FFFFFF')
 
         text = QColor('#F4F5F7' if dark else '#202124')
         secondary = QColor('#CFD3D9' if dark else '#545B66')

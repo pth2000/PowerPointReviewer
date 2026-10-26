@@ -6,7 +6,7 @@ import shutil
 import tempfile
 
 from app.presentation.control import PresentationControl, list_presentations
-from app.presentation.com import PROG_IDS, application_pid, ensure_com, running_applications
+from app.presentation.com import application_candidates, application_pid, ensure_com, running_applications
 
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class PresentationSession:
         self.original_position = None
 
     @classmethod
-    def start(cls, source, *, reuse_open=False, allow_start=True, windowed=False):
+    def start(cls, source, *, reuse_open=False, allow_start=True, windowed=False, preference='auto'):
         """复用对应放映；普通播放可从已打开文稿启动，否则使用只读副本。"""
         import win32com.client
         import win32process
@@ -33,7 +33,11 @@ class PresentationSession:
             raise RuntimeError('找不到关联的 PPT，请重新关联文稿。')
         if not ensure_com():
             raise RuntimeError('无法连接演示软件，请检查 PowerPoint 或 WPS 演示。')
-        for presentation in list_presentations(fullscreen_only=False, capture_window=not reuse_open):
+        shows = list_presentations(fullscreen_only=False, capture_window=not reuse_open)
+        if preference in ('powerpoint', 'wps'):
+            label = 'WPS 演示' if preference == 'wps' else 'PowerPoint'
+            shows.sort(key=lambda show: show.provider != label)
+        for presentation in shows:
             if presentation.matches_source(source):
                 session = cls()
                 session.presentation = presentation
@@ -59,10 +63,11 @@ class PresentationSession:
                         continue
             except Exception:
                 continue
-        providers = sorted(running, key=lambda item: id(item[2]) not in preferred)
-        providers.extend((prog_id, provider, None) for prog_id, provider in PROG_IDS
-                         if not any(item[0] == prog_id for item in running))
+        providers = application_candidates(sorted(running, key=lambda item: id(item[2]) not in preferred),
+                                          preference)
         if reuse_open and opened:
+            if preference in ('powerpoint', 'wps'):
+                opened.sort(key=lambda item: item[1] != ('WPS 演示' if preference == 'wps' else 'PowerPoint'))
             for prog_id, provider, application, document in opened:
                 session = cls()
                 try:
@@ -201,6 +206,13 @@ class PresentationSession:
                     logger.warning('无法恢复原放映位置', exc_info=True)
             self.presentation = None
             self.original_position = None
+        # 只读副本的放映设置和加载项也可能标记为已修改。
+        # 退出放映前丢弃副本变更，避免保存提示阻塞清理；不涉及用户文稿。
+        if self.document is not None and self.directory is not None:
+            try:
+                self.document.Saved = -1
+            except Exception:
+                logger.debug('无法清除放映副本的修改状态', exc_info=True)
         if self.window is not None:
             try:
                 self.window.View.Exit()

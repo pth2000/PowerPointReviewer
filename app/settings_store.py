@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, QTimer
 
 from app import hotkeys
 from app.ai import rewrite
+from app.logging_setup import get_logger
 from ui import theme
 
 
@@ -31,12 +32,14 @@ class AppSettings:
         'countdown_seconds': 5,
         'scroll_enabled': False,
         'slideshow_auto_start': True,
+        'presentation_preference': 'auto',
         'slideshow_windowed': False,
         'slideshow_follow_page': True,
         'slideshow_sync_navigation': True,
         'slideshow_stop_on_exit': True,
         'resume_last_session': True,
         'last_session': {},
+        'auto_check_updates': True,
         # 使用指引
         'onboarding_seen': False,
         'onboarding_tools_seen': False,
@@ -51,7 +54,8 @@ class AppSettings:
         # 导出
         'export_dir': '',
         'video_recording': {},
-        'video_export_mode': 'recording',
+        'video_recording_by_mode': {},
+        'video_export_mode': 'native',
         # AI 改写（OpenAI 兼容接口）
         'llm_base_url': 'https://api.openai.com/v1',
         'llm_api_key': '',
@@ -152,8 +156,8 @@ class ConfigStore(QObject):
         try:
             with self.path.open('r', encoding='utf-8') as f:
                 data = json.load(f)
-        except Exception as e:
-            print(f'[配置] 读取失败，将使用默认配置：{e}')
+        except Exception:
+            get_logger().exception('配置读取失败，将使用默认配置：%s', self.path)
             return False
 
         self.tts_engine.import_persistent_state(data)
@@ -174,8 +178,8 @@ class ConfigStore(QObject):
             with temp_path.open('w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             temp_path.replace(self.path)
-        except Exception as e:
-            print(f'[配置] 保存失败：{e}')
+        except Exception:
+            get_logger().exception('配置保存失败：%s', self.path)
             return False
 
         return True

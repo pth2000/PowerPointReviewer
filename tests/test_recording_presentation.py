@@ -1,13 +1,14 @@
 """COM 窗口绑定、32/64 位类型库与页码/动画控制的回归验证。"""
 
 import ctypes
+from pathlib import Path
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent, QRect
 from PySide6.QtWidgets import QDialog
-from PySide6.QtGui import QImage, QWindow
+from PySide6.QtGui import QImage
 from PySide6.QtMultimedia import QVideoFrame
 
 from app.presentation.com_window import slideshow_hwnd
@@ -416,6 +417,12 @@ class NativeGetterTests(unittest.TestCase):
 
 class WindowSelectionTests(QtTestCase):
 
+    def setUp(self):
+        for target, value in (('find_obs', Path('obs64.exe')), ('check_obs_version', None)):
+            patcher = patch('ui.dialogs.video_recording_dialog.' + target, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def tearDown(self):
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
@@ -435,7 +442,7 @@ class WindowSelectionTests(QtTestCase):
             presentation.capture_mode = 'auto'
         presentation.restore_auto_window = restore
         with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]):
-            dialog = VideoRecordingDialog([], [], ctx=NS(app_settings=settings))
+            dialog = VideoRecordingDialog([], [], ctx=NS(app_settings=settings), initial_mode='obs')
         self.assertFalse(dialog.start_button.isEnabled())
         picker = Mock(selected={'hwnd': 123}, DialogCode=QDialog.DialogCode)
         picker.exec.return_value = QDialog.DialogCode.Accepted
@@ -481,7 +488,7 @@ class WindowSelectionTests(QtTestCase):
                           matches_source=lambda source: False)
         presentation.bind_capture_window = Mock()
         with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]):
-            dialog = VideoRecordingDialog([], [])
+            dialog = VideoRecordingDialog([], [], initial_mode='obs')
         self.assertTrue(dialog.window_button.isEnabled())
         picker = Mock(selected={'hwnd': 789}, DialogCode=QDialog.DialogCode)
         picker.exec.return_value = QDialog.DialogCode.Accepted
@@ -503,7 +510,7 @@ class WindowSelectionTests(QtTestCase):
             new.hwnd, new.target, new.capture_mode = target['hwnd'], target, 'manual'
         new.bind_capture_window = bind
         with patch('ui.dialogs.video_recording_dialog.list_presentations', side_effect=[[old], [new]]):
-            dialog = VideoRecordingDialog([], [])
+            dialog = VideoRecordingDialog([], [], initial_mode='obs')
             dialog.reload()
         self.assertEqual(new.hwnd, 789)
         self.assertIn('Manual show', dialog.capture_label.text())
@@ -518,7 +525,7 @@ class WindowSelectionTests(QtTestCase):
                  target={'hwnd': 123}, capture_mode='auto', matches_source=lambda source: False,
                  same_show=lambda other: True, bind_capture_window=Mock(side_effect=RuntimeError('已关闭')))
         with patch('ui.dialogs.video_recording_dialog.list_presentations', side_effect=[[old], [new]]):
-            dialog = VideoRecordingDialog([], [])
+            dialog = VideoRecordingDialog([], [], initial_mode='obs')
             dialog.reload()
         self.assertFalse(dialog.start_button.isEnabled())
         self.assertFalse(dialog.auto_window_button.isHidden())
@@ -547,12 +554,15 @@ class WindowPreviewTests(QtTestCase):
     def setUp(self):
         from ui.dialogs.window_preview import WindowPreview
         self.preview = WindowPreview()
-        self.window = QWindow()
-        self.window.create()
-        self.target = dict(hwnd=int(self.window.winId()), pid=456, class_name='test')
+        self.window = Mock()
+        # 验证预览的资源与回调生命周期，不依赖测试平台提供原生窗口句柄。
+        self.target = dict(hwnd=123, pid=456, class_name='test')
         self.patchers = [patch('app.presentation.window_target.window_info', return_value=self.target),
-                         patch('ui.dialogs.window_preview.QCapturableWindow.isValid', return_value=True),
-                         patch('ui.dialogs.window_preview.QWindowCapture.start')]
+                         patch('ui.dialogs.window_preview.QWindow', NS(fromWinId=lambda hwnd: self.window)),
+                         patch('ui.dialogs.window_preview.QCapturableWindow', side_effect=lambda *args: Mock(isValid=lambda: True)),
+                         patch('ui.dialogs.window_preview.QWindowCapture', side_effect=lambda *args: Mock()),
+                         patch('ui.dialogs.window_preview.QMediaCaptureSession', side_effect=lambda *args: Mock()),
+                         patch('ui.dialogs.window_preview.QVideoSink', side_effect=lambda *args: Mock())]
         for patcher in self.patchers:
             patcher.start()
 

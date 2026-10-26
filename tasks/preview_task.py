@@ -1,6 +1,7 @@
 """在后台生成设置页使用的单条试听音频。"""
 
 from PySide6.QtCore import QThread, Signal
+from app.logging_setup import get_logger
 
 
 class PreviewTask(QThread):
@@ -21,4 +22,5 @@ class PreviewTask(QThread):
             self.tts_engine.save_file(self.text, self.path)
             self.signal_finish.emit(self.path)
         except Exception as e:
+            get_logger().exception('试听配音生成失败')
             self.signal_error.emit(str(e))

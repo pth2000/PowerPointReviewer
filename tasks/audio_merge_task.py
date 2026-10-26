@@ -7,6 +7,7 @@ import wave
 from PySide6.QtCore import QThread, Signal
 
 from tasks.audio_review_task import decode_wav
+from app.logging_setup import get_logger
 
 
 class AudioMergeTask(QThread):
@@ -46,4 +47,5 @@ class AudioMergeTask(QThread):
         except InterruptedError:
             pass
         except Exception as exc:
+            get_logger().exception('合并配音失败')
             self.failed.emit(str(exc))

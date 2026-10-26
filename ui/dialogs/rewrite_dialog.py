@@ -15,6 +15,7 @@ from qfluentwidgets import (
 )
 
 from app.ai import exchange, rewrite
+from app.logging_setup import log_error
 from tasks.rewrite_task import RewriteTask
 from ui.dialogs.llm_config_dialog import LLMConfigMessageBox
 from ui.dialogs.style_manager_dialog import StyleManagerDialog
@@ -609,5 +610,6 @@ class RewriteDialog(ThemedDialog, RewriteWorkspace):
                         position=InfoBarPosition.TOP, duration=5000, parent=self)
 
     def _info_error(self, title, text):
+        log_error(title, text)
         InfoBar.error(title=title, content=text, orient=Qt.Horizontal, isClosable=True,
                       position=InfoBarPosition.TOP, duration=-1, parent=self)

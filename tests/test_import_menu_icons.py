@@ -1,12 +1,13 @@
 """菜单图标的矢量缩放、按下状态和动作触发回归。"""
 
+from pathlib import Path
 from unittest.mock import Mock
 
 from PySide6.QtCore import QCoreApplication, QEvent, QRect, QSize, Qt
-from PySide6.QtGui import QIcon, QImage, QPainter
+from PySide6.QtGui import QFontDatabase, QIcon, QImage, QPainter
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
-from qfluentwidgets import Action, FluentIcon
+from PySide6.QtWidgets import QStyle, QStyleOptionViewItem, QVBoxLayout, QWidget
+from qfluentwidgets import Action
 
 import resource_rc  # noqa: F401  注册项目 SVG 资源。
 from qt_test_case import QtTestCase
@@ -15,12 +16,45 @@ from ui.icon_menu import IconMenu
 
 
 class ImportIconTests(QtTestCase):
+    def test_help_icon_follows_title_ink_center_at_different_font_sizes(self):
+        font_file = Path('C:/Windows/Fonts/msyh.ttc')
+        if not font_file.is_file():
+            self.skipTest('需要微软雅黑验证中文标题的字形对齐')
+        font_id = QFontDatabase.addApplicationFont(str(font_file))
+        self.addCleanup(lambda: QFontDatabase.removeApplicationFont(font_id))
+        parent = QWidget()
+        parent.setStyleSheet('background: white; color: black;')
+        layout = QVBoxLayout(parent)
+        title = theme.make_card_title('主题模式', parent)
+        row, icon = theme.make_title_row(title, '切换主题')
+        layout.addLayout(row)
+        parent.resize(400, 80)
+        self.addCleanup(parent.deleteLater)
+        parent.show()
+
+        def ink_center(widget):
+            image = widget.grab().toImage()
+            rows = [y for y in range(image.height())
+                    if any(image.pixelColor(x, y).lightness() < 100
+                           for x in range(image.width()))]
+            self.assertTrue(rows, '文字或图标未绘制')
+            return widget.y() + (min(rows) + max(rows)) / (2 * image.devicePixelRatio())
+
+        for size in (9, 10, 12):
+            with self.subTest(size=size):
+                font = title.font()
+                font.setFamily('Microsoft YaHei')
+                font.setPointSize(size)
+                title.setFont(font)
+                self.qt.processEvents()
+                self.assertLessEqual(abs(ink_center(title) - ink_center(icon)), 1.5)
+
     def setUp(self):
         theme.apply_theme('light', theme.DEFAULT_COLOR)
         self.menu = IconMenu()
-        for source, label in (('word', '导入 Word 讲稿'), (FluentIcon.DOCUMENT, '导入 JSON 讲稿'),
-                              (FluentIcon.FOLDER, '导入工程包'), ('update', '历史记录列表'),
-                              (FluentIcon.SYNC, '更新 PPT 讲稿')):
+        for source, label in (('word', '导入 Word 讲稿'), (icons.SystemIcon.DOCUMENT, '导入 JSON 讲稿'),
+                              (icons.SystemIcon.FOLDER, '导入工程包'), (icons.SystemIcon.HISTORY, '历史记录列表'),
+                              (icons.SystemIcon.UPDATE, '更新 PPT 讲稿')):
             action = icons.apply(Action(label), f':/image/image/{source}.svg') if isinstance(source, str) else Action(source, label)
             self.menu.addAction(action)
         self.addCleanup(self.dispose)
@@ -34,8 +68,11 @@ class ImportIconTests(QtTestCase):
         self.qt.processEvents()
 
     def test_resource_icons_render_at_target_resolution_including_large_requests(self):
-        for name in ('word.svg', 'update.svg'):
-            icon = icons.themed_icon(':/image/image/' + name)
+        sources = [('word', icons.themed_icon(':/image/image/word.svg'))]
+        sources.extend((icon.name, icon.icon()) for icon in icons.SystemIcon)
+        sources.extend((icon.name, icon.icon()) for icon in icons.FluentSystemIcon)
+        for name, icon in sources:
+            self.assertFalse(icon.isNull(), name)
             for size in (14, 80):
                 for ratio in (1.0, 1.25, 1.5, 2.0):
                     with self.subTest(name=name, size=size, ratio=ratio):

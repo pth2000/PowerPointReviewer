@@ -5,8 +5,7 @@ from pathlib import Path
 import sys
 
 from PySide6.QtCore import QSizeF
-from PySide6.QtGui import QImage, QWindow
-from PySide6.QtMultimedia import QCapturableWindow
+from PySide6.QtGui import QImage
 
 from app.presentation.com_window import slideshow_hwnd
 from app.presentation import window_target
@@ -63,7 +62,6 @@ class PresentationControl:
         self.capture_mode = 'auto'
         self.prog_id, self.show_index = prog_id, index
         self.original_advance_mode = None
-        self.foreign_window = None
         self.viewport_hwnd = 0
         self.click_index = None
         self.indexed_clicks = False
@@ -144,7 +142,6 @@ class PresentationControl:
         """绑定本次录制画面，允许覆盖自动窗口；COM 控制仍指向当前文稿。"""
         actual = self.validate_capture_window(target, automatic)
         self.hwnd, self.target = actual['hwnd'], actual
-        self.foreign_window = None
         self.capture_mode = 'auto' if automatic else 'manual'
         if automatic:
             self.auto_target = dict(actual)
@@ -169,17 +166,6 @@ class PresentationControl:
                     and self.window._oleobj_ == other.window._oleobj_)
         except AttributeError:
             return self is other
-
-    def capturable_window(self):
-        self._verify_window()
-        # Qt 的 Python 接口不暴露原生窗口 ID，使用其公开的外部窗口包装接口。
-        self.foreign_window = QWindow.fromWinId(self.hwnd)
-        if self.foreign_window is None:
-            raise RuntimeError('无法识别放映窗口，请重新选择窗口或启动放映。')
-        captured = QCapturableWindow(self.foreign_window)
-        if not captured.isValid():
-            raise RuntimeError('当前放映窗口无法录制，请重新启动放映。')
-        return captured
 
     def _verify_window(self):
         if not self.hwnd:

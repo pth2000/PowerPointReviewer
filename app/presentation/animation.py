@@ -1,7 +1,7 @@
 """只读检查 PPTX 的顺序点击步骤，与实际生成的讲稿分段对照。
 
 按 mainSeq 中的点击组计数，组内的同时、随后动画不增加点击。
-对象触发、媒体及无法可靠读取的结构返回待确认项，不当作零次点击。
+对象触发及无法可靠读取的结构返回待确认项，不当作零次点击。
 """
 
 from collections import Counter
@@ -10,6 +10,9 @@ from pathlib import Path
 import posixpath
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
+
+from app.presentation.visibility import hidden_shape_ids, targets_hidden_shapes
+from app.presentation.media import is_media_control_sequence, media_shape_ids
 
 
 _P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
@@ -32,22 +35,37 @@ def _clicks(slide):
     if timing is None:
         return 0, ''
     nodes = list(timing.iter(f'{{{_P}}}cTn'))
-    if any(node.get('nodeType') == 'interactiveSeq' for node in nodes):
+    media_ids = media_shape_ids(timing)
+    media_nodes = [node for tag in ('audio', 'video') for node in timing.findall(f'.//p:{tag}', _NS)]
+    if any(node.find('p:cMediaNode/p:tgtEl/p:spTgt', _NS) is None for node in media_nodes):
+        return None, '包含无法确认的媒体播放步骤，请确认分段是否对应'
+    controls = [node for node in nodes if node.get('nodeType') == 'interactiveSeq']
+    if any(not is_media_control_sequence(node, media_ids) for node in controls):
         return None, '包含点击指定对象触发的动画，请确认分段是否对应'
-    if any(timing.find(f'.//p:{tag}', _NS) is not None for tag in ('audio', 'video', 'cmd')):
+    commands = timing.findall('.//p:cmd', _NS)
+    if any(not command.findall('.//p:spTgt', _NS)
+           or any(target.get('spid') not in media_ids for target in command.findall('.//p:spTgt', _NS))
+           for command in commands):
         return None, '包含媒体播放步骤，请确认分段是否对应'
     if timing.find('.//p:tmplLst', _NS) is not None:
         return None, '部分文字动画的点击次数需要人工确认'
-    if any(cond.get('evt') == 'onClick' and cond.find('p:tgtEl/p:spTgt', _NS) is not None
+    control_conditions = {cond for node in controls for cond in node.iter(f'{{{_P}}}cond')}
+    if any(cond not in control_conditions and cond.get('evt') == 'onClick'
+           and cond.find('p:tgtEl/p:spTgt', _NS) is not None
            for cond in timing.iter(f'{{{_P}}}cond')):
         return None, '包含点击指定对象触发的动画，请确认分段是否对应'
     sequences = [node for node in nodes if node.get('nodeType') == 'mainSeq']
+    control_nodes = {item for node in controls for item in node.iter(f'{{{_P}}}cTn')}
+    if not sequences and media_ids and all(node in control_nodes or node.get('nodeType') in
+            (None, 'tmRoot') for node in nodes):
+        return 0, ''
     if len(sequences) != 1:
         return None, '暂时无法确认此页的点击次数'
     groups = sequences[0].find('p:childTnLst', _NS)
     if groups is None:
         return 0, ''
     clicks = 0
+    hidden = hidden_shape_ids(slide)
     for group in groups:
         root = group.find('p:cTn', _NS)
         if root is None:
@@ -57,6 +75,11 @@ def _clicks(slide):
             # An automatic entry group contains only with/after effects.
             if not effect_types.intersection({'withEffect', 'afterEffect', 'withGroup', 'afterGroup'}):
                 return None, '暂时无法确认此页的点击次数'
+            continue
+        click_nodes = [node for node in root.iter(f'{{{_P}}}cTn')
+                       if node.get('nodeType') in ('clickEffect', 'clickPar')]
+        if all(targets_hidden_shapes(node, hidden) for node in click_nodes):
+            # 隐藏的点击对象不消耗点击。可见的同时/随后动画由演示软件并入前一步。
             continue
         conditions = root.findall('p:stCondLst/p:cond', _NS)
         if not conditions or any(cond.get('evt') not in (None, 'onClick') for cond in conditions):

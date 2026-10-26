@@ -84,6 +84,17 @@ class RecordingSessionTests(unittest.TestCase):
         session.close()
         self.assertEqual(self.source.read_bytes(), b'original presentation')
 
+    def test_disposable_copy_cannot_open_save_prompt_on_exit(self):
+        session = RecordingSession.start(self.source)
+        self.document.Saved = False
+        self.view.Exit.side_effect = lambda: self.assertEqual(self.document.Saved, -1)
+        self.document.Close.side_effect = lambda: self.assertEqual(self.document.Saved, -1)
+        session.close()
+        self.view.Exit.assert_called_once()
+        self.document.Close.assert_called_once()
+        self.document.Save.assert_not_called()
+        self.assertEqual(self.source.read_bytes(), b'original presentation')
+
     def test_open_document_in_second_wps_instance_is_used_without_starting_another(self):
         idle = Mock()
         idle.Presentations.Count = 0
@@ -159,6 +170,34 @@ class RecordingSessionTests(unittest.TestCase):
         self.assertEqual(adapter.call_args.args[1:3], ('WPS 演示', 'Kwpp.Application'))
         session.close()
         self.application.Quit.assert_not_called()
+
+    def test_explicit_wps_preference_precedes_another_running_application(self):
+        other = Mock()
+        other.Presentations.Count = 0
+        with patch('app.presentation.session.running_applications', return_value=[
+                ('PowerPoint.Application', 'PowerPoint', other)]), \
+                patch('win32com.client.DispatchEx', return_value=self.application) as launch, \
+                patch('app.presentation.session.PresentationControl', return_value=self.adapter) as adapter:
+            session = RecordingSession.start(self.source, preference='wps')
+        launch.assert_called_once_with('Kwpp.Application')
+        self.assertEqual(adapter.call_args.args[1], 'WPS 演示')
+        other.Presentations.Open.assert_not_called()
+        session.close()
+
+    def test_open_unsaved_document_is_reused_despite_a_different_software_preference(self):
+        self.document.FullName = str(self.source)
+        self.document.Saved = False
+        self.application.Presentations.Count = 1
+        self.application.Presentations.Item.return_value = self.document
+        with patch('app.presentation.session.running_applications', return_value=[
+                ('Kwpp.Application', 'WPS 演示', self.application)]), \
+                patch('win32com.client.DispatchEx') as launch:
+            session = RecordingSession.start(self.source, reuse_open=True, preference='powerpoint')
+        launch.assert_not_called()
+        self.application.Presentations.Open.assert_not_called()
+        self.assertFalse(self.document.Saved)
+        session.close(restore_position=False)
+        self.document.Close.assert_not_called()
 
     def test_playback_cleanup_keeps_borrowed_show_at_current_page(self):
         self.adapter.matches_source.return_value = True
@@ -283,6 +322,10 @@ class RecordingSessionTests(unittest.TestCase):
 class AutomatedDialogTests(QtTestCase):
 
     def setUp(self):
+        for target, value in (('find_obs', Path('obs64.exe')), ('check_obs_version', None)):
+            patcher = patch('ui.dialogs.video_recording_dialog.' + target, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         from ui.dialogs.video_recording_dialog import VideoRecordingDialog
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -291,7 +334,7 @@ class AutomatedDialogTests(QtTestCase):
         self.source.write_bytes(b'ppt')
         self.unrelated = NS(matches_source=lambda path: False)
         with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[self.unrelated]):
-            self.dialog = VideoRecordingDialog([{'page': 1, 'text': '讲稿'}], ['speech.wav'], self.source)
+            self.dialog = VideoRecordingDialog([{'page': 1, 'text': '讲稿'}], ['speech.wav'], self.source, initial_mode='obs')
         self.addCleanup(self.dispose)
 
     def dispose(self):
@@ -302,7 +345,7 @@ class AutomatedDialogTests(QtTestCase):
     def session(self):
         adapter = NS(name='lesson.pptx', hwnd=123, slide_count=3, capture_mode='auto',
                      target={'title': 'show'}, matches_source=lambda path: True,
-                     capturable_window=Mock(), bind_capture_window=Mock())
+                     bind_capture_window=Mock())
         return NS(presentation=adapter, refresh_window=Mock(), close=Mock())
 
     def test_imported_ppt_ready_without_show_and_unrelated_show_excluded(self):
@@ -322,7 +365,7 @@ class AutomatedDialogTests(QtTestCase):
         with patch('ui.dialogs.video_recording_dialog.RecordingSession.start', return_value=session) as start, \
              patch.object(self.dialog, '_start_live_recording') as record:
             self.dialog._record(['ready.wav'])
-            start.assert_called_once_with(self.source, windowed=True)
+            start.assert_called_once_with(self.source, windowed=True, preference='auto')
             self.assertTrue(self.dialog.show_timer.isActive())
             self.dialog._await_show()
             record.assert_called_once_with(['ready.wav'])
@@ -330,7 +373,7 @@ class AutomatedDialogTests(QtTestCase):
         session.close.assert_called_once()
 
     def test_save_cancel_does_not_launch_or_open_ppt(self):
-        with patch('ui.dialogs.video_recording_dialog.recording_format'), \
+        with patch('ui.dialogs.video_recording_dialog.ensure_native_media_available'), \
              patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName', return_value=('', '')), \
              patch('ui.dialogs.video_recording_dialog.RecordingSession.start') as start:
             self.dialog.start()
@@ -424,11 +467,11 @@ class AutomatedDialogTests(QtTestCase):
         session.presentation.is_active = Mock(return_value=False)
         self.dialog.live_session = session
         with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[]), \
-             patch('ui.dialogs.video_recording_dialog.recording_format'), \
+             patch('ui.dialogs.video_recording_dialog.ensure_native_media_available'), \
              patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName', return_value=('', '')):
             self.dialog.start()
         self.assertIsNone(self.dialog.live_session)
-        session.presentation.capturable_window.assert_not_called()
+        session.close.assert_called_once()
 
 
 if __name__ == '__main__':

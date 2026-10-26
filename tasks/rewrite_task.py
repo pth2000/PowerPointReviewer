@@ -1,6 +1,6 @@
 """在后台执行逐页 AI 改写和接口连通性测试。"""
 
-import traceback
+from app.logging_setup import get_logger
 
 from PySide6.QtCore import QThread, Signal
 
@@ -60,7 +60,7 @@ class RewriteTask(QThread):
                 self.signal_page_done.emit(
                     page, content, rewrite.check_segments(text, content, self.mark))
             except Exception as e:
-                traceback.print_exc()
+                get_logger().exception('AI 讲稿处理失败：第 %s 页', page)
                 self.signal_page_failed.emit(page, str(e))
 
             self.signal_progress.emit(index, total)
@@ -87,7 +87,30 @@ class LLMTestTask(QThread):
                 timeout=min(int(self.llm_config.get('timeout', 30)), 30),
             )
         except Exception as e:
+            get_logger().exception('AI 服务连接测试失败')
             self.signal_finish.emit(False, str(e))
             return
 
         self.signal_finish.emit(True, reply or '（模型返回了空内容，但连接正常）')
+
+
+class LLMModelsTask(QThread):
+    """后台获取模型列表；请求使用弹窗启动时的配置快照。"""
+
+    signal_finish = Signal(bool, object)
+
+    def __init__(self, llm_config: dict, parent=None):
+        super().__init__(parent)
+        self.llm_config = dict(llm_config)
+
+    def run(self):
+        try:
+            models = llm_client.list_models(base_url=self.llm_config.get('base_url', ''),
+                                            api_key=self.llm_config.get('api_key', ''))
+        except Exception as exc:
+            get_logger().exception('AI 模型列表获取失败')
+            if not self.isInterruptionRequested():
+                self.signal_finish.emit(False, str(exc))
+            return
+        if not self.isInterruptionRequested():
+            self.signal_finish.emit(True, models)

@@ -6,6 +6,7 @@
 
 import ctypes
 import logging
+import re
 import sys
 import threading
 import traceback
@@ -22,6 +23,22 @@ _configured = False
 def get_logger() -> logging.Logger:
     """返回应用日志器。"""
     return logging.getLogger(LOGGER_NAME)
+
+
+def log_error(context, detail=''):
+    """保存用户可见的失败；仍处于 except 内时一并保留完整堆栈。"""
+    get_logger().error('%s%s', context, f'：{detail}' if detail else '',
+                       exc_info=sys.exc_info()[0] is not None, stacklevel=2)
+
+
+def _redact(text):
+    text = re.sub(r'(?i)(\b(?:Bearer|Basic)\s+)[A-Za-z0-9._~+/=-]+', r'\1***', text)
+    fields = r'(?:api[_-]?key|token|password|passwd|client[_-]?secret|ocp-apim-subscription-key)'
+    text = re.sub(rf'''(?ix)({fields}["']?\s*[:=]\s*)(["'])(.*?)\2''',
+                  r'\1\2***\2', text)
+    text = re.sub(rf'''(?ix)({fields}["']?\s*[:=]\s*)([^\s,;&"'}}]+)''', r'\1***', text)
+    text = re.sub(r'(?i)(https?://)[^\s/@:]+:[^\s/@]+@', r'\1***@', text)
+    return re.sub(r'\bsk-[A-Za-z0-9_-]{12,}\b', '***', text)
 
 
 # 来源列宽度，超出部分从左侧截断
@@ -51,7 +68,18 @@ class _SourceFilter(logging.Filter):
     """
 
     def filter(self, record):
-        source = getattr(record, 'source', None) or record.module
+        if (not record.name.startswith(('pptreviewer', 'app.', 'ui.', 'tasks.', 'engines.', 'tts_engine'))
+                and record.levelno < logging.WARNING):
+            return False
+        text = record.getMessage()
+        if record.exc_info:
+            text += '\n' + ''.join(traceback.format_exception(*record.exc_info)).rstrip()
+            record.exc_info = None
+            record.exc_text = None
+        record.msg, record.args = _redact(text), ()
+        if record.stack_info:
+            record.stack_info = _redact(record.stack_info)
+        source = str(getattr(record, 'source', None) or record.module)
         if len(source) > _SOURCE_WIDTH:
             source = '…' + source[-(_SOURCE_WIDTH - 1):]
         record.source = source
@@ -68,7 +96,8 @@ class _StreamToLog:
     def __init__(self, original, level: int):
         self._original = original
         self._level = level
-        self._buffer = ''
+        self._buffers = {}
+        self._lock = threading.RLock()
 
     def write(self, text):
         if self._original is not None:
@@ -77,15 +106,25 @@ class _StreamToLog:
             except Exception:
                 pass
 
-        self._buffer += text
-        while '\n' in self._buffer:
-            line, self._buffer = self._buffer.split('\n', 1)
-            if line.strip():
-                get_logger().log(self._level, line.rstrip(),
-                                 extra={'source': _caller_module()})
+        with self._lock:
+            key = threading.get_ident()
+            buffer, source = self._buffers.get(key, ('', _caller_module()))
+            lines = (buffer + text).split('\n')
+            for line in lines[:-1]:
+                if line.strip():
+                    get_logger().log(self._level, line.rstrip(), extra={'source': source})
+            if lines[-1]:
+                self._buffers[key] = (lines[-1], source)
+            else:
+                self._buffers.pop(key, None)
         return len(text)
 
     def flush(self):
+        with self._lock:
+            pending, self._buffers = self._buffers, {}
+            for line, source in pending.values():
+                if line.strip():
+                    get_logger().log(self._level, line.rstrip(), extra={'source': source})
         if self._original is not None:
             try:
                 self._original.flush()
@@ -124,8 +163,26 @@ def _install_excepthooks() -> None:
                 args.exc_type, args.exc_value, args.exc_traceback)).rstrip(),
             extra={'source': '!异常'})
 
+    def handle_unraisable(args):
+        get_logger().error('无法传播的异常：%s', args.err_msg or type(args.object).__name__,
+                           exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                           extra={'source': '!异常'})
+
     sys.excepthook = handle_main
     threading.excepthook = handle_thread
+    sys.unraisablehook = handle_unraisable
+
+
+def _install_qt_messages():
+    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+
+    def handle(kind, context, message):
+        level = {QtMsgType.QtWarningMsg: logging.WARNING, QtMsgType.QtCriticalMsg: logging.ERROR,
+                 QtMsgType.QtFatalMsg: logging.CRITICAL}.get(kind)
+        if level:
+            get_logger().log(level, '%s%s', message,
+                             f'（{context.function}）' if context.function else '', extra={'source': 'Qt'})
+    qInstallMessageHandler(handle)
 
 
 def log_display():
@@ -174,6 +231,9 @@ def setup(version: str = '', *, max_bytes: int = 1024 * 1024, backup_count: int 
         datefmt='%Y-%m-%d %H:%M:%S'))
     handler.addFilter(_SourceFilter())
     logger.addHandler(handler)
+    logging.getLogger().addHandler(handler)
+    for name in ('app', 'ui', 'tasks', 'engines', 'tts_engine'):
+        logging.getLogger(name).setLevel(logging.DEBUG)
 
     # logging 默认把处理器异常打印到 stderr，而 stderr 已被本模块接管，会形成递归
     logging.raiseExceptions = False
@@ -181,6 +241,7 @@ def setup(version: str = '', *, max_bytes: int = 1024 * 1024, backup_count: int 
     sys.stdout = _StreamToLog(sys.stdout, logging.INFO)
     sys.stderr = _StreamToLog(sys.stderr, logging.ERROR)
     _install_excepthooks()
+    _install_qt_messages()
 
     _configured = True
     banner = {'source': '启动'}

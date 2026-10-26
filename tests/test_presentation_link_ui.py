@@ -63,15 +63,39 @@ class LinkInterfaceTests(QtTestCase):
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.qt.processEvents()
 
+    def test_loading_another_record_keeps_the_project_shared_with_tools(self):
+        shared = self.tools.project
+        record = json.loads(json.dumps(self.record))
+        record['notes'] = {'1': '另一份讲稿'}
+        record['items'][0]['text'] = '另一份讲稿'
+        target = self.root / 'another.json'
+        target.write_text(json.dumps(record), encoding='utf-8')
+        self.page.load_session_record(target)
+        self.assertIs(self.page.project, shared)
+        self.assertIs(self.tools.project, shared)
+        self.assertEqual(self.tools.project.notes, {1: '另一份讲稿'})
+        self.assertEqual(self.tools.project.session_record_path, target)
+
+    def test_busy_state_refreshes_tool_buttons_even_without_ppt_association(self):
+        from qfluentwidgets import PushButton
+        self.restrict()
+        word = next(button for button in self.tools.findChildren(PushButton) if button.text() == 'Word')
+        self.assertTrue(word.isEnabled())
+        with patch.object(self.page, 'is_busy', return_value=True):
+            self.page.refresh_presentation_state()
+            self.assertFalse(word.isEnabled())
+        self.page.refresh_presentation_state()
+        self.assertTrue(word.isEnabled())
+
     def test_relink_keeps_script_audio_source_and_historical_voice_settings(self):
-        notes, media = dict(self.page.notes), list(self.page.media_list)
+        notes, media = dict(self.page.project.notes), list(self.page.project.media_list)
         with patch.object(self.page.save_thread, 'start') as generate:
             self.page.set_presentation_link(presentation_link.validate(self.copy, [1]))
         generate.assert_not_called()
-        self.assertEqual(self.page.notes, notes)
-        self.assertEqual(self.page.media_list, media)
-        self.assertEqual(self.page.note_file_path, self.source)
-        self.assertEqual(self.page.presentation_path, self.copy)
+        self.assertEqual(self.page.project.notes, notes)
+        self.assertEqual(self.page.project.media_list, media)
+        self.assertEqual(self.page.project.note_file_path, self.source)
+        self.assertEqual(self.page.project.presentation_path, self.copy)
         self.assertEqual(self.page.notes_path_text.text, str(self.copy))
         record = json.loads(self.record_path.read_text(encoding='utf-8'))
         self.assertEqual(record['generation_profile'], self.record['generation_profile'])
@@ -86,15 +110,15 @@ class LinkInterfaceTests(QtTestCase):
         self.record_path.write_text(json.dumps(self.record), encoding='utf-8')
         with patch('app.presentation.slideshow.list_open_presentations', return_value=[]):
             self.page.load_session_record(self.record_path)
-        self.assertTrue(self.page.is_import)
-        self.assertIsNone(self.page.presentation_path)
+        self.assertTrue(self.page.project.audio_loaded)
+        self.assertIsNone(self.page.project.presentation_path)
         self.assertTrue(self.page.is_restricted())
         self.assertTrue(self.page.playButton.isEnabled())
         self.assertFalse(self.page.scrollEnableSwitch.isEnabled())
-        self.assertEqual(self.page.media_list, [self.audio])
+        self.assertEqual(self.page.project.media_list, [self.audio])
         self.assertEqual(self.page.notes_path_text.text, f'{self.source}（文件不可用）')
         self.page.set_presentation_link(presentation_link.validate(self.copy, [1]))
-        self.assertEqual(self.page.presentation_path, self.copy)
+        self.assertEqual(self.page.project.presentation_path, self.copy)
         self.assertEqual(self.page.notesPathLabel.toolTip(), str(self.copy))
 
     def test_history_finds_renamed_copy_by_content_and_saves_new_location(self):
@@ -103,7 +127,7 @@ class LinkInterfaceTests(QtTestCase):
         self.source.unlink()
         with patch('app.presentation.slideshow.list_open_presentations', return_value=[]):
             self.page.load_session_record(self.record_path)
-        self.assertEqual(self.page.presentation_path, self.copy)
+        self.assertEqual(self.page.project.presentation_path, self.copy)
         self.assertEqual(self.page.notes_path_text.text, str(self.copy))
         self.assertEqual(json.loads(self.record_path.read_text(encoding='utf-8'))['presentation']['path'], str(self.copy))
 
@@ -128,24 +152,24 @@ class LinkInterfaceTests(QtTestCase):
         source = self.root / '讲稿.docx'
         source.write_bytes(b'original script')
         linked = self.root / '已移动的文稿.pptx'
-        self.page.note_file_path = source
-        self.page.presentation_path = None
-        self.page.presentation_link = {'path': str(linked)}
+        self.page.project.note_file_path = source
+        self.page.project.presentation_path = None
+        self.page.project.presentation_link = {'path': str(linked)}
         self.page.refresh_presentation_state()
         self.assertEqual(self.page.notes_path_text.text, f'{linked}（文件不可用）')
 
     def test_persist_failure_preserves_previous_association(self):
-        previous = self.page.presentation_path
+        previous = self.page.project.presentation_path
         with patch('app.presentation.link.update_record', side_effect=OSError('read only')):
             with self.assertRaises(OSError):
                 self.page.set_presentation_link(presentation_link.describe(self.copy))
-        self.assertEqual(self.page.presentation_path, previous)
+        self.assertEqual(self.page.project.presentation_path, previous)
 
     def test_choose_open_document_displays_and_uses_its_saved_path(self):
         from ui.dialogs.presentation_link_dialog import PresentationLinkDialog
         opened = [{'path': str(self.copy), 'name': self.copy.name, 'provider': 'WPS 演示'}]
         with patch('app.presentation.slideshow.list_open_presentations', return_value=opened):
-            dialog = PresentationLinkDialog(self.page.presentation_link, [1])
+            dialog = PresentationLinkDialog(self.page.project.presentation_link, [1])
         try:
             self.assertIn(self.copy.name, dialog.open_combo.currentText())
             dialog.choose_open()
@@ -201,8 +225,8 @@ class LinkInterfaceTests(QtTestCase):
         window.show()
         try:
             for linked in (False, True):
-                self.page.presentation_path = self.source if linked else None
-                self.page.presentation_link = presentation_link.describe(self.source) if linked else {}
+                self.page.project.presentation_path = self.source if linked else None
+                self.page.project.presentation_link = presentation_link.describe(self.source) if linked else {}
                 self.page.refresh_presentation_state()
                 for width, height in ((850, 750), (760, 560)):
                     with self.subTest(linked=linked, width=width, height=height):
@@ -222,16 +246,29 @@ class LinkInterfaceTests(QtTestCase):
 
     def history_dialog(self):
         from ui.dialogs.session_history_dialog import SessionHistoryDialog
-        with patch('app.audio.cache.summary', return_value='1 条'):
-            dialog = SessionHistoryDialog(self.root, self.page)
+        dialog = SessionHistoryDialog(self.root, self.page)
+        self.wait_for_history(dialog)
         dialog.presentation_link_changed.connect(self.page._history_presentation_changed)
         self.addCleanup(dialog.deleteLater)
         return dialog
 
     def restrict(self):
-        self.page.presentation_path = None
-        self.page.presentation_link = {}
+        self.page.project.presentation_path = None
+        self.page.project.presentation_link = {}
         self.page.refresh_presentation_state()
+
+    def test_video_entries_open_their_own_export_method(self):
+        from qfluentwidgets import PushButton
+        buttons = {button.property('video_export_mode'): button for button in self.tools.findChildren(PushButton)
+                   if button.property('video_export_mode')}
+        self.assertEqual(set(buttons), {'native', 'obs'})
+        for mode, button in buttons.items():
+            self.assertTrue(button.isVisibleTo(self.tools.video_export_card), mode)
+        self.assertFalse(hasattr(self.tools, 'video_other_button'))
+        with patch.object(self.tools, 'export_video') as export:
+            for mode, button in buttons.items():
+                button.click()
+                export.assert_called_with(mode)
 
     def test_restricted_mode_keeps_audio_and_documents_but_disables_ppt_features(self):
         from qfluentwidgets import PushButton
@@ -243,8 +280,11 @@ class LinkInterfaceTests(QtTestCase):
         self.assertFalse(self.page.scrollEnableSwitch.isEnabled())
         buttons = {button.text(): button for card in self.tools.export_cards + self.tools.processing_cards
                    for button in card.findChildren(PushButton)}
-        for name in ('PPT 备注', '放映录制', '静态合成'):
-            self.assertFalse(buttons[name].isEnabled(), name)
+        ppt_buttons = [button for card in self.tools.export_cards for button in card.findChildren(PushButton)
+                       if button.property('requires_ppt')]
+        self.assertEqual(len(ppt_buttons), 3)
+        for button in ppt_buttons:
+            self.assertFalse(button.isEnabled(), button.text())
         for name in ('Word', 'Markdown', 'JSON', 'SRT 字幕', '逐条音频', '合并音频', '导出工程包', '前往优化'):
             self.assertTrue(buttons[name].isEnabled(), name)
         with patch('app.presentation.slideshow.advance') as advance, \
@@ -262,35 +302,52 @@ class LinkInterfaceTests(QtTestCase):
         with patch('ui.dialogs.video_recording_dialog.VideoRecordingDialog') as video, \
              patch.object(self.tools, 'get_ppt_path') as write_target, \
              patch.object(self.tools, 'create_warning_info_bar'):
-            self.tools.export_video('recording')
-            self.tools.export_video('static')
+            self.tools.record_obs_video()
+            self.tools.export_powerpoint_video()
             self.tools.write_to_ppt()
             video.assert_not_called()
             write_target.assert_not_called()
 
+    def test_native_export_entry_uses_linked_ppt_and_current_audio(self):
+        with patch('ui.dialogs.video_recording_dialog.VideoRecordingDialog') as video, \
+                patch.object(self.page, 'stop_audio') as stop, \
+                patch.object(self.page, 'release_playback_show') as release, \
+                patch.object(self.page, 'refresh_hotkeys') as hotkeys, \
+                patch.object(self.page, 'refresh_slideshow_watch') as watch:
+            self.tools.export_powerpoint_video()
+            video.assert_called_once_with(self.page.project.notes_list, self.page.project.media_list,
+                                          self.page.project.presentation_path, self.tools,
+                                          ctx=self.context, initial_mode='native')
+            video.return_value.exec.assert_called_once()
+            stop.assert_called_once()
+            release.assert_called_once()
+            hotkeys.assert_called_once()
+            watch.assert_called_once()
+
     def test_history_association_restores_active_session_without_regeneration(self):
         self.restrict()
         dialog = self.history_dialog()
-        notes, media = dict(self.page.notes), list(self.page.media_list)
-        self.page.current_index = 1
+        notes, media = dict(self.page.project.notes), list(self.page.project.media_list)
+        self.page.project.current_index = 1
         selected = presentation_link.validate(self.copy, [1])
         picker = Mock(selected=selected)
         picker.exec.return_value = True
         with patch('ui.dialogs.session_history_dialog.PresentationLinkDialog', return_value=picker), \
              patch.object(self.page.save_thread, 'start') as generate:
             dialog.associate_selected()
+        self.wait_for_history(dialog)
         generate.assert_not_called()
         self.assertFalse(self.page.is_restricted())
-        self.assertEqual(self.page.presentation_path, self.copy)
-        self.assertEqual(self.page.current_index, 1)
-        self.assertEqual(self.page.notes, notes)
-        self.assertEqual(self.page.media_list, media)
+        self.assertEqual(self.page.project.presentation_path, self.copy)
+        self.assertEqual(self.page.project.current_index, 1)
+        self.assertEqual(self.page.project.notes, notes)
+        self.assertEqual(self.page.project.media_list, media)
         self.assertTrue(self.page.scrollEnableSwitch.isEnabled())
         from qfluentwidgets import PushButton
-        buttons = {button.text(): button for card in self.tools.export_cards
-                   for button in card.findChildren(PushButton)}
-        for name in ('PPT 备注', '放映录制', '静态合成'):
-            self.assertTrue(buttons[name].isEnabled(), name)
+        ppt_buttons = [button for button in self.tools.findChildren(PushButton) if button.property('requires_ppt')]
+        self.assertEqual(len(ppt_buttons), 3)
+        for button in ppt_buttons:
+            self.assertTrue(button.isEnabled(), button.text())
         self.assertEqual(dialog.table.item(0, 6).text(), '已关联')
         self.assertEqual(dialog.link_ppt_button.text(), '更换 PPT')
         record = json.loads(self.record_path.read_text(encoding='utf-8'))
@@ -305,11 +362,11 @@ class LinkInterfaceTests(QtTestCase):
         self.assertTrue(dialog.open_button.isEnabled())
         dialog.accept_selected()
         self.page.load_session_record(dialog.get_selected_record_path())
-        self.assertTrue(self.page.is_import)
+        self.assertTrue(self.page.project.audio_loaded)
         self.assertTrue(self.page.is_restricted())
         second = self.root / 'other.json'
         second.write_text(json.dumps(unlinked), encoding='utf-8')
-        dialog.reload_records()
+        dialog = self.history_dialog()
         dialog.table.selectAll()
         self.assertFalse(dialog.link_ppt_button.isEnabled())
         self.assertFalse(dialog.open_button.isEnabled())
@@ -333,16 +390,16 @@ class LinkInterfaceTests(QtTestCase):
             dialog.associate_selected()
         error.assert_called_once()
         self.assertEqual(self.record_path.read_bytes(), before)
-        self.assertEqual(self.page.presentation_path, self.source)
+        self.assertEqual(self.page.project.presentation_path, self.source)
 
     def test_associating_another_history_record_does_not_change_current_session(self):
         another = self.root / 'another.json'
         another.write_text(json.dumps(self.record), encoding='utf-8')
-        before_notes, before_media = dict(self.page.notes), list(self.page.media_list)
+        before_notes, before_media = dict(self.page.project.notes), list(self.page.project.media_list)
         self.page._history_presentation_changed(another, presentation_link.describe(self.copy))
-        self.assertEqual(self.page.presentation_path, self.source)
-        self.assertEqual(self.page.notes, before_notes)
-        self.assertEqual(self.page.media_list, before_media)
+        self.assertEqual(self.page.project.presentation_path, self.source)
+        self.assertEqual(self.page.project.notes, before_notes)
+        self.assertEqual(self.page.project.media_list, before_media)
 
     def test_deleted_ppt_switches_to_restricted_mode_without_stopping_audio(self):
         self.source.unlink()

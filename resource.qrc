@@ -1,17 +1,75 @@
 <RCC>
   <qresource prefix="image">
-    <file>image/Clock.svg</file>
-    <file>image/info.svg</file>
-    <file>image/Folder.svg</file>
-    <file>image/update.svg</file>
     <file>image/gitee.svg</file>
     <file>image/ppt_ico.svg</file>
     <file>image/ppt.svg</file>
-    <file>image/backward.svg</file>
-    <file>image/play.svg</file>
-    <file>image/countdown.svg</file>
-    <file>image/parting.svg</file>
-    <file>image/stop.svg</file>
     <file>image/word.svg</file>
+    <file>image/lucide/circle-question-mark.svg</file>
+    <file>image/lucide/rotate-ccw-clock.svg</file>
+    <file>image/lucide/refresh-cw.svg</file>
+    <file>image/lucide/undo-2.svg</file>
+    <file>image/lucide/redo-2.svg</file>
+    <file>image/lucide/skip-back.svg</file>
+    <file>image/lucide/skip-forward.svg</file>
+    <file>image/lucide/copyright.svg</file>
+    <file>image/lucide/file-text.svg</file>
+    <file>image/lucide/folder-open.svg</file>
+    <file>image/lucide/list.svg</file>
+    <file>image/lucide/timer.svg</file>
+    <file>image/lucide/clock-3.svg</file>
+    <file>image/lucide/play.svg</file>
+    <file>image/lucide/pause.svg</file>
+    <file>image/lucide/square.svg</file>
+    <file>image/lucide/rotate-ccw.svg</file>
+    <file>image/lucide/download.svg</file>
+    <file>image/lucide/info.svg</file>
+    <file>image/lucide/ellipsis.svg</file>
+    <file>image/fluent/ic_fluent_speaker_settings_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_top_speed_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_speaker_2_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_sound_wave_circle_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_local_language_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_globe_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_key_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_cube_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_folder_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_text_description_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_mic_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_text_field_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_music_note_2_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_document_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_link_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_timer_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_number_symbol_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_arrow_shuffle_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_padding_left_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_padding_right_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_save_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_dark_theme_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_color_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_text_font_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_slide_multiple_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_comment_note_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_document_checkmark_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_history_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_arrow_sync_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_full_screen_maximize_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_slide_play_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_slide_arrow_right_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_slide_link_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_stop_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_keyboard_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_headphones_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_plug_connected_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_person_voice_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_arrow_clockwise_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_book_open_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_document_text_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_settings_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_text_edit_style_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_video_clip_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_folder_zip_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_info_20_regular.svg</file>
+    <file>image/fluent/ic_fluent_slide_settings_20_regular.svg</file>
   </qresource>
 </RCC>

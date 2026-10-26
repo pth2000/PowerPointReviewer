@@ -332,6 +332,8 @@ class QwenCloneVoiceDialog(ThemedDialog):
         )
 
     def _info_error(self, title: str, text: str):
+        from app.logging_setup import log_error
+        log_error(title, text)
         InfoBar.error(
             title=title,
             content=text,

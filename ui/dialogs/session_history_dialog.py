@@ -1,11 +1,10 @@
 """浏览历史会话，并管理其音频缓存。"""
 
 import json
-from datetime import datetime
+from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -19,12 +18,16 @@ from qfluentwidgets import (
     InfoBarPosition,
     PrimaryPushButton,
     PushButton,
+    SearchLineEdit,
     TableWidget,
 )
 
 from ui import icons
 from app.audio import cache as audio_cache
 from app.presentation import link as presentation_link
+from app.project.history_catalog import read_record_summary
+from app.logging_setup import get_logger, log_error
+from tasks.history_scan_task import HistoryScanTask
 from ui.dialogs.delete_record_dialog import DeleteRecordMessageBox
 from ui.dialogs.base import ThemedDialog
 from ui.dialogs.presentation_link_dialog import PresentationLinkDialog
@@ -34,6 +37,7 @@ class SessionHistoryDialog(ThemedDialog):
     """列出历史会话，并集中处理加载、批量删除和缓存清理。"""
 
     presentation_link_changed = Signal(object, object)
+    records_loaded = Signal()
 
     def __init__(self, session_root_path: Path, parent=None):
         super().__init__(parent)
@@ -42,10 +46,19 @@ class SessionHistoryDialog(ThemedDialog):
                                   else set(getattr(parent, 'note_cache_keys', ()) or ()))
         self.session_root_path = Path(session_root_path)
         self.selected_record_path: Path | None = None
+        self._rows = {}
+        self._pending_rows = deque()
+        self._loader = None
+        self._reload_pending = False
+        self._closing = False
+        self._close_result = self.DialogCode.Rejected
+        self._selected_after_load = None
+        self._render_timer = QTimer(self)
+        self._render_timer.timeout.connect(self._render_batch)
 
         self.setWindowTitle('历史记录列表')
         self.setMinimumSize(800, 550)
-        self.setWindowIcon(QIcon(':/image/image/update.svg'))
+        self.setWindowIcon(icons.SystemIcon.HISTORY.icon())
 
         # 使用 Fluent 表格保持与应用主题一致。
         self.table = TableWidget(self)
@@ -59,24 +72,19 @@ class SessionHistoryDialog(ThemedDialog):
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         
-        # 短字段按内容适配，来源和发音人等长字段占用剩余宽度。
+        # 固定短字段的初始宽度，避免逐行计算列宽拖慢大量记录的加载。
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         
-        # 每列单独声明尺寸策略，避免短字段浪费空间。
-        resize_modes = [
-            (0, QHeaderView.ResizeMode.ResizeToContents),  # 更新时间
-            (1, QHeaderView.ResizeMode.Stretch),  # 来源文件
-            (2, QHeaderView.ResizeMode.ResizeToContents),  # 条目数
-            (3, QHeaderView.ResizeMode.ResizeToContents),  # 引擎
-            (4, QHeaderView.ResizeMode.Stretch),  # 发音人
-            (5, QHeaderView.ResizeMode.ResizeToContents),  # 分隔符
-            (6, QHeaderView.ResizeMode.ResizeToContents),  # PPT 关联状态
-        ]
-        
-        for col, mode in resize_modes:
-            header.setSectionResizeMode(col, mode)
+        for col in range(7):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == 1
+                                        else QHeaderView.ResizeMode.Interactive)
+        for col, width in ((2, 72), (3, 80), (4, 136), (5, 64), (6, 88)):
+            header.resizeSection(col, width)
+        header.resizeSection(0, max(180, self.table.fontMetrics().horizontalAdvance('2026-10-26 12:00:00') + 40))
         
         self.table.itemDoubleClicked.connect(self.accept_selected)
         self.table.itemSelectionChanged.connect(self._update_action_buttons_state)
@@ -92,8 +100,7 @@ class SessionHistoryDialog(ThemedDialog):
         cache_layout.addWidget(self.clean_button)
         cache_layout.setSpacing(10)
 
-        self.refresh_button = PushButton('刷新', self)
-        icons.apply(self.refresh_button, ':/image/image/backward.svg')
+        self.refresh_button = PushButton(icons.SystemIcon.UPDATE, '刷新', self)
         self.select_all_button = PushButton('全选', self)
         self.link_ppt_button = PushButton('关联 PPT', self)
         self.link_ppt_button.setToolTip('为选中记录选择对应文稿，保留已有讲稿和配音')
@@ -120,6 +127,14 @@ class SessionHistoryDialog(ThemedDialog):
         button_layout.setContentsMargins(0, 10, 0, 0)
 
         main_layout = QVBoxLayout(self)
+        search_row = QHBoxLayout()
+        self.search_edit = SearchLineEdit(self)
+        self.search_edit.setPlaceholderText('搜索文件名或发音人')
+        self.search_edit.textChanged.connect(self._filter_rows)
+        search_row.addWidget(self.search_edit, 1)
+        self.count_label = CaptionLabel(self)
+        search_row.addWidget(self.count_label)
+        main_layout.addLayout(search_row)
         main_layout.addWidget(self.table)
         main_layout.addLayout(cache_layout)
         main_layout.addLayout(button_layout)
@@ -128,15 +143,11 @@ class SessionHistoryDialog(ThemedDialog):
 
         self.reload_records()
         self._update_action_buttons_state()
-        self.refresh_cache_label()
 
     def refresh_cache_label(self):
         """刷新缓存文件数量和磁盘占用摘要。"""
-        try:
-            self.cache_label.setText(f'音频缓存：{audio_cache.summary()}')
-        except Exception as e:
-            print(f'[历史记录] 缓存统计失败：{e}')
-            self.cache_label.setText('音频缓存：统计失败')
+        if self._loader is None:
+            self._start_scan(records=False)
 
     def clean_orphan_audio(self):
         """确认后删除未被任何历史记录引用的音频。"""
@@ -158,36 +169,135 @@ class SessionHistoryDialog(ThemedDialog):
         return self.selected_record_path
 
     def reload_records(self, *, selected_path=None):
-        """重新扫描会话目录，并按时间填充记录表格。"""
-        self.table.setRowCount(0)
-        self.selected_record_path = None
-
-        if not self.session_root_path.exists():
-            self._update_action_buttons_state()
+        self._selected_after_load = Path(selected_path) if selected_path else None
+        self._pending_rows.clear()
+        self._render_timer.stop()
+        if self._loader is not None:
+            self._reload_pending = True
+            self._loader.requestInterruption()
             return
+        self._start_scan()
 
-        records = []
-        for path in self.session_root_path.glob('*.json'):
-            try:
-                records.append((path.stat().st_mtime, path))
-            except OSError:
-                continue
-        record_files = [path for _stamp, path in sorted(records, key=lambda item: item[0], reverse=True)]
+    def _start_scan(self, *, records=True):
+        if self._closing:
+            return
+        if records:
+            self.table.setRowCount(0)
+            self._rows.clear()
+            self.selected_record_path = None
+        self.cache_label.setText('正在读取历史记录…' if records else '正在统计音频缓存…')
+        self.refresh_button.setEnabled(False)
+        self.clean_button.setEnabled(False)
+        task = HistoryScanTask(self.session_root_path, self, records=records)
+        self._loader = task
+        task.batch_ready.connect(lambda rows: self._receive_batch(task, rows))
+        task.cache_ready.connect(lambda value: self.cache_label.setText(f'音频缓存：{value}')
+                                 if task is self._loader and not self._closing else None)
+        task.failed.connect(lambda message: self._show_error('历史记录读取失败', message)
+                            if task is self._loader and not self._closing and not self._reload_pending else None)
+        task.finished.connect(lambda: self._scan_finished(task))
+        if records:
+            self._filter_rows()
+        task.start()
 
-        for record_file in record_files:
-            item_data = self._read_one_record(record_file)
-            self._append_row(item_data)
+    def _receive_batch(self, task, rows):
+        if task is self._loader and not self._closing and not self._reload_pending:
+            self._pending_rows.extend(rows)
+            self._render_timer.start(0)
 
-        if self.table.rowCount() > 0:
-            selected_row = 0
-            if selected_path:
-                for row in range(self.table.rowCount()):
-                    if Path(self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)) == Path(selected_path):
-                        selected_row = row
-                        break
-            self.table.selectRow(selected_row)
+    def _render_batch(self):
+        self.table.setUpdatesEnabled(False)
+        self.table.blockSignals(True)
+        try:
+            for _ in range(min(64, len(self._pending_rows))):
+                data = self._pending_rows.popleft()
+                self._rows[data['file_path']] = data
+                self._append_row(data)
+                self._filter_row(self.table.rowCount() - 1)
+        finally:
+            self.table.blockSignals(False)
+            self.table.setUpdatesEnabled(True)
+        self._update_count()
+        if not self._pending_rows:
+            self._render_timer.stop()
+            if self._loader is None:
+                self._finish_loading()
 
+    def _scan_finished(self, task):
+        if task is not self._loader:
+            task.deleteLater()
+            return
+        self._loader = None
+        task.deleteLater()
+        if self._closing:
+            self.done(self._close_result)
+        elif self._reload_pending:
+            self._reload_pending = False
+            self._start_scan()
+        elif not self._pending_rows:
+            self._finish_loading()
+
+    def _finish_loading(self):
+        self.refresh_button.setEnabled(True)
+        self.clean_button.setEnabled(True)
+        visible = [row for row in range(self.table.rowCount()) if not self.table.isRowHidden(row)]
+        if visible and (self._selected_after_load or not self.selected_record_paths()):
+            row = next((row for row in visible
+                        if Path(self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)) == self._selected_after_load),
+                       visible[0])
+            self.table.selectRow(row)
+        self._selected_after_load = None
         self._update_action_buttons_state()
+        self.records_loaded.emit()
+
+    def _filter_row(self, row):
+        query = self.search_edit.text().strip().casefold()
+        hidden = False
+        if query:
+            text = ' '.join(self.table.item(row, col).text() for col in (1, 3, 4)).casefold()
+            hidden = query not in text
+        self.table.setRowHidden(row, hidden)
+
+    def _filter_rows(self, *_):
+        self.table.clearSelection()
+        for row in range(self.table.rowCount()):
+            self._filter_row(row)
+        self._update_count()
+        self._update_action_buttons_state()
+
+    def _update_count(self):
+        count = self.table.rowCount()
+        if self.search_edit.text().strip():
+            visible = sum(not self.table.isRowHidden(row) for row in range(count))
+            self.count_label.setText(f'{visible} / {count} 条')
+        else:
+            self.count_label.setText(f'{count} 条')
+
+    def _finish_dialog(self, result):
+        self._closing = True
+        self._close_result = result
+        self._render_timer.stop()
+        self._pending_rows.clear()
+        if self._loader is not None:
+            self._loader.requestInterruption()
+            self.cache_label.setText('正在关闭…')
+            return
+        self.done(result)
+
+    def reject(self):
+        self._finish_dialog(self.DialogCode.Rejected)
+
+    def accept(self):
+        self._finish_dialog(self.DialogCode.Accepted)
+
+    def closeEvent(self, event):
+        if self._loader is not None:
+            event.ignore()
+            self.reject()
+        else:
+            self._closing = True
+            self._render_timer.stop()
+            super().closeEvent(event)
 
     def select_all_records(self):
         """选中表格中的全部历史记录。"""
@@ -199,7 +309,7 @@ class SessionHistoryDialog(ThemedDialog):
         paths_list = []
         for index in sorted(self.table.selectionModel().selectedRows(), key=lambda i: i.row()):
             item = self.table.item(index.row(), 0)
-            if item is None:
+            if item is None or self.table.isRowHidden(index.row()):
                 continue
             raw_path = item.data(Qt.ItemDataRole.UserRole)
             if raw_path:
@@ -209,13 +319,15 @@ class SessionHistoryDialog(ThemedDialog):
     def _update_action_buttons_state(self):
         """根据记录数量和选择数量更新操作按钮。"""
         has_rows = self.table.rowCount() > 0
-        selected_count = len(self.table.selectionModel().selectedRows()) if has_rows else 0
+        selected = self.selected_record_paths()
+        selected_count = len(selected)
         self.select_all_button.setEnabled(has_rows)
         # 加载只接受单条记录，删除则支持批量选择。
-        self.open_button.setEnabled(selected_count == 1)
-        self.link_ppt_button.setEnabled(selected_count == 1)
-        selected = self.selected_record_paths()
-        linked = (selected_count == 1 and self._read_one_record(selected[0])['presentation_state'] == '已关联')
+        record = self._read_one_record(selected[0]) if selected_count == 1 else None
+        linked = record is not None and record['presentation_state'] == '已关联'
+        readable = record is not None and not record.get('read_error')
+        self.open_button.setEnabled(readable)
+        self.link_ppt_button.setEnabled(readable)
         self.link_ppt_button.setText('更换 PPT' if linked else '关联 PPT')
         self.open_button.setToolTip('加载讲稿与配音；未关联 PPT 时进入受限模式' if not linked else '')
         self.delete_button.setEnabled(selected_count > 0)
@@ -223,26 +335,19 @@ class SessionHistoryDialog(ThemedDialog):
             f'删除选中记录（{selected_count}）' if selected_count > 1 else '删除选中记录')
 
     def accept_selected(self):
-        """验证单选记录存在后确认关闭弹窗。"""
-        if len(self.selected_record_paths()) != 1:
+        selected = self.selected_record_paths()
+        if len(selected) != 1:
             return
-        row = self.table.currentRow()
-        if row < 0:
+        path = selected[0]
+        if not path.is_file():
+            self.reload_records()
+            self._show_warning('记录已不可用', '请刷新后选择其他历史记录')
             return
-
-        # 每个单元格都携带相同路径，任意选中列都可定位记录。
-        for col in range(self.table.columnCount()):
-            path_item = self.table.item(row, col)
-            if path_item is not None:
-                record_path = path_item.data(Qt.ItemDataRole.UserRole)
-                if record_path:
-                    if not Path(str(record_path)).is_file():
-                        self.reload_records()
-                        self._show_warning('记录已不可用', '请刷新后选择其他历史记录')
-                        return
-                    self.selected_record_path = Path(str(record_path))
-                    self.accept()
-                    return
+        if self._read_one_record(path).get('read_error'):
+            self._show_error('记录无法读取', '请尝试恢复备份或选择其他记录。')
+            return
+        self.selected_record_path = path
+        self.accept()
 
     def associate_selected(self):
         selected = self.selected_record_paths()
@@ -263,6 +368,7 @@ class SessionHistoryDialog(ThemedDialog):
                 self.reload_records(selected_path=record_path)
                 self._show_success('关联成功', f'已关联 {dialog.selected["name"]}')
         except Exception as exc:
+            get_logger().exception('关联历史记录文稿失败：%s', record_path)
             self._show_error('关联失败', str(exc))
         finally:
             if dialog is not None:
@@ -296,6 +402,7 @@ class SessionHistoryDialog(ThemedDialog):
                 record_path.unlink()
                 deleted.append(record_path)
             except Exception as e:
+                get_logger().exception('删除历史记录失败：%s', record_path)
                 print(f'[历史记录] 删除失败 {record_path.name}：{e}')
                 failed.append(record_path.name)
 
@@ -304,14 +411,13 @@ class SessionHistoryDialog(ThemedDialog):
             try:
                 safe_keys = exclusive - audio_cache.referenced_keys() - self.active_cache_keys
                 removed_audio, freed = audio_cache.remove_keys(safe_keys)
-            except Exception as e:
-                print(f'[历史记录] 删除音频失败：{e}')
+            except Exception:
+                get_logger().exception('删除历史记录后清理音频失败')
 
         if self.selected_record_path in deleted:
             self.selected_record_path = None
 
         self.reload_records()
-        self.refresh_cache_label()
 
         if failed:
             self._show_error('部分删除失败', f'成功 {len(deleted)} 条，失败 {len(failed)} 条：{"、".join(failed[:5])}')
@@ -343,88 +449,20 @@ class SessionHistoryDialog(ThemedDialog):
             # 路径附加到每个单元格，用户选中任意列都能解析记录。
             cell.setData(Qt.ItemDataRole.UserRole, str(row_data['file_path']))
             # 统一居中短字段，保持表格视觉节奏。
-            cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            cell.setTextAlignment((Qt.AlignmentFlag.AlignLeft if col in (1, 4)
+                                   else Qt.AlignmentFlag.AlignHCenter) | Qt.AlignmentFlag.AlignVCenter)
             if col == 6:
                 cell.setToolTip(row_data['presentation_tooltip'])
             elif col == 1:
                 cell.setToolTip(f'{row_data["source_name"]}\n记录：{row_data["file_name"]}')
+            elif col == 4:
+                cell.setToolTip(row_data['speaker'])
+            elif col == 0:
+                cell.setToolTip(row_data['updated_at'])
             self.table.setItem(row, col, cell)
 
     def _read_one_record(self, record_path: Path) -> dict:
-        """读取一条会话记录，并在字段缺失时生成可展示的默认值。"""
-        try:
-            fallback_time = datetime.fromtimestamp(record_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-        except OSError:
-            fallback_time = '-'
-        fallback = {
-            'file_path': record_path,
-            'file_name': record_path.name,
-            'created_at': fallback_time,
-            'updated_at': fallback_time,
-            'source_name': '-',
-            'items_count': 0,
-            'engine_mode': '-',
-            'speaker': '-',
-            'mark': '-',
-            'session_id': record_path.stem,
-            'presentation_state': '未关联',
-            'presentation_tooltip': '未关联 PPT，加载后可播放配音；在此关联后可使用同步翻页和视频导出。',
-        }
-
-        try:
-            with record_path.open('r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            return fallback
-        if not isinstance(data, dict):
-            return fallback
-
-        created_at_raw = str(data.get('created_at', '')).strip()
-        if created_at_raw:
-            created_at = created_at_raw.replace('T', ' ')
-        else:
-            created_at = fallback_time
-
-        profile = data.get('generation_profile', {})
-        mode = '-'
-        if isinstance(profile, dict):
-            mode = str(profile.get('mode', '-'))
-
-        speaker = str(data.get('speaker', '')).strip() or '-'
-
-        items = data.get('items', [])
-        items_count = len(items) if isinstance(items, list) else 0
-
-        # source_file 可保留扩展名；旧记录缺失时再回退到 source_name。
-        source_name = '-'
-        source_file = data.get('source_file', '')
-        if source_file:
-            try:
-                source_name = Path(source_file).name
-            except Exception:
-                source_name = str(source_file)
-        if not source_name or source_name == '-':
-            source_name = str(data.get('source_name', '-'))
-        link = presentation_link.from_record(data)
-        associated = presentation_link.resolve(link)
-        link_state = '已关联' if associated else ('文件缺失' if link.get('path') else '未关联')
-        link_tip = (str(associated) if associated else
-                    '关联 PPT 后可使用同步翻页、视频导出和写回 PPT 备注。')
-
-        return {
-            'file_path': record_path,
-            'file_name': record_path.name,
-            'created_at': created_at,
-            'updated_at': str(data.get('updated_at') or created_at).replace('T', ' '),
-            'source_name': source_name,
-            'items_count': items_count,
-            'engine_mode': mode,
-            'speaker': speaker,
-            'mark': str(data.get('mark', '-')),
-            'session_id': str(data.get('session_id', record_path.stem)),
-            'presentation_state': link_state,
-            'presentation_tooltip': link_tip,
-        }
+        return self._rows.get(Path(record_path)) or read_record_summary(record_path)
 
     def _show_success(self, title: str, content: str):
         InfoBar.success(
@@ -449,6 +487,7 @@ class SessionHistoryDialog(ThemedDialog):
         )
 
     def _show_error(self, title: str, content: str):
+        log_error(title, content)
         InfoBar.error(
             title=title,
             content=content,

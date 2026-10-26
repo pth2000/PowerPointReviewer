@@ -1,6 +1,6 @@
 """Edge-TTS 音色目录刷新线程"""
 
-import traceback
+from app.logging_setup import get_logger
 
 from PySide6.QtCore import QThread, Signal
 
@@ -20,7 +20,7 @@ class VoiceCatalogTask(QThread):
         try:
             catalog = edge_tts.load_catalog(force_refresh=True)
         except Exception as e:
-            traceback.print_exc()
+            get_logger().exception('音色目录刷新失败')
             self.signal_finish.emit(False, str(e))
             return
 

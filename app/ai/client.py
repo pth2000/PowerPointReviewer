@@ -95,3 +95,39 @@ def test_connection(*, base_url: str, api_key: str, model: str, timeout: int = 3
         base_url=base_url, api_key=api_key, model=model, timeout=timeout, temperature=0.0,
         messages=[{'role': 'user', 'content': '回复两个字：就绪'}],
     )
+
+
+def list_models(*, base_url: str, api_key: str, timeout: int = 15) -> list[str]:
+    """读取兼容接口的模型 ID；不推断各模型是否支持讲稿优化。"""
+    url = _endpoint(base_url).removesuffix('chat/completions') + 'models'
+    headers = {'Accept': 'application/json'}
+    if key := str(api_key or '').strip():
+        headers['Authorization'] = f'Bearer {key}'
+    import requests
+
+    try:
+        response = requests.get(url, headers=headers, timeout=(5, min(max(int(timeout), 5), 30)))
+    except requests.RequestException as exc:
+        raise LLMError('无法获取模型列表，请检查服务地址和网络连接。'
+                       + (f'\n\n原始错误：{exc}' if exc.response is None else ''),
+                       response=exc.response) from exc
+    if response.status_code != 200:
+        message = {
+            401: 'API Key 无效或已过期，请重新填写。',
+            403: '无法访问模型列表，请检查账号权限和 API Key。',
+            404: '此服务未提供模型列表，可手动填写模型名称。',
+            405: '此服务未提供模型列表，可手动填写模型名称。',
+            429: '请求过于频繁，请稍后重试。',
+        }.get(response.status_code, '未能获取模型列表，请稍后重试或手动填写模型名称。')
+        raise LLMError(message, response=response)
+    try:
+        data = response.json()['data']
+        if not isinstance(data, list):
+            raise ValueError('模型列表应为数组')
+        models = {entry['id'].strip() for entry in data
+                  if isinstance(entry, dict) and isinstance(entry.get('id'), str) and entry['id'].strip()}
+        if data and not models:
+            raise ValueError('模型列表中没有有效的模型名称')
+        return sorted(models, key=lambda model: (model.casefold(), model))
+    except (ValueError, KeyError, TypeError) as exc:
+        raise LLMError('未能读取模型列表，可手动填写模型名称。', response=response) from exc

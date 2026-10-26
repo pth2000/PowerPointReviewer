@@ -119,7 +119,7 @@ ENGINE_DEFS = [
         'id': 'qwen_clone',
         'name': '在线 · 千问音色复刻',
         'description': '使用千问复刻的专属音色合成语音',
-        'help': '在「复刻音色管理」中上传一段参考音频即可创建音色。音色保存在云端，可反复使用。需要阿里云百炼账号与 API Key。',
+        'help': '在“复刻音色管理”中上传一段参考音频即可创建音色。音色保存在云端，可反复使用。需要阿里云百炼账号与 API Key。',
         'supports_voice': True,
         'parallel_enabled': False,
         'parallel_workers': 1,
@@ -188,7 +188,7 @@ ENGINE_DEFS = [
             },
             {
                 'key': 'preferred_name', 'label': '默认音色名', 'description': '为新建的复刻音色命名',
-                'help': 'Qwen-Audio-TTS 使用小写字母和数字，最多 9 位；Qwen3-TTS-VC 支持字母、数字和下划线，最多 16 位。',
+                'help': 'Qwen-Audio-TTS 使用小写字母和数字，最多 9 位。Qwen3-TTS-VC 支持字母、数字和下划线，最多 16 位。',
                 'type': 'text', 'default': 'ppt_reviewer'
             },
             {
@@ -235,7 +235,7 @@ ENGINE_DEFS = [
             {
                 'key': 'instructions', 'label': '语音风格指令',
                 'description': '为支持声音设计的模型提供朗读风格',
-                'help': '1.7B CustomVoice 可选填，0.6B CustomVoice 不支持指令控制。VoiceDesign 需要填写声音描述；Base 声音克隆模型请留空。语言在服务启动器中设置。风格指令不能保证不同讲稿段落的声音完全一致。',
+                'help': '1.7B CustomVoice 可填写语气和风格，VoiceDesign 需填写声音描述。0.6B CustomVoice 和 Base 声音克隆模型请留空。语言在服务启动器中设置。需要保持多段配音的音色一致时，建议使用声音克隆。',
                 'type': 'text', 'default': ''
             },
             {
@@ -247,7 +247,7 @@ ENGINE_DEFS = [
             {
                 'key': 'seed', 'label': '随机种子',
                 'description': '让相同讲稿重复生成时更接近同一效果',
-                'help': '默认 42，相同文本、音色和参数重复生成可复现。-1 表示每次随机。固定种子不能保证不同文本的语调完全相同。',
+                'help': '默认 42，用于重复生成同一段讲稿时复现效果。设为 -1 可在每次生成时尝试不同的表达。',
                 'type': 'int', 'min': -1, 'max': 2147483647, 'step': 1, 'default': 42
             },
             {
@@ -274,7 +274,7 @@ for engine in ENGINE_DEFS:
         engine['options'].append({
             'key': key, 'label': label,
             'description': f'保证每段音频{position}至少保留这段停顿',
-            'help': '取值 0–3000，默认 0，不追加留白。已有足够停顿时不再追加；原有停顿会保留。' + format_help,
+            'help': '取值 0–3000 毫秒，默认 0。设定每段配音开头或结尾的最短停顿，停顿不足时自动补足。' + format_help,
             'type': 'int', 'min': 0, 'max': 3000, 'step': 50, 'default': 0,
         })
 

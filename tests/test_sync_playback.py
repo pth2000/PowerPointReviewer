@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from PySide6.QtCore import QCoreApplication, QEvent
 
 from app.presentation import link as presentation_link
+from app.presentation.com import PROG_IDS
 from ui import theme
 from app.audio.playback import PlaybackBus
 from app.settings_store import AppSettings
@@ -24,6 +25,9 @@ from qt_test_case import QtTestCase
 class SyncPlaybackFixture(QtTestCase):
 
     def setUp(self):
+        installed = patch('ui.pages.settings_page.installed_applications', return_value=PROG_IDS)
+        installed.start()
+        self.addCleanup(installed.stop)
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.source = make_ppt(Path(folder.name) / 'lesson.pptx')
@@ -42,11 +46,11 @@ class SyncPlaybackFixture(QtTestCase):
              patch('ui.theme.available_fonts', return_value=(('', theme.DEFAULT_FONT_LABEL),)):
             page = PPTReviewer(ctx)
             if ready:
-                page.notes = {1: '第一页', 2: '第二页'}
-                page.notes_list = [{'page': 1, 'text': '第一页'}, {'page': 2, 'text': '第二页'}]
-                page.presentation_path = self.source
-                page.presentation_link = presentation_link.describe(self.source)
-                page.is_import = True
+                page.project.notes = {1: '第一页', 2: '第二页'}
+                page.project.notes_list = [{'page': 1, 'text': '第一页'}, {'page': 2, 'text': '第二页'}]
+                page.project.presentation_path = self.source
+                page.project.presentation_link = presentation_link.describe(self.source)
+                page.project.audio_loaded = True
                 page.pageJumpSpinBox.setMaximum(2)
                 page.check_import()
             settings = SettingInterface(ctx)
@@ -64,10 +68,58 @@ class SyncPlaybackFixture(QtTestCase):
         return page, settings, ctx
 
 class StartupPreferencesTests(SyncPlaybackFixture):
+
+    def test_missing_software_is_disabled_and_cannot_change_saved_preference(self):
+        combo = self.settings.presentation_preference_combo
+        for providers, labels in ((PROG_IDS[:1], ('PowerPoint',)),
+                                  (PROG_IDS[1:], ('WPS 演示',)), ((), ())):
+            with self.subTest(providers=providers), \
+                    patch('ui.pages.settings_page.installed_applications', return_value=providers):
+                self.settings.refresh_presentation_preference()
+                self.assertEqual(combo.isEnabled(), bool(providers))
+                for index, provider in enumerate(PROG_IDS, 1):
+                    self.assertEqual(combo.items[index].isEnabled, provider in providers)
+                    self.assertEqual('未安装' in combo.itemText(index), provider not in providers)
+                    if provider not in providers:
+                        combo.setCurrentIndex(index)
+                        self.assertEqual(combo.currentData(), 'auto')
+                for label in labels:
+                    self.assertIn(label, self.settings.presentation_preference_caption.text())
+                self.ctx.config.save_later.assert_not_called()
+
+    def test_uninstalled_saved_preference_is_explained_and_survives_refresh(self):
+        combo = self.settings.presentation_preference_combo
+        combo.setCurrentIndex(2)
+        self.ctx.config.reset_mock()
+        with patch('ui.pages.settings_page.installed_applications', return_value=PROG_IDS[:1]):
+            self.settings.refresh_presentation_preference()
+        self.assertEqual(combo.currentData(), 'wps')
+        self.assertEqual(self.ctx.app_settings.get('presentation_preference'), 'wps')
+        self.assertIn('WPS 演示 未安装', self.settings.presentation_preference_caption.text())
+        self.assertIn('PowerPoint', self.settings.presentation_preference_caption.text())
+        self.ctx.config.save_later.assert_not_called()
+        with patch('ui.pages.settings_page.installed_applications', return_value=PROG_IDS):
+            self.settings.refresh_presentation_preference()
+        self.assertTrue(combo.items[2].isEnabled)
+        self.assertNotIn('未安装', combo.currentText())
+        self.ctx.config.save_later.assert_not_called()
+
+    def test_presentation_preference_saves_immediately_and_retains_existing_audio(self):
+        combo = self.settings.presentation_preference_combo
+        self.assertEqual(combo.currentData(), 'auto')
+        old_segments = list(self.page.project.notes_list)
+        combo.setCurrentIndex(2)
+        self.assertEqual(self.ctx.app_settings.get('presentation_preference'), 'wps')
+        self.ctx.config.save_later.assert_called_once()
+        self.assertEqual(self.page.project.notes_list, old_segments)
+        self.assertFalse(self.settings.is_dirty())
+        restored = AppSettings()
+        restored.load_from(self.ctx.app_settings.to_dict())
+        self.assertEqual(restored.get('presentation_preference'), 'wps')
     def test_script_options_defaults_and_immediate_save_do_not_change_existing_audio(self):
         self.assertFalse(self.settings.script_comments_switch.isChecked())
         self.assertTrue(self.settings.animation_check_switch.isChecked())
-        old_segments = list(self.page.notes_list)
+        old_segments = list(self.page.project.notes_list)
         regenerate = Mock()
         self.settings.regenerate_requested.connect(regenerate)
         self.settings.script_comments_switch.setChecked(True)
@@ -75,8 +127,8 @@ class StartupPreferencesTests(SyncPlaybackFixture):
         self.assertTrue(self.ctx.app_settings.get('script_comments_enabled'))
         self.assertFalse(self.ctx.app_settings.get('animation_check_enabled'))
         self.assertEqual(self.ctx.config.save_later.call_count, 2)
-        self.assertEqual(self.page.notes_list, old_segments)
-        self.assertTrue(self.page.is_import)
+        self.assertEqual(self.page.project.notes_list, old_segments)
+        self.assertTrue(self.page.project.audio_loaded)
         self.assertFalse(self.settings.is_dirty())
         regenerate.assert_not_called()
         restored = AppSettings()
@@ -162,7 +214,7 @@ class SlideshowPreferenceTests(SyncPlaybackFixture):
         self.settings.page_turn_combo.setCurrentText('演示软件接口（COM）')
         self.assertFalse(self.settings.slideshow_preferences_card.isHidden())
         self.assertFalse(controls['slideshow_auto_start'].isChecked())
-        self.page.is_import = False
+        self.page.project.audio_loaded = False
         self.page.check_import()
         self.assertTrue(all(not switch.isEnabled() for switch in controls.values()))
         self.ctx.config.reset_mock()
@@ -174,14 +226,14 @@ class SlideshowPreferenceTests(SyncPlaybackFixture):
         self.settings.sync_playback_switch.setChecked(True)
         self.settings.slideshow_preference_switches['slideshow_follow_page'].setChecked(False)
         self.page.on_slideshow_slide_changed(2)
-        self.assertEqual(self.page.current_index, 0)
+        self.assertEqual(self.page.project.current_index, 0)
         self.page.pageJumpSpinBox.setValue(2)
         with patch('app.presentation.slideshow.goto') as jump:
             self.page.jump_page()
             jump.assert_called_once_with(2, self.source)
         self.settings.slideshow_preference_switches['slideshow_follow_page'].setChecked(True)
         self.page.on_slideshow_slide_changed(1)
-        self.assertEqual(self.page.current_index, 0)
+        self.assertEqual(self.page.project.current_index, 0)
 
 
 class SyncPlaybackTests(SyncPlaybackFixture):
@@ -216,7 +268,7 @@ class SyncPlaybackTests(SyncPlaybackFixture):
 
     def test_restricted_mode_disables_both_controls_and_preserves_preference(self):
         self.page.scrollEnableSwitch.setChecked(True)
-        self.page.presentation_path = None
+        self.page.project.presentation_path = None
         self.page.refresh_presentation_state()
         self.assertFalse(self.page.scrollEnableSwitch.isEnabled())
         self.assertFalse(self.settings.sync_playback_switch.isEnabled())
@@ -244,11 +296,11 @@ class SyncPlaybackTests(SyncPlaybackFixture):
         self.settings.sync_playback_switch.setChecked(True)
         self.ctx.slideshow_watcher.start.assert_called_once_with(self.source)
         self.page.on_slideshow_slide_changed(2)
-        self.assertEqual(self.page.current_index, 1)
+        self.assertEqual(self.page.project.current_index, 1)
         self.settings.sync_playback_switch.setChecked(False)
         self.ctx.slideshow_watcher.stop.assert_called()
         self.page.on_slideshow_slide_changed(1)
-        self.assertEqual(self.page.current_index, 1)
+        self.assertEqual(self.page.project.current_index, 1)
         self.page.pageJumpSpinBox.setValue(2)
         with patch('app.presentation.slideshow.goto') as jump:
             self.page.jump_page()
@@ -272,12 +324,12 @@ class SyncPlaybackTests(SyncPlaybackFixture):
         ctx.config.save_later.assert_not_called()
 
     def test_import_readiness_updates_both_switches_without_changing_ppt_path(self):
-        self.page.is_import = False
+        self.page.project.audio_loaded = False
         self.page.check_import()
         self.assertFalse(self.page.scrollEnableSwitch.isEnabled())
         self.assertFalse(self.settings.sync_playback_switch.isEnabled())
         self.assertIn('音频尚未就绪', self.settings.sync_playback_switch.toolTip())
-        self.page.is_import = True
+        self.page.project.audio_loaded = True
         self.page.check_import()
         self.assertTrue(self.page.scrollEnableSwitch.isEnabled())
         self.assertTrue(self.settings.sync_playback_switch.isEnabled())

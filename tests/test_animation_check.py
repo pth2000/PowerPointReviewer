@@ -11,6 +11,7 @@ from pptx.oxml import parse_xml
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer
 
 from app.presentation.animation import AnimationIssue, check_alignment
+from app.presentation.visibility import hidden_shape_ids
 from app.audio.playback import PlaybackBus
 from app.settings_store import AppSettings
 from ui.dialogs.animation_check_dialog import AnimationCheckDialog
@@ -50,6 +51,20 @@ def segments(*counts):
             for page, count in enumerate(counts, 1) for part in range(count)]
 
 
+def media_timing_xml(identifier=7, *, interactive=False):
+    player = (f'<p:video><p:cMediaNode mute="1"><p:cTn repeatCount="indefinite"/>'
+              f'<p:tgtEl><p:spTgt spid="{identifier}"/></p:tgtEl></p:cMediaNode></p:video>')
+    if interactive:
+        player += (f'<p:seq><p:cTn nodeType="interactiveSeq"><p:stCondLst>'
+                   f'<p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="{identifier}"/>'
+                   '</p:tgtEl></p:cond></p:stCondLst><p:childTnLst><p:par>'
+                   '<p:cTn nodeType="clickEffect" presetClass="mediacall"><p:childTnLst>'
+                   '<p:cmd type="call" cmd="togglePause"><p:cBhvr><p:cTn dur="1"/>'
+                   f'<p:tgtEl><p:spTgt spid="{identifier}"/></p:tgtEl></p:cBhvr></p:cmd>'
+                   '</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq>')
+    return player
+
+
 class AnimationCheckTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -64,6 +79,70 @@ class AnimationCheckTests(unittest.TestCase):
         original = self.source.read_bytes()
         self.assertEqual(check_alignment(self.source, segments(1, 3, 4, 1)), [])
         self.assertEqual(self.source.read_bytes(), original)
+
+    def deck_with_hidden_targets(self, hidden, groups):
+        """每个效果指定对象，隐藏标记与选择窗格保存的 XML 一致。"""
+        make_deck(self.source, [[tuple(kind for kind, _target in group) for group in groups]])
+        ppt = Presentation(self.source)
+        slide = ppt.slides[0]
+        tree = slide._element.find(f'{{{P}}}cSld/{{{P}}}spTree')
+        for identifier in {target for group in groups for _kind, target in group}:
+            tree.append(parse_xml(f'<p:sp xmlns:p="{P}"><p:nvSpPr>'
+                f'<p:cNvPr id="{identifier}" name="对象{identifier}" hidden="{int(identifier in hidden)}"/>'
+                '<p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>'))
+        effects = [node for node in slide._element.iter(f'{{{P}}}cTn')
+                   if node.get('nodeType') in ('clickEffect', 'clickPar', 'withEffect', 'afterEffect')]
+        for node, (_kind, target) in zip(effects, [item for group in groups for item in group]):
+            node.append(parse_xml(f'<p:cBhvr xmlns:p="{P}"><p:tgtEl>'
+                                  f'<p:spTgt spid="{target}"/></p:tgtEl></p:cBhvr>'))
+        ppt.save(self.source)
+
+    def test_hidden_click_objects_do_not_require_extra_script_segments(self):
+        self.deck_with_hidden_targets({3}, [[('clickEffect', 2)], [('clickEffect', 3)], [('clickEffect', 4)]])
+        original = self.source.read_bytes()
+        self.assertEqual(check_alignment(self.source, segments(3)), [])
+        issues = check_alignment(self.source, segments(4))
+        self.assertEqual((issues[0].clicks, issues[0].reason), (2, '讲稿多出 1 个点击步骤'))
+        self.assertEqual(self.source.read_bytes(), original)
+
+    def test_visible_with_effect_does_not_resurrect_hidden_click_leader(self):
+        self.deck_with_hidden_targets({2}, [[('clickEffect', 2), ('withEffect', 3)], [('clickEffect', 4)]])
+        self.assertEqual(check_alignment(self.source, segments(2)), [])
+
+    def test_hidden_simultaneous_effect_does_not_remove_visible_click(self):
+        self.deck_with_hidden_targets({3}, [[('clickEffect', 2), ('withEffect', 3)], [('clickEffect', 4)]])
+        self.assertEqual(check_alignment(self.source, segments(3)), [])
+
+    def test_all_hidden_clicks_and_hidden_paragraph_clicks_are_zero(self):
+        self.deck_with_hidden_targets({2, 3}, [[('clickEffect', 2)], [('clickPar', 3)]])
+        self.assertEqual(check_alignment(self.source, segments(1)), [])
+
+    def test_hidden_group_hides_descendants_even_with_explicit_visible_flag(self):
+        self.deck_with_hidden_targets(set(), [[('clickEffect', 2)], [('clickEffect', 3)]])
+        ppt = Presentation(self.source)
+        slide = ppt.slides[0]
+        tree = slide._element.find(f'{{{P}}}cSld/{{{P}}}spTree')
+        group = parse_xml(f'<p:grpSp xmlns:p="{P}"><p:nvGrpSpPr>'
+            '<p:cNvPr id="10" name="隐藏组合" hidden="true"/><p:cNvGrpSpPr/><p:nvPr/>'
+            '</p:nvGrpSpPr><p:grpSpPr/></p:grpSp>')
+        for shape in list(tree):
+            if shape.tag == f'{{{P}}}sp':
+                tree.remove(shape)
+                group.append(shape)
+        tree.append(group)
+        self.assertEqual(hidden_shape_ids(slide._element), {'10', '2', '3'})
+        ppt.save(self.source)
+        self.assertEqual(check_alignment(self.source, segments(1)), [])
+
+    def test_objects_outside_page_are_still_counted_when_not_hidden(self):
+        self.deck_with_hidden_targets(set(), [[('clickEffect', 2)]])
+        ppt = Presentation(self.source)
+        shape = ppt.slides[0]._element.find(f'{{{P}}}cSld/{{{P}}}spTree/{{{P}}}sp')
+        shape.find(f'{{{P}}}spPr').append(parse_xml(
+            '<a:xfrm xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            '<a:off x="-9999999" y="-9999999"/><a:ext cx="100" cy="100"/></a:xfrm>'))
+        ppt.save(self.source)
+        self.assertEqual(check_alignment(self.source, segments(2)), [])
 
     def test_only_mismatching_pages_are_reported_in_slide_order(self):
         make_deck(self.source, [[('clickEffect',)], [('clickEffect',), ('clickEffect',)], None])
@@ -80,6 +159,50 @@ class AnimationCheckTests(unittest.TestCase):
         issues = check_alignment(self.source, segments(1, 1, 1))
         self.assertEqual([i.page for i in issues], [1, 2, 3])
         self.assertTrue(all(i.clicks is None for i in issues))
+
+    def media_deck(self, kind='withEffect', *, interactive=False):
+        make_deck(self.source, [[(kind,)]])
+        ppt = Presentation(self.source)
+        timing = ppt.slides[0]._element.find(f'{{{P}}}timing')
+        effect = next(node for node in timing.iter(f'{{{P}}}cTn') if node.get('nodeType') == kind)
+        effect.set('presetClass', 'mediacall')
+        effect.append(parse_xml(f'<p:childTnLst xmlns:p="{P}"><p:cmd type="call" cmd="playFrom(0.0)">'
+                               '<p:cBhvr><p:cTn dur="2000"/><p:tgtEl><p:spTgt spid="7"/>'
+                               '</p:tgtEl></p:cBhvr></p:cmd></p:childTnLst>'))
+        nodes = parse_xml(f'<p:tnLst xmlns:p="{P}">{media_timing_xml(interactive=interactive)}</p:tnLst>')
+        timing.find(f'{{{P}}}tnLst').extend(list(nodes))
+        ppt.save(self.source)
+
+    def test_autoplay_and_looping_video_do_not_warn_or_add_click_steps(self):
+        self.media_deck(interactive=True)
+        original = self.source.read_bytes()
+        self.assertEqual(check_alignment(self.source, segments(1)), [])
+        self.assertEqual(self.source.read_bytes(), original)
+
+    def test_click_to_play_media_is_counted_as_one_sequential_step(self):
+        self.media_deck('clickEffect', interactive=True)
+        self.assertEqual(check_alignment(self.source, segments(2)), [])
+        issue = check_alignment(self.source, segments(1))[0]
+        self.assertEqual(issue.clicks, 1)
+
+    def test_media_interaction_targeting_another_object_still_needs_confirmation(self):
+        self.media_deck(interactive=True)
+        ppt = Presentation(self.source)
+        timing = ppt.slides[0]._element.find(f'{{{P}}}timing')
+        control = next(n for n in timing.iter(f'{{{P}}}cTn') if n.get('nodeType') == 'interactiveSeq')
+        control.find(f'{{{P}}}stCondLst/{{{P}}}cond/{{{P}}}tgtEl/{{{P}}}spTgt').set('spid', '9')
+        ppt.save(self.source)
+        issue = check_alignment(self.source, segments(1))[0]
+        self.assertIsNone(issue.clicks)
+        self.assertIn('指定对象', issue.reason)
+
+    def test_media_player_without_a_main_sequence_has_zero_sequential_clicks(self):
+        make_deck(self.source, [None])
+        ppt = Presentation(self.source)
+        ppt.slides[0]._element.append(parse_xml(
+            f'<p:timing xmlns:p="{P}"><p:tnLst>{media_timing_xml(interactive=True)}</p:tnLst></p:timing>'))
+        ppt.save(self.source)
+        self.assertEqual(check_alignment(self.source, segments(1)), [])
 
     def test_document_order_is_used_instead_of_slide_part_filenames(self):
         make_deck(self.source, [None, [('clickEffect',)]])
@@ -136,8 +259,8 @@ class AnimationGenerationTests(QtTestCase):
         with patch('app.paths.ensure_runtime_dirs'):
             self.page = PPTReviewer(ctx)
         self.page.resize(1000, 800)
-        self.page.presentation_path = self.source
-        self.page.notes = {1: '第一段●第二段'}
+        self.page.project.presentation_path = self.source
+        self.page.project.notes = {1: '第一段●第二段'}
         self.page.create_error_info_bar = Mock()
         self.addCleanup(self.dispose)
 
@@ -156,23 +279,23 @@ class AnimationGenerationTests(QtTestCase):
             result = self.page.regenerate()
         return result, dialog, configure, start, clean
 
-    def test_cancel_keeps_imported_script_and_clears_incompatible_old_audio(self):
-        self.page.notes_list = [{'page': 1, 'text': '原有讲稿'}]
+    def test_cancel_restores_previous_segments_and_playable_audio(self):
+        self.page.project.notes_list = [{'page': 1, 'text': '原有讲稿'}]
         audio = Path(self.directory.name) / 'old.wav'
         audio.write_bytes(b'keep cached audio on disk')
-        self.page.media_list = [audio]
-        self.page.is_import = True
+        self.page.project.media_list = [audio]
+        self.page.project.audio_loaded = True
         result, dialog, configure, start, clean = self.generate(0)
         self.assertFalse(result)
         dialog.assert_called_once()
         configure.assert_not_called()
         start.assert_not_called()
         clean.assert_not_called()
-        self.assertEqual(self.page.notes, {1: '第一段●第二段'})
-        self.assertEqual(len(self.page.notes_list), 2)
-        self.assertEqual(self.page.media_list, [])
+        self.assertEqual(self.page.project.notes, {1: '第一段●第二段'})
+        self.assertEqual(self.page.project.notes_list, [{'page': 1, 'text': '原有讲稿'}])
+        self.assertEqual(self.page.project.media_list, [audio])
         self.assertTrue(audio.is_file())
-        self.assertFalse(self.page.is_import)
+        self.assertTrue(self.page.project.audio_loaded)
         self.assertTrue(self.page.getFileButton.isEnabled())
         self.assertFalse(self.page.is_busy())
 
@@ -186,16 +309,16 @@ class AnimationGenerationTests(QtTestCase):
                          [{'page': 1, 'text': '第一段'}, {'page': 1, 'text': '第二段'}])
 
     def test_unchanged_retry_cancel_preserves_playable_audio(self):
-        self.page.mark_split()
-        self.page.media_list = [Path('a.wav'), Path('b.wav')]
-        self.page.is_import = True
+        self.page.project.split_notes(comments_enabled=self.page.ctx.app_settings.get('script_comments_enabled'))
+        self.page.project.media_list = [Path('a.wav'), Path('b.wav')]
+        self.page.project.audio_loaded = True
         self.generate(0)
-        self.assertEqual(self.page.media_list, [Path('a.wav'), Path('b.wav')])
-        self.assertTrue(self.page.is_import)
+        self.assertEqual(self.page.project.media_list, [Path('a.wav'), Path('b.wav')])
+        self.assertTrue(self.page.project.audio_loaded)
 
     def test_matched_page_and_standalone_script_generate_without_dialog(self):
         for source, text in ((self.source, '一段'), (None, '第一段●第二段')):
-            self.page.presentation_path, self.page.notes = source, {1: text}
+            self.page.project.presentation_path, self.page.project.notes = source, {1: text}
             result, dialog, configure, start, clean = self.generate(0)
             self.assertTrue(result)
             dialog.assert_not_called()
@@ -215,36 +338,40 @@ class AnimationGenerationTests(QtTestCase):
         make_deck(self.source, [[('clickEffect',)]])
         raw = '// 提醒●不参与分段\n第一段\n●第二段\n  // 结束●'
         self.page.ctx.app_settings.set('script_comments_enabled', True)
-        self.page.notes = {1: raw}
+        self.page.project.notes = {1: raw}
         result, dialog, configure, start, clean = self.generate(0)
         self.assertTrue(result)
         dialog.assert_not_called()
         self.assertEqual(configure.call_args.args[0],
                          [{'page': 1, 'text': '第一段'}, {'page': 1, 'text': '第二段'}])
-        self.assertEqual(self.page.notes, {1: raw})
-        self.assertEqual(self.page.count_words(), 6)
-        self.page.ctx.app_settings.set('script_comments_enabled', False)
+        self.assertEqual(self.page.project.notes, {1: raw})
         # 已有分段与统计保持生成时的规则，下次生成才应用新偏好。
-        self.assertEqual(self.page.count_words(), 6)
-        self.page.mark_split()
-        self.assertIn('// 提醒', self.page.notes_list[0]['text'])
+        for enabled in (True, False):
+            self.page.ctx.app_settings.set('script_comments_enabled', enabled)
+            with patch('ui.pages.reviewer_page.ScriptStatisticsDialog') as statistics:
+                self.page.show_info_dialog()
+            self.assertEqual(statistics.call_args.args[0].characters, 6)
+        self.page.project.split_notes(comments_enabled=self.page.ctx.app_settings.get('script_comments_enabled'))
+        self.assertIn('// 提醒', self.page.project.notes_list[0]['text'])
 
     def test_comment_only_page_keeps_blank_page_timing_without_extra_clicks(self):
         self.page.ctx.app_settings.set('script_comments_enabled', True)
-        self.page.notes = {1: '// 提示●\n\t// 资料●'}
-        self.page.mark_split()
-        self.assertEqual(self.page.notes_list, [{'page': 1, 'text': ''}])
+        self.page.project.notes = {1: '// 提示●\n\t// 资料●'}
+        self.page.project.split_notes(comments_enabled=self.page.ctx.app_settings.get('script_comments_enabled'))
+        self.assertEqual(self.page.project.notes_list, [{'page': 1, 'text': ''}])
 
     def test_blank_and_comment_only_pages_require_confirmation_before_generation(self):
         self.page.ctx.app_settings.set('script_comments_enabled', True)
         for text in (' \n\t', '// 提示●\n\t// 资料●'):
             for decision in (0, 1):
                 with self.subTest(text=text, decision=decision):
-                    self.page.notes = {1: text}
+                    self.page.project.notes = {1: text}
+                    old_segments = list(self.page.project.notes_list)
                     result, dialog, configure, start, clean = self.generate(decision)
                     self.assertEqual(result, bool(decision))
                     dialog.assert_called_once()
-                    self.assertEqual(self.page.notes_list, [{'page': 1, 'text': ''}])
+                    self.assertEqual(self.page.project.notes_list,
+                                     [{'page': 1, 'text': ''}] if decision else old_segments)
                     if decision:
                         start.assert_called_once_with()
                         configure.assert_called_once()
@@ -261,8 +388,8 @@ class AnimationGenerationTests(QtTestCase):
 
     def test_current_multi_character_separator_and_trailing_mark_are_used(self):
         make_deck(self.source, [[('clickEffect',)]])
-        self.page.mark = '||'
-        self.page.notes = {1: '第一段||第二段||\n'}
+        self.page.project.mark = '||'
+        self.page.project.notes = {1: '第一段||第二段||\n'}
         result, dialog, configure, start, clean = self.generate(0)
         self.assertTrue(result)
         dialog.assert_not_called()
@@ -282,18 +409,18 @@ class AnimationGenerationTests(QtTestCase):
         start.assert_called_once_with()
         self.assertFalse(self.page.is_busy())
 
-    def test_cancel_after_ppt_import_keeps_new_script_without_starting_generation(self):
+    def test_cancel_after_ppt_import_restores_empty_project_without_starting_generation(self):
         ppt = Presentation(self.source)
         ppt.slides[0].notes_slide.notes_text_frame.text = '导入第一段●导入第二段'
         ppt.save(self.source)
-        self.page.notes = {}
+        self.page.project.notes = {}
         with patch.object(AnimationCheckDialog, 'exec', return_value=0), \
              patch.object(self.page.save_thread, 'start') as start:
-            self.assertTrue(self.page.import_file(self.source))
+            self.assertFalse(self.page.import_file(self.source))
         start.assert_not_called()
-        self.assertEqual(self.page.notes[1].strip(), '导入第一段●导入第二段')
-        self.assertEqual(len(self.page.notes_list), 2)
-        self.assertFalse(self.page.is_import)
+        self.assertEqual(self.page.project.notes, {})
+        self.assertEqual(self.page.project.notes_list, [])
+        self.assertFalse(self.page.project.audio_loaded)
         self.assertTrue(self.page.getFileButton.isEnabled())
 
     def test_many_issues_scroll_and_buttons_accept_or_cancel(self):

@@ -1,7 +1,7 @@
 """全局热键配置对话框。"""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -94,9 +94,7 @@ class HotkeyDialog(ThemedDialog):
         self.setWindowTitle('全局热键')
         self.setMinimumWidth(520)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
+        layout = self.create_form_layout(520, (20, 20, 20, 20), 14)
 
         layout.addWidget(SubtitleLabel('全局热键', self))
 
@@ -127,6 +125,7 @@ class HotkeyDialog(ThemedDialog):
             self.edits[action] = edit
         grid.setColumnStretch(1, 1)
         layout.addLayout(grid)
+        layout.addStretch(1)
 
         self.status_label = CaptionLabel(self)
         self.status_label.setWordWrap(True)

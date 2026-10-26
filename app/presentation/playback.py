@@ -32,11 +32,13 @@ class SlideshowPlayback(QObject):
     def application(self):
         return self.session.presentation.application if self.session else None
 
-    def prepare(self, source, page, offset, *, allow_start=True, align=True, windowed=False):
+    def prepare(self, source, page, offset, *, allow_start=True, align=True, windowed=False,
+                preference='auto'):
         self.requested_source = Path(source).resolve()
         self.requested_page, self.requested_offset = int(page), int(offset)
         self.allow_start, self.align = bool(allow_start), bool(align)
         self.windowed = bool(windowed)
+        self.preference = preference
         self.attempts = 0
         self.preparing = True
         self.timer.start(0)
@@ -51,7 +53,7 @@ class SlideshowPlayback(QObject):
                 self._release_session()
                 self.session = PresentationSession.start(
                     self.requested_source, reuse_open=True, allow_start=self.allow_start,
-                    windowed=self.windowed)
+                    windowed=self.windowed, preference=self.preference)
                 self.source = self.requested_source
                 self._new_session = True
             presentation = self.session.presentation

@@ -19,6 +19,7 @@ from app.documents import package as project_package
 from ui import theme
 from app.audio.playback import PlaybackBus
 from app.settings_store import AppSettings
+from app.project.model import ProjectSession
 from app.window import Window
 from tasks.audio_generation_task import AudioGenerationTask, GenerationResult
 from tasks.preview_task import PreviewTask
@@ -37,8 +38,8 @@ class WorkflowAuditTests(QtTestCase):
     def test_comment_exports_keep_raw_notes_and_ai_only_receives_body(self):
         from app.documents import io as script_io
         self.ctx.app_settings.set('script_comments_enabled', True)
-        self.page.notes[1] = '// 教学提醒●\n第一页\n// 资料'
-        self.page.mark_split()
+        self.page.project.notes[1] = '// 教学提醒●\n第一页\n// 资料'
+        self.page.project.split_notes(comments_enabled=self.page.ctx.app_settings.get('script_comments_enabled'))
         with patch('ui.pages.tools_page.RewriteDialog') as dialog:
             dialog.return_value.exec.return_value = False
             self.tools.open_rewrite_dialog()
@@ -50,28 +51,28 @@ class WorkflowAuditTests(QtTestCase):
             self.tools.write_to_ppt()
         for suffix in ('docx', 'json'):
             exported = next(self.root.glob('*_Notes.' + suffix))
-            self.assertEqual(script_io.load_script(exported).notes, self.page.notes)
+            self.assertEqual(script_io.load_script(exported).notes, self.page.project.notes)
         ppt = next(self.root.glob('*_NEW.pptx'))
-        self.assertEqual(script_io.load_script(ppt).notes[1].strip(), self.page.notes[1])
+        self.assertEqual(script_io.load_script(ppt).notes[1].strip(), self.page.project.notes[1])
         self.tools.create_error_info_bar.assert_not_called()
 
     def test_package_without_audio_regenerates_with_its_comment_rule(self):
-        self.page.notes[1] = '// 教学提醒●\n第一页'
+        self.page.project.notes[1] = '// 教学提醒●\n第一页'
         package = self.root / 'comments.pprpkg'
-        items = project_package.build_items(self.page.notes_list, self.page.notes_duration_list,
-                                            self.page.note_cache_keys, self.page.note_cache_exts,
-                                            self.page.media_list)
-        project_package.export_package(package, items=items, notes=self.page.notes, mark='●',
+        items = project_package.build_items(self.page.project.notes_list, self.page.project.notes_duration_list,
+                                            self.page.project.note_cache_keys, self.page.project.note_cache_exts,
+                                            self.page.project.media_list)
+        project_package.export_package(package, items=items, notes=self.page.project.notes, mark='●',
                                        source_name='讲稿', generation_profile={}, speaker='',
                                        include_audio=False, script_comments_enabled=True)
-        for audio in self.page.media_list:
+        for audio in self.page.project.media_list:
             audio.unlink()
         self.assertFalse(self.ctx.app_settings.get('script_comments_enabled'))
         with patch.object(self.page.save_thread, 'start') as start, \
              patch.object(self.page.save_thread, 'configure') as configure, \
              patch.object(self.page, 'clean_temp_folder'):
             self.assertTrue(self.page.import_file(package))
-        self.assertTrue(self.page.script_comments_enabled)
+        self.assertTrue(self.page.project.script_comments_enabled)
         self.assertEqual(configure.call_args.args[0],
                          [{'page': 1, 'text': '第一页'}, {'page': 3, 'text': '第三页'}])
         start.assert_called_once_with()
@@ -96,20 +97,20 @@ class WorkflowAuditTests(QtTestCase):
             self.page = PPTReviewer(self.ctx)
         self.addCleanup(self.dispose)
         self.source = make_ppt(self.root / 'lesson.pptx', 3)
-        self.page.note_file_path = self.page.presentation_path = self.source
-        self.page.presentation_link = presentation_link.describe(self.source)
-        self.page.note_file_name = 'lesson'
-        self.page.notes = {1: '第一页', 3: '第三页'}
-        self.page.mark_split()
-        self.page.media_list = []
+        self.page.project.note_file_path = self.page.project.presentation_path = self.source
+        self.page.project.presentation_link = presentation_link.describe(self.source)
+        self.page.project.note_file_name = 'lesson'
+        self.page.project.notes = {1: '第一页', 3: '第三页'}
+        self.page.project.split_notes(comments_enabled=self.page.ctx.app_settings.get('script_comments_enabled'))
+        self.page.project.media_list = []
         for key in ('first', 'third'):
             audio = paths.AUDIO_CACHE_DIR / (key + '.wav')
             AudioGenerationTask._write_silence(audio, 'wav', seconds=0.1)
-            self.page.media_list.append(audio)
-        self.page.notes_duration_list = [0.1, 0.1]
-        self.page.note_cache_keys = ['first', 'third']
-        self.page.note_cache_exts = ['wav', 'wav']
-        self.page.is_import = True
+            self.page.project.media_list.append(audio)
+        self.page.project.notes_duration_list = [0.1, 0.1]
+        self.page.project.note_cache_keys = ['first', 'third']
+        self.page.project.note_cache_exts = ['wav', 'wav']
+        self.page.project.audio_loaded = True
         self.page.check_import()
         self.tools = ToolsInterface(self.ctx, self.page)
         for target in (self.page, self.tools):
@@ -137,7 +138,7 @@ class WorkflowAuditTests(QtTestCase):
         path = paths.SESSION_DIR / 'record.json'
         profile = {'mode': 'bailian', 'options': {'model': 'cosyvoice-v3-flash', 'api_key': 'test-only-key'}}
         path.write_text(json.dumps({
-            'source_file': str(self.source), 'source_name': 'lesson', 'notes': self.page.notes,
+            'source_file': str(self.source), 'source_name': 'lesson', 'notes': self.page.project.notes,
             'mark': '●', 'generation_profile': profile, 'speaker': '原发音人',
             'items': items if items is not None else [
                 {'page': 1, 'text': '第一页', 'cache_key': 'first', 'cache_ext': 'wav', 'duration': 0.1},
@@ -146,18 +147,18 @@ class WorkflowAuditTests(QtTestCase):
         return path
 
     def test_failed_history_load_preserves_working_session_and_playback(self):
-        self.page.current_index = 1
+        self.page.project.current_index = 1
         self.page._playing_sequence = True
         path = self.record([{'page': 1, 'text': '缺失配音', 'cache_key': 'missing'}])
-        notes, media = dict(self.page.notes), list(self.page.media_list)
+        notes, media = dict(self.page.project.notes), list(self.page.project.media_list)
         with patch.object(self.page, 'stop_audio') as stop:
             with self.assertRaises(MissingAudioError):
                 self.page.load_session_record(path)
         stop.assert_not_called()
-        self.assertEqual(self.page.notes, notes)
-        self.assertEqual(self.page.media_list, media)
-        self.assertEqual(self.page.current_index, 1)
-        self.assertTrue(self.page.is_import)
+        self.assertEqual(self.page.project.notes, notes)
+        self.assertEqual(self.page.project.media_list, media)
+        self.assertEqual(self.page.project.current_index, 1)
+        self.assertTrue(self.page.project.audio_loaded)
         self.assertTrue(self.page._playing_sequence)
 
     def test_unplayable_audio_restores_controls_and_does_not_advance(self):
@@ -170,7 +171,7 @@ class WorkflowAuditTests(QtTestCase):
         self.assertFalse(self.page._playing_sequence)
         self.assertFalse(self.page.next_timer.isActive())
         self.assertTrue(self.page.playButton.isEnabled())
-        self.assertEqual(self.page.current_index, 0)
+        self.assertEqual(self.page.project.current_index, 0)
         self.page.create_error_info_bar.assert_called_once()
 
     def test_late_audio_error_after_stop_does_not_interrupt_other_playback(self):
@@ -194,13 +195,13 @@ class WorkflowAuditTests(QtTestCase):
         self.assertEqual(self.page.pageJumpSpinBox.maximum(), 3)
         self.page.pageJumpSpinBox.setValue(3)
         self.page.jump_page()
-        self.assertEqual(self.page.current_index, 1)
+        self.assertEqual(self.page.project.current_index, 1)
         self.page.pageJumpSpinBox.setValue(2)
         with patch.object(self.page, 'stop_audio') as stop, patch('app.presentation.slideshow.goto') as goto:
             self.page.jump_page()
         stop.assert_not_called()
         goto.assert_not_called()
-        self.assertEqual(self.page.current_index, 1)
+        self.assertEqual(self.page.project.current_index, 1)
 
     def test_ppt_note_export_rejects_removed_slides_instead_of_silently_omitting_script(self):
         make_ppt(self.source, 1)
@@ -208,7 +209,7 @@ class WorkflowAuditTests(QtTestCase):
             self.tools.write_to_ppt()
         choose.assert_not_called()
         self.tools.create_warning_info_bar.assert_called_once()
-        self.assertEqual(self.page.notes[3], '第三页')
+        self.assertEqual(self.page.project.notes[3], '第三页')
 
     def test_ppt_note_export_preserves_original_and_writes_all_existing_script_pages(self):
         from pptx import Presentation
@@ -237,11 +238,11 @@ class WorkflowAuditTests(QtTestCase):
         self.assertFalse(configure.call_args.kwargs['force_regenerate'])
 
     def test_record_save_failure_keeps_generated_audio_playable(self):
-        result = GenerationResult(list(self.page.media_list), [0.1, 0.1], ['first', 'third'], ['wav', 'wav'],
+        result = GenerationResult(list(self.page.project.media_list), [0.1, 0.1], ['first', 'third'], ['wav', 'wav'],
                                   generation_profile={'mode': 'edge'}, speaker='原音色')
         with patch.object(self.page, 'save_session_record', side_effect=OSError('disk full')):
             self.page.thread_save_finish(result)
-        self.assertTrue(self.page.is_import)
+        self.assertTrue(self.page.project.audio_loaded)
         self.assertTrue(self.page.playCardWidget.isEnabled())
         self.assertTrue(self.page.getFileButton.isEnabled())
         self.page.create_error_info_bar.assert_called_once()
@@ -253,12 +254,12 @@ class WorkflowAuditTests(QtTestCase):
         self.assertEqual(profile['mode'], 'bailian')
         self.assertEqual(speaker, '原发音人')
         self.page.save_session_record()
-        saved = json.loads(self.page.session_record_path.read_text(encoding='utf-8'))
+        saved = json.loads(self.page.project.session_record_path.read_text(encoding='utf-8'))
         self.assertEqual(saved['generation_profile'], profile)
         self.assertEqual(saved['speaker'], speaker)
 
     def test_incomplete_or_busy_audio_disables_exports_and_rechecks_before_choosing_directory(self):
-        self.page.media_list.pop()
+        self.page.project.media_list.pop()
         self.tools.refresh_state()
         audio_buttons = [button for card in self.tools.export_cards
                          for button in card.findChildren(PushButton)
@@ -287,7 +288,7 @@ class WorkflowAuditTests(QtTestCase):
         self.assertEqual(previous, {path.name: path.read_bytes() for path in (destination / 'lesson_Audio').iterdir()})
 
     def test_export_name_remains_inside_chosen_directory(self):
-        self.page.note_file_name = '../课程:第一节/讲稿'
+        self.page.project.note_file_name = '../课程:第一节/讲稿'
         name = self.tools.export_name()
         self.assertNotIn('/', name)
         self.assertNotIn(':', name)
@@ -306,6 +307,7 @@ class WorkflowAuditTests(QtTestCase):
         audio.write_bytes(b'keep shared audio')
         a, b = paths.SESSION_DIR / 'a.json', paths.SESSION_DIR / 'b.json'
         dialog = SessionHistoryDialog(paths.SESSION_DIR, self.page)
+        self.wait_for_history(dialog)
         self.addCleanup(dialog.deleteLater)
         unlink = Path.unlink
         def fail_one(path, *args, **kwargs):
@@ -318,6 +320,7 @@ class WorkflowAuditTests(QtTestCase):
             confirm.return_value.exec.return_value = True
             confirm.return_value.should_delete_audio.return_value = True
             dialog.delete_selected()
+        self.wait_for_history(dialog)
         self.assertFalse(a.exists())
         self.assertTrue(b.exists())
         self.assertEqual(audio.read_bytes(), b'keep shared audio')
@@ -326,17 +329,19 @@ class WorkflowAuditTests(QtTestCase):
         orphan = paths.AUDIO_CACHE_DIR / 'orphan.wav'
         orphan.write_bytes(b'orphan')
         dialog = SessionHistoryDialog(paths.SESSION_DIR, self.page)
+        self.wait_for_history(dialog)
         self.addCleanup(dialog.deleteLater)
         dialog.clean_orphan_audio()
+        self.wait_for_history(dialog)
         self.assertFalse(orphan.exists())
-        self.assertTrue(all(path.is_file() for path in self.page.media_list))
+        self.assertTrue(all(path.is_file() for path in self.page.project.media_list))
 
     def test_project_package_omits_credentials_without_changing_cache_identity(self):
         profile = {'mode': 'qwen_clone', 'options': {'api_key': 'test-only-key', 'voice': 'voice-1'}}
-        items = project_package.build_items(self.page.notes_list, self.page.notes_duration_list,
-                                             self.page.note_cache_keys, self.page.note_cache_exts, self.page.media_list)
+        items = project_package.build_items(self.page.project.notes_list, self.page.project.notes_duration_list,
+                                             self.page.project.note_cache_keys, self.page.project.note_cache_exts, self.page.project.media_list)
         target = self.root / 'lecture.pprpkg'
-        project_package.export_package(target, items=items, notes=self.page.notes, mark='●',
+        project_package.export_package(target, items=items, notes=self.page.project.notes, mark='●',
                                        source_name='lecture', generation_profile=profile, speaker='voice-1')
         manifest = project_package.read_manifest(target)
         self.assertNotIn('api_key', manifest['generation_profile']['options'])
@@ -347,10 +352,12 @@ class WorkflowAuditTests(QtTestCase):
     def test_malformed_history_record_does_not_break_list_or_cache_cleanup(self):
         (paths.SESSION_DIR / 'invalid.json').write_text('[]', encoding='utf-8')
         dialog = SessionHistoryDialog(paths.SESSION_DIR, self.page)
+        self.wait_for_history(dialog)
         self.addCleanup(dialog.deleteLater)
         self.assertEqual(dialog.table.rowCount(), 1)
         dialog.clean_orphan_audio()
-        self.assertTrue(all(path.is_file() for path in self.page.media_list))
+        self.wait_for_history(dialog)
+        self.assertTrue(all(path.is_file() for path in self.page.project.media_list))
 
     def test_voice_creation_does_not_select_it_and_cancelled_deletion_does_not_call_service(self):
         from ui.dialogs.qwen_clone_voice_dialog import QwenCloneVoiceDialog
@@ -377,7 +384,7 @@ class WorkflowAuditTests(QtTestCase):
                                        source_name='工程包', generation_profile={}, speaker='', include_audio=False)
         with patch('app.paths.ensure_runtime_dirs'), patch.object(self.page, 'init_general_play') as generate:
             self.assertTrue(self.page.import_file(target))
-        self.assertEqual(self.page.notes, {2: '工程包讲稿'})
+        self.assertEqual(self.page.project.notes, {2: '工程包讲稿'})
         self.assertTrue(self.page.is_restricted())
         generate.assert_called_once()
 
@@ -387,7 +394,7 @@ class WorkflowAuditTests(QtTestCase):
             dialog.return_value.exec.return_value = True
             dialog.return_value.get_mark.return_value = '|'
             self.page.show_edit_mark_dialog()
-        self.assertEqual(self.page.mark, '|')
+        self.assertEqual(self.page.project.mark, '|')
         generate.assert_called_once_with()
         with patch.object(self.page, 'is_busy', return_value=True), \
              patch('ui.pages.reviewer_page.EditMarkMessageBox') as dialog:
@@ -398,14 +405,72 @@ class WorkflowAuditTests(QtTestCase):
         settings = self.make_settings()
         self.engine.set_current_option('rate', '+10%')
         self.ctx.config.save.return_value = False
-        with patch('ui.pages.settings_page.MessageBox') as dialog, \
+        with patch('ui.pages.settings_page.UnsavedSettingsDialog') as dialog, \
              patch.object(settings, 'create_error_info_bar'):
             dialog.return_value.exec.return_value = True
             self.assertFalse(settings.prompt_unsaved_changes(allow_regenerate=False))
         self.assertTrue(settings.is_dirty())
 
+    def test_leaving_settings_can_continue_editing_without_losing_draft(self):
+        settings = self.make_settings()
+        self.engine.set_current_option('rate', '+10%')
+        window = Mock()
+        with patch('ui.pages.settings_page.UnsavedSettingsDialog') as dialog, \
+             patch.object(settings, 'window', return_value=window):
+            dialog.return_value.exec.return_value = False
+            self.assertFalse(settings.prompt_unsaved_changes())
+        window.switchTo.assert_called_once_with(settings)
+        self.assertTrue(settings.is_dirty())
+        self.assertEqual(self.engine.get_current_option_values()['rate'], '+10%')
+
+    def test_leaving_settings_can_discard_changes_without_saving(self):
+        settings = self.make_settings()
+        original = self.engine.get_current_option_values()['rate']
+        self.engine.set_current_option('rate', '+10%')
+        with patch('ui.pages.settings_page.UnsavedSettingsDialog') as dialog:
+            dialog.return_value.exec.return_value = True
+            dialog.return_value.action = 'discard'
+            self.assertTrue(settings.prompt_unsaved_changes())
+        self.assertFalse(settings.is_dirty())
+        self.assertEqual(self.engine.get_current_option_values()['rate'], original)
+
+    def test_cancelled_new_ppt_import_keeps_original_project_audio_and_position(self):
+        from pptx import Presentation
+        target = make_ppt(self.root / 'another.pptx', 3)
+        deck = Presentation(target)
+        deck.slides[0].notes_slide.notes_text_frame.text = '新讲稿第一段●第二段'
+        deck.save(target)
+        project = self.page.project
+        project.current_index = 1
+        record = self.record()
+        record_bytes = record.read_bytes()
+        project.session_record_path = record
+        self.page.refresh_presentation_state()
+        original = self.page._project_snapshot()
+        with patch.object(self.page, '_confirm_animation_alignment', return_value=False), \
+             patch.object(self.page.save_thread, 'start') as generate:
+            self.assertFalse(self.page.import_file(target))
+        generate.assert_not_called()
+        self.assertIs(self.page.project, project)
+        self.assertEqual(project.__dict__, original[0].__dict__)
+        self.assertEqual(record.read_bytes(), record_bytes)
+        self.assertTrue(all(p.is_file() for p in project.media_list))
+        self.assertEqual(self.page.notes_path_text.text, original[3])
+
+    def test_cancelled_script_and_ai_updates_preserve_original_audio_and_text(self):
+        target = self.root / 'changed.json'
+        target.write_text(json.dumps({'pages': [{'page': 1, 'text': '新讲稿第一段●第二段'}]}), encoding='utf-8')
+        original = self.page._project_snapshot()
+        with patch.object(self.page, '_confirm_animation_alignment', return_value=False), \
+             patch.object(self.page.save_thread, 'start') as generate:
+            self.assertFalse(self.page.import_file(target))
+            self.assertEqual(self.page.project.__dict__, original[0].__dict__)
+            self.assertEqual(self.page.apply_rewritten_notes({1: '新讲稿●第二段'}), -1)
+        generate.assert_not_called()
+        self.assertEqual(self.page.project.__dict__, original[0].__dict__)
+
     def test_cancelling_separator_edit_or_saving_same_mark_does_not_regenerate(self):
-        original = self.page.mark
+        original = self.page.project.mark
         for accepted in (False, True):
             with patch('ui.pages.reviewer_page.EditMarkMessageBox') as dialog, \
                  patch.object(self.page, 'regenerate') as generate:
@@ -413,14 +478,14 @@ class WorkflowAuditTests(QtTestCase):
                 dialog.return_value.get_mark.return_value = original
                 self.page.show_edit_mark_dialog()
                 generate.assert_not_called()
-                self.assertEqual(self.page.mark, original)
+                self.assertEqual(self.page.project.mark, original)
 
     def test_late_preview_does_not_interrupt_playback_started_in_another_page(self):
         settings = self.make_settings()
         settings._preview_requested = True
         settings.on_stop_requested(self.page)
         with patch.object(settings.preview_player, 'play') as play:
-            settings.on_preview_generated(str(self.page.media_list[0]))
+            settings.on_preview_generated(str(self.page.project.media_list[0]))
         play.assert_not_called()
 
     def test_drop_resolves_unsaved_settings_before_importing(self):
@@ -521,7 +586,7 @@ class ShutdownTests(QtTestCase):
     def test_window_waits_for_worker_and_then_closes_without_destroying_it(self):
         engine = TTSEngine()
         engine.set_mode('edge')
-        ctx = NS(version='1.6.3', updated_to='', tts_engine=engine, app_settings=AppSettings(),
+        ctx = NS(version='1.6.3', updated_to='', tts_engine=engine, app_settings=AppSettings(), project=ProjectSession(),
                  config=Mock(), playback_bus=PlaybackBus(), hotkeys=Mock(), slideshow_watcher=Mock())
         with patch('app.paths.ensure_runtime_dirs'), \
              patch.object(engine, 'get_voices_list', return_value=['zh-CN-XiaoxiaoNeural']), \

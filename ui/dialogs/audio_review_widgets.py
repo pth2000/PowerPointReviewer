@@ -1,57 +1,15 @@
 """配音审听使用的片段列表与轻量状态提示。"""
 
 import math
-from enum import Enum
 
 from PySide6.QtCore import Qt, QPointF, QRectF
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QTextLayout
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QTextLayout
 from PySide6.QtWidgets import QSizePolicy, QStyle, QWidget
-from qfluentwidgets import CaptionLabel, FluentIconBase, SegmentedWidget, Theme, isDarkTheme, setCustomStyleSheet, themeColor
-from qfluentwidgets.common.icon import getIconColor
+from qfluentwidgets import CaptionLabel, SegmentedWidget, isDarkTheme, setCustomStyleSheet, themeColor
 from qfluentwidgets.components.widgets.table_view import TableItemDelegate
 
 
 SEGMENT_ROLE = int(Qt.ItemDataRole.UserRole) + 1
-
-
-class ReviewIcon(FluentIconBase, Enum):
-    UNDO = 'undo'
-    REDO = 'redo'
-    PREVIOUS = 'previous'
-    NEXT = 'next'
-
-    def icon(self, theme=Theme.AUTO, color=None):
-        return self.qicon(reverse=theme != Theme.AUTO and
-                          ((theme == Theme.DARK) != isDarkTheme()))
-
-    def render(self, painter, rect, theme=Theme.AUTO, indexes=None, **attributes):
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.translate(rect.x(), rect.y())
-        painter.scale(rect.width() / 24, rect.height() / 24)
-        if self in (ReviewIcon.REDO, ReviewIcon.NEXT):
-            painter.translate(24, 0)
-            painter.scale(-1, 1)
-        painter.setPen(QPen(QColor(getIconColor(theme)), 1.7, Qt.PenStyle.SolidLine,
-                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        path = QPainterPath()
-        if self in (ReviewIcon.PREVIOUS, ReviewIcon.NEXT):
-            path.moveTo(5, 5)
-            path.lineTo(5, 19)
-            path.moveTo(19, 5)
-            path.lineTo(9, 12)
-            path.lineTo(19, 19)
-            path.closeSubpath()
-        else:
-            path.moveTo(9, 5)
-            path.lineTo(4, 10)
-            path.lineTo(9, 15)
-            path.moveTo(4, 10)
-            path.lineTo(14, 10)
-            path.cubicTo(22, 10, 22, 20, 14, 20)
-        painter.drawPath(path)
-        painter.restore()
 
 
 class AudioSourceSwitch(SegmentedWidget):

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from app import paths
+from app.logging_setup import get_logger
 from app.audio.segments import references
 
 AUDIO_SUFFIXES = ('.wav', '.mp3')
@@ -33,27 +34,14 @@ def iter_cache_files():
             yield path
 
 
-def stats() -> tuple[int, int]:
-    """返回缓存文件数量和总字节数。"""
-    count = 0
-    total = 0
-    for path in iter_cache_files():
-        try:
-            total += path.stat().st_size
-            count += 1
-        except OSError:
-            continue
-    return count, total
-
-
 def keys_of_record(record_path) -> set[str]:
     """读取一条历史记录引用的全部非空缓存键；坏记录按空集合处理。"""
     keys: set[str] = set()
     try:
         with Path(record_path).open('r', encoding='utf-8') as f:
             record = json.load(f)
-    except Exception as e:
-        print(f'[缓存] 无法解析历史记录 {Path(record_path).name}：{e}')
+    except Exception:
+        get_logger().warning('无法解析历史记录：%s', Path(record_path).name, exc_info=True)
         return keys
     if not isinstance(record, dict):
         return keys
@@ -127,8 +115,8 @@ def _remove(paths_to_remove) -> tuple[int, int]:
         try:
             size = path.stat().st_size
             path.unlink()
-        except OSError as e:
-            print(f'[缓存] 删除失败 {path.name}：{e}')
+        except OSError:
+            get_logger().warning('音频缓存删除失败：%s', path.name, exc_info=True)
             continue
         removed += 1
         freed += size
@@ -150,9 +138,3 @@ def remove_keys(keys) -> tuple[int, int]:
     wanted = {str(k).strip() for k in keys if str(k).strip()}
     targets = [path for path in iter_cache_files() if path.stem in wanted]
     return _remove(targets)
-
-
-def summary() -> str:
-    """返回适合直接显示在界面上的缓存占用摘要。"""
-    count, total = stats()
-    return f'{count} 条 / {format_size(total)}'

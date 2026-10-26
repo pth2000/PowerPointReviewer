@@ -1,6 +1,8 @@
 """只连接运行中的演示软件，并从文稿注册补查其他实例。"""
 
 from pathlib import Path
+import os
+import re
 import threading
 
 
@@ -37,6 +39,54 @@ PROG_IDS = (
     ('PowerPoint.Application', 'PowerPoint'),
     ('Kwpp.Application', 'WPS 演示'),
 )
+
+PREFERENCES = (('auto', '自动选择'), ('powerpoint', 'PowerPoint 优先'), ('wps', 'WPS 演示优先'))
+
+
+def installed_applications():
+    """检查两种注册表视图中的启动程序是否存在，不创建 COM 实例。"""
+    try:
+        import winreg
+    except ImportError:
+        return ()
+    installed = []
+    for prog_id, label in PROG_IDS:
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            try:
+                access = winreg.KEY_READ | view
+                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, prog_id + r'\CLSID', 0, access) as key:
+                    clsid = winreg.QueryValueEx(key, '')[0]
+                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT,
+                                    rf'CLSID\{clsid}\LocalServer32', 0, access) as key:
+                    try:
+                        executable = winreg.QueryValueEx(key, 'ServerExecutable')[0]
+                    except OSError:
+                        command = str(winreg.QueryValueEx(key, '')[0]).strip()
+                        match = re.match(r'^"([^"]+)"|^(.+?\.exe)(?:\s|$)', command, re.I)
+                        executable = next((part for part in match.groups() if part), '') if match else ''
+                if executable and Path(os.path.expandvars(str(executable))).is_file():
+                    installed.append((prog_id, label))
+                    break
+            except OSError:
+                continue
+    return tuple(installed)
+
+
+def ordered_prog_ids(preference='auto'):
+    """显式偏好优先；未知配置按自动选择处理。"""
+    preferred = {'powerpoint': PROG_IDS[0][0], 'wps': PROG_IDS[1][0]}.get(preference)
+    return tuple(sorted(PROG_IDS, key=lambda item: bool(preferred and item[0] != preferred)))
+
+
+def application_candidates(running, preference='auto'):
+    """自动时先复用运行实例；显式偏好允许先启动指定软件，再回退。"""
+    running = list(running)
+    candidates = running + [(prog, name, None) for prog, name in ordered_prog_ids(preference)
+                            if not any(item[0] == prog for item in running)]
+    if preference in ('powerpoint', 'wps'):
+        ranks = {prog: index for index, (prog, _name) in enumerate(ordered_prog_ids(preference))}
+        candidates.sort(key=lambda item: ranks.get(item[0], len(ranks)))
+    return candidates
 
 # WPS 的 Application.Name 与接口 IID 也会返回 PowerPoint 的兼容值；
 # 用类型库标识区分软件，不依赖界面语言或窗口标题。

@@ -8,6 +8,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QScrollArea, QStackedWidget, QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon, NavigationInterface, NavigationItemPosition, PushButton
 
+from app.project.model import ProjectSession
 from app.settings_store import AppSettings
 from qt_test_case import QtTestCase
 from ui.onboarding import UsageGuide
@@ -60,9 +61,10 @@ class Page(QWidget):
         layout.addStretch()
         self.bgScrollArea.setWidget(content)
         outer.addWidget(self.bgScrollArea)
-        self.notes = {}
-        self.media_list = []
-        self.is_import = False
+        self.project = ProjectSession()
+        self.project.notes = {}
+        self.project.media_list = []
+        self.project.audio_loaded = False
         self.busy = False
         self.save_thread = Worker(self)
         self.import_pptx = Mock()
@@ -129,8 +131,8 @@ class OnboardingTests(QtTestCase):
         page.save_thread.started.emit()
         self.assertFalse(self.guide.overlay.isVisible())
         if success:
-            page.is_import = True
-            page.media_list = ['audio.wav']
+            page.project.audio_loaded = True
+            page.project.media_list = ['audio.wav']
             page.save_thread.signal_finish.emit(NS())
         page.busy = False
         page.save_thread.finished.emit()
@@ -255,8 +257,8 @@ class OnboardingTests(QtTestCase):
         self.guide.next()
         self.guide.next()
         page = self.window.ppt_r
-        page.is_import = True
-        page.media_list = ['history.wav']
+        page.project.audio_loaded = True
+        page.project.media_list = ['history.wav']
         page.audio_changed.emit()
         self.assertEqual(self.guide.step, 'play')
 
@@ -322,9 +324,9 @@ class OnboardingTests(QtTestCase):
         self.guide.overlay.card.skip_button.click()
         self.assertIsNone(self.guide.step)
         self.window.ppt_r.import_pptx.assert_not_called()
-        self.assertFalse(self.window.ppt_r.notes)
-        self.assertFalse(self.window.ppt_r.media_list)
-        self.assertFalse(self.window.ppt_r.is_import)
+        self.assertFalse(self.window.ppt_r.project.notes)
+        self.assertFalse(self.window.ppt_r.project.media_list)
+        self.assertFalse(self.window.ppt_r.project.audio_loaded)
         self.assertFalse(self.window.ppt_r.busy)
 
     def test_replay_from_settings_shows_welcome_even_after_guide_was_completed(self):
@@ -390,9 +392,9 @@ class OnboardingTests(QtTestCase):
         self.assertFalse(self.window.context.app_settings.get('onboarding_tools_seen'))
         self.window.context.config.save_later.assert_not_called()
         page.import_pptx.assert_not_called()
-        self.assertFalse(page.is_import)
-        self.assertFalse(page.notes)
-        self.assertFalse(page.media_list)
+        self.assertFalse(page.project.audio_loaded)
+        self.assertFalse(page.project.notes)
+        self.assertFalse(page.project.media_list)
 
     def test_advanced_guide_can_close_and_restart_without_marking_basic_guide_seen(self):
         self.guide.start_advanced()

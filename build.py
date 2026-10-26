@@ -58,6 +58,8 @@ def dotnet_env() -> dict:
 
 def run_pyinstaller():
     """构建 PyInstaller 产物。"""
+    subprocess.run([sys.executable, str(ROOT / 'scripts' / 'generate_ui.py')],
+                   cwd=ROOT, check=True)
     subprocess.run([sys.executable, '-m', 'PyInstaller', 'PowerPointReviewer.spec', '--noconfirm'],
                    cwd=ROOT, check=True)
 

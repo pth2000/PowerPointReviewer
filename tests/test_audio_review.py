@@ -93,19 +93,19 @@ class AudioReviewTests(QtTestCase):
                       playback_bus=PlaybackBus(), hotkeys=Mock(), slideshow_watcher=Mock())
         with patch('app.paths.ensure_runtime_dirs'):
             self.page = PPTReviewer(self.ctx)
-        self.page.notes = {1: '第一段●第二段', 2: '第三段'}
-        self.page.mark_split()
+        self.page.project.notes = {1: '第一段●第二段', 2: '第三段'}
+        self.page.project.split_notes(comments_enabled=self.page.ctx.app_settings.get('script_comments_enabled'))
         self.page.audio_cache_path = paths.AUDIO_CACHE_DIR
         self.page.session_root_path = paths.SESSION_DIR
-        self.page.media_list = [make_wav(paths.AUDIO_CACHE_DIR / f'voice{index}.wav') for index in range(3)]
-        self.page.note_cache_keys = [f'voice{index}' for index in range(3)]
-        self.page.note_cache_exts = ['wav'] * 3
-        self.page.notes_duration_list = [1] * 3
-        self.page.generation_profile = self.engine.get_generation_profile()
-        self.page.generation_speaker = '测试音色'
-        self.page.is_import = True
+        self.page.project.media_list = [make_wav(paths.AUDIO_CACHE_DIR / f'voice{index}.wav') for index in range(3)]
+        self.page.project.note_cache_keys = [f'voice{index}' for index in range(3)]
+        self.page.project.note_cache_exts = ['wav'] * 3
+        self.page.project.notes_duration_list = [1] * 3
+        self.page.project.generation_profile = self.engine.get_generation_profile()
+        self.page.project.generation_speaker = '测试音色'
+        self.page.project.audio_loaded = True
         self.page.save_session_record()
-        self.record = self.page.session_record_path
+        self.record = self.page.project.session_record_path
         self.dialog = AudioReviewDialog(self.page)
         self.page.audio_review_dialog = self.dialog
         self.dialog.output.setMuted(True)
@@ -147,29 +147,29 @@ class AudioReviewTests(QtTestCase):
         self.dialog.stop()
 
     def test_render_compare_adopt_restore_and_undo_update_one_record(self):
-        original = self.page.media_list[0].read_bytes()
+        original = self.page.project.media_list[0].read_bytes()
         before = self.record.read_bytes()
         self.render()
         self.assertEqual(self.record.read_bytes(), before)
-        self.assertEqual(self.page.media_list[0].read_bytes(), original)
+        self.assertEqual(self.page.project.media_list[0].read_bytes(), original)
         self.dialog.adopt()
-        self.assertEqual(self.page.session_record_path, self.record)
+        self.assertEqual(self.page.project.session_record_path, self.record)
         self.assertEqual(len(list(paths.SESSION_DIR.glob('*.json'))), 1)
-        self.assertAlmostEqual(self.page.notes_duration_list[0], 2 / 3, delta=0.05)
-        self.assertEqual(self.page.media_list[1].name, 'voice1.wav')
+        self.assertAlmostEqual(self.page.project.notes_duration_list[0], 2 / 3, delta=0.05)
+        self.assertEqual(self.page.project.media_list[1].name, 'voice1.wav')
         saved = json.loads(self.record.read_text(encoding='utf-8'))
         self.assertEqual(saved['items'][0]['audio_edit']['settings']['speed'], 1.5)
-        self.assertEqual(saved['items'][0]['cache_key'], self.page.note_cache_keys[0])
+        self.assertEqual(saved['items'][0]['cache_key'], self.page.project.note_cache_keys[0])
         self.assertEqual(paths.AUDIO_CACHE_DIR.joinpath('voice0.wav').read_bytes(), original)
-        tuned = self.page.note_cache_keys[0]
-        original_key = self.page.audio_edits[0]['original']['key']
+        tuned = self.page.project.note_cache_keys[0]
+        original_key = self.page.project.audio_edits[0]['original']['key']
         self.assertNotEqual(original_key, 'voice0')
         self.dialog.restore_original()
-        self.assertEqual(self.page.note_cache_keys[0], original_key)
-        self.assertNotIn(0, self.page.audio_edits)
+        self.assertEqual(self.page.project.note_cache_keys[0], original_key)
+        self.assertNotIn(0, self.page.project.audio_edits)
         self.dialog.undo()
-        self.assertEqual(self.page.note_cache_keys[0], tuned)
-        self.assertIn(0, self.page.audio_edits)
+        self.assertEqual(self.page.project.note_cache_keys[0], tuned)
+        self.assertIn(0, self.page.project.audio_edits)
 
     def test_adjusting_again_uses_unprocessed_base(self):
         self.render(speed=2, volume=50)
@@ -201,9 +201,9 @@ class AudioReviewTests(QtTestCase):
         self.assertEqual(self.dialog.candidates[0]['settings']['volume'], 100)
         self.assertEqual(self.dialog.candidates[1]['settings']['volume'], 50)
         self.dialog.adopt()
-        self.assertEqual(set(self.page.audio_edits), {0, 1})
+        self.assertEqual(set(self.page.project.audio_edits), {0, 1})
         self.assertEqual(self.dialog.selected(), [0, 1])
-        self.assertAlmostEqual(self.page.notes_duration_list[0], 1.25, delta=0.05)
+        self.assertAlmostEqual(self.page.project.notes_duration_list[0], 1.25, delta=0.05)
         self.dialog.pages.setCurrentIndex(2)
         self.assertEqual(self.dialog.table.rowCount(), 1)
         self.assertEqual(self.dialog.current(), 2)
@@ -214,46 +214,46 @@ class AudioReviewTests(QtTestCase):
 
     def test_failed_save_rolls_back_adoption_and_candidate_can_retry(self):
         self.render()
-        old = list(self.page.media_list)
+        old = list(self.page.project.media_list)
         original = self.record.read_bytes()
         with patch.object(self.page, 'save_session_record', side_effect=OSError('disk full')):
             self.dialog.adopt()
-        self.assertEqual(self.page.media_list, old)
-        self.assertEqual(self.page.audio_edits, {})
+        self.assertEqual(self.page.project.media_list, old)
+        self.assertEqual(self.page.project.audio_edits, {})
         self.assertEqual(self.record.read_bytes(), original)
         self.assertIn(0, self.dialog.candidates)
         self.dialog.adopt()
-        self.assertIn(0, self.page.audio_edits)
+        self.assertIn(0, self.page.project.audio_edits)
 
     def test_stale_candidate_cannot_apply_to_a_different_script(self):
         self.render()
-        self.page.notes_list[0] = {'page': 1, 'text': '新讲稿'}
+        self.page.project.notes_list[0] = {'page': 1, 'text': '新讲稿'}
         self.dialog.adopt()
-        self.assertEqual(self.page.audio_edits, {})
+        self.assertEqual(self.page.project.audio_edits, {})
         self.assertFalse(self.dialog.candidates)
 
     def test_generation_reuses_unchanged_tuned_audio_and_package_keeps_original(self):
         self.render()
         self.dialog.adopt()
-        key = self.page.note_cache_keys[0]
-        original_key = self.page.audio_edits[0]['original']['key']
+        key = self.page.project.note_cache_keys[0]
+        original_key = self.page.project.audio_edits[0]['original']['key']
         task = self.page.save_thread
         task.audio_cache_path = paths.AUDIO_CACHE_DIR
         task.output_path = self.root / 'generated'
         task.output_path.mkdir()
         with patch.object(self.engine, 'validate_generation_settings'), \
              patch.object(self.engine, 'save_file') as synthesize:
-            task.configure(self.page.notes_list[:1], 0, audio_edits=self.page.audio_edits)
+            task.configure(self.page.project.notes_list[:1], 0, audio_edits=self.page.project.audio_edits)
             result = task.save_wav()
         synthesize.assert_not_called()
         self.assertEqual(result.cache_keys, [key])
         self.assertIn(0, result.audio_edits)
-        items = project_package.build_items(self.page.notes_list, self.page.notes_duration_list,
-                                            self.page.note_cache_keys, self.page.note_cache_exts,
-                                            self.page.media_list, audio_edits=self.page.audio_edits)
+        items = project_package.build_items(self.page.project.notes_list, self.page.project.notes_duration_list,
+                                            self.page.project.note_cache_keys, self.page.project.note_cache_exts,
+                                            self.page.project.media_list, audio_edits=self.page.project.audio_edits)
         package = self.root / 'lesson.pprpkg'
-        project_package.export_package(package, items=items, notes=self.page.notes, mark='●',
-                                       source_name='lesson', generation_profile=self.page.generation_profile,
+        project_package.export_package(package, items=items, notes=self.page.project.notes, mark='●',
+                                       source_name='lesson', generation_profile=self.page.project.generation_profile,
                                        speaker='test', script_comments_enabled=False)
         import zipfile
         with zipfile.ZipFile(package) as zipped:
@@ -265,14 +265,14 @@ class AudioReviewTests(QtTestCase):
         with patch('app.paths.ensure_runtime_dirs'):
             imported = project_package.import_package(package)
         self.page.load_session_record(imported['record_path'])
-        self.assertEqual(self.page.note_cache_keys[0], key)
-        self.assertEqual(self.page.audio_edits[0]['original']['key'], original_key)
-        srt = exporters.build_srt(self.page.notes_list, self.page.notes_duration_list)
+        self.assertEqual(self.page.project.note_cache_keys[0], key)
+        self.assertEqual(self.page.project.audio_edits[0]['original']['key'], original_key)
+        srt = exporters.build_srt(self.page.project.notes_list, self.page.project.notes_duration_list)
         self.assertIn('00:00:00,667', srt)
 
     def test_regenerate_candidate_preserves_source_and_spoken_text_is_not_subtitle(self):
         # Existing records may contain a spoken-text override from an earlier version.
-        self.page.audio_edits[0] = {'spoken_text': '第一段的读音修正'}
+        self.page.project.audio_edits[0] = {'spoken_text': '第一段的读音修正'}
         self.dialog._populate_segments()
         self.assertEqual(self.dialog.script_text.text(), '第一段的读音修正')
         def synthesize(text, path):
@@ -288,9 +288,9 @@ class AudioReviewTests(QtTestCase):
         self.assertAlmostEqual(candidate['base_duration'], 1, delta=0.01)
         self.assertAlmostEqual(candidate['duration'], 0.5, delta=0.05)
         self.dialog.adopt()
-        self.assertEqual(self.page.notes_list[0]['text'], '第一段')
-        self.assertEqual(self.page.audio_edits[0]['spoken_text'], '第一段的读音修正')
-        self.assertEqual(self.page.notes[1], '第一段●第二段')
+        self.assertEqual(self.page.project.notes_list[0]['text'], '第一段')
+        self.assertEqual(self.page.project.audio_edits[0]['spoken_text'], '第一段的读音修正')
+        self.assertEqual(self.page.project.notes[1], '第一段●第二段')
         self.assertEqual(self.dialog.table.item(0, 2).data(SEGMENT_ROLE)['text'], '第一段的读音修正')
         self.dialog.search.setText('读音修正')
         self.assertEqual(self.dialog.table.rowCount(), 1)
@@ -298,26 +298,26 @@ class AudioReviewTests(QtTestCase):
     def test_undo_redo_restores_audio_settings_and_original_restore(self):
         self.render()
         self.dialog.adopt()
-        first = self.page.note_cache_keys[0]
+        first = self.page.project.note_cache_keys[0]
         self.render(speed=2)
         self.dialog.adopt()
-        second = self.page.note_cache_keys[0]
+        second = self.page.project.note_cache_keys[0]
         self.assertNotEqual(first, second)
         self.dialog.undo()
-        self.assertEqual(self.page.note_cache_keys[0], first)
-        self.assertEqual(self.page.audio_edits[0]['settings']['speed'], 1.5)
+        self.assertEqual(self.page.project.note_cache_keys[0], first)
+        self.assertEqual(self.page.project.audio_edits[0]['settings']['speed'], 1.5)
         with patch.object(self.engine, 'save_file') as generate:
             self.dialog.redo()
         generate.assert_not_called()
-        self.assertEqual(self.page.note_cache_keys[0], second)
-        self.assertEqual(self.page.audio_edits[0]['settings']['speed'], 2)
+        self.assertEqual(self.page.project.note_cache_keys[0], second)
+        self.assertEqual(self.page.project.audio_edits[0]['settings']['speed'], 2)
         self.dialog.restore_original()
-        original = self.page.note_cache_keys[0]
-        self.assertNotIn(0, self.page.audio_edits)
+        original = self.page.project.note_cache_keys[0]
+        self.assertNotIn(0, self.page.project.audio_edits)
         self.dialog.undo()
-        self.assertEqual(self.page.note_cache_keys[0], second)
+        self.assertEqual(self.page.project.note_cache_keys[0], second)
         self.dialog.redo()
-        self.assertEqual(self.page.note_cache_keys[0], original)
+        self.assertEqual(self.page.project.note_cache_keys[0], original)
         saved = json.loads(self.record.read_text(encoding='utf-8'))
         self.assertEqual(saved['items'][0]['cache_key'], original)
         self.assertNotIn('audio_edit', saved['items'][0])
@@ -325,19 +325,19 @@ class AudioReviewTests(QtTestCase):
     def test_redo_retains_audio_after_cache_cleanup_and_failed_write_can_retry(self):
         self.render()
         self.dialog.adopt()
-        adopted = self.page.note_cache_keys[0]
+        adopted = self.page.project.note_cache_keys[0]
         self.dialog.undo()
-        original = self.page.note_cache_keys[0]
+        original = self.page.project.note_cache_keys[0]
         audio_cache.clear_orphans(self.page.protected_audio_keys())
         self.assertTrue((paths.AUDIO_CACHE_DIR / f'{adopted}.wav').is_file())
         before = self.record.read_bytes()
         with patch.object(self.page, 'save_session_record', side_effect=OSError('disk full')):
             self.dialog.redo()
-        self.assertEqual(self.page.note_cache_keys[0], original)
+        self.assertEqual(self.page.project.note_cache_keys[0], original)
         self.assertEqual(self.record.read_bytes(), before)
         self.assertEqual(len(self.dialog.redo_stack), 1)
         self.dialog.redo()
-        self.assertEqual(self.page.note_cache_keys[0], adopted)
+        self.assertEqual(self.page.project.note_cache_keys[0], adopted)
         self.assertFalse(self.dialog.redo_stack)
 
     def test_new_adoption_clears_redo_but_preview_and_draft_keep_it(self):
@@ -375,12 +375,12 @@ class AudioReviewTests(QtTestCase):
     def test_cancel_undo_keeps_pending_work_and_other_segments_drafts_are_preserved(self):
         self.render()
         self.dialog.adopt()
-        key = self.page.note_cache_keys[0]
+        key = self.page.project.note_cache_keys[0]
         self.dialog.volume.setValue(30)
         with patch('ui.dialogs.audio_review_dialog.MessageBox') as box:
             box.return_value.exec.return_value = False
             self.dialog.undo()
-        self.assertEqual(self.page.note_cache_keys[0], key)
+        self.assertEqual(self.page.project.note_cache_keys[0], key)
         self.assertEqual(self.dialog.drafts[0]['settings']['volume'], 30)
         self.assertEqual(len(self.dialog.undo_stack), 1)
         self.dialog.discard()
@@ -417,14 +417,14 @@ class AudioReviewTests(QtTestCase):
         self.assertFalse(self.dialog.candidates[1]['regenerated'])
         self.dialog.adopt()
         self.assertEqual(self.dialog.selected(), [0, 1])
-        self.assertEqual(self.page.notes_list[1]['text'], '第二段')
+        self.assertEqual(self.page.project.notes_list[1]['text'], '第二段')
 
     def test_switching_lecture_clears_undo_and_redo_together(self):
         self.render()
         self.dialog.adopt()
         self.dialog.undo()
         self.assertTrue(self.dialog.redo_stack)
-        self.page.is_import = False
+        self.page.project.audio_loaded = False
         self.page.audio_changed.emit()
         self.assertFalse(self.dialog.redo_stack)
         self.assertFalse(self.dialog.undo_stack)
@@ -454,16 +454,16 @@ class AudioReviewTests(QtTestCase):
     def test_batch_regeneration_uses_current_settings_without_changing_global_settings(self):
         self.engine.set_voice(0, '全局音色')
         for index, name in enumerate(('音色甲', '音色乙')):
-            profile = copy.deepcopy(self.page.generation_profile)
+            profile = copy.deepcopy(self.page.project.generation_profile)
             profile.update(voice_name=name, voice_index=index + 1)
-            self.page.audio_edits[index] = {'voice_profile': profile}
+            self.page.project.audio_edits[index] = {'voice_profile': profile}
         self.dialog.table.selectionModel().select(
             self.dialog.table.model().index(1, 1),
             QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
         self.dialog.speed.setValue(1.25)
         profile_before = copy.deepcopy(self.engine.get_generation_profile())
         record_before = self.record.read_bytes()
-        audio_before = list(self.page.note_cache_keys)
+        audio_before = list(self.page.project.note_cache_keys)
         voices = []
 
         def synthesize(engine, text, path):
@@ -479,19 +479,19 @@ class AudioReviewTests(QtTestCase):
         self.assertEqual(set(self.dialog.candidates), {0, 1})
         self.assertEqual(self.engine.get_generation_profile(), profile_before)
         self.assertEqual(self.record.read_bytes(), record_before)
-        self.assertEqual(self.page.note_cache_keys, audio_before)
+        self.assertEqual(self.page.project.note_cache_keys, audio_before)
         for candidate in self.dialog.candidates.values():
             self.assertEqual(candidate['voice_profile'], segment_audio.public_profile(profile_before))
             self.assertEqual(candidate['settings']['speed'], 1.25)
         self.dialog.adopt()
         for index in (0, 1):
-            self.assertEqual(self.page.audio_edits[index]['voice_profile'], segment_audio.public_profile(profile_before))
+            self.assertEqual(self.page.project.audio_edits[index]['voice_profile'], segment_audio.public_profile(profile_before))
 
     def test_mixed_audio_merges_and_failure_preserves_existing_output(self):
         source = self.root / 'voice.mp3'
         AudioGenerationTask._write_silence(source, 'mp3')
         output = self.root / 'combined.wav'
-        sources = [source, self.page.media_list[0]]
+        sources = [source, self.page.project.media_list[0]]
         self.assertFalse(exporters.can_merge_audio_directly(sources))
 
         def run(sources):
@@ -575,7 +575,7 @@ class AudioReviewTests(QtTestCase):
         self.render()
 
     def test_editor_expands_complete_selected_text_and_follows_window_width(self):
-        self.page.notes_list[0]['text'] = '这里是一段需要逐句核对读音和节奏的较长讲稿。' * 30
+        self.page.project.notes_list[0]['text'] = '这里是一段需要逐句核对读音和节奏的较长讲稿。' * 30
         self.page.audio_changed.emit()
         self.dialog.resize(960, 620)
         self.qt.processEvents()
@@ -590,8 +590,8 @@ class AudioReviewTests(QtTestCase):
         self.assertFalse(self.dialog.table.item(0, 2).data(SEGMENT_ROLE)['expanded'])
 
     def test_play_buttons_stay_centered_in_rows_after_search_and_filter_changes(self):
-        self.page.notes_list[0]['text'] = '搜索目标第一段，这是一段需要核对的讲稿。' * 8
-        self.page.notes_list[1]['text'] = '搜索目标第二段，这是另一段更长的讲稿内容。' * 13
+        self.page.project.notes_list[0]['text'] = '搜索目标第一段，这是一段需要核对的讲稿。' * 8
+        self.page.project.notes_list[1]['text'] = '搜索目标第二段，这是另一段更长的讲稿内容。' * 13
         self.page.audio_changed.emit()
         self.dialog.resize(960, 620)
 
@@ -627,7 +627,7 @@ class AudioReviewTests(QtTestCase):
         self.assertFalse(self.dialog.render_button.isVisible())
         self.assertTrue(self.dialog.apply_button.isVisible())
         self.dialog._compare_source('current')
-        self.assertEqual(Path(self.dialog.player.source().toLocalFile()), self.page.media_list[0])
+        self.assertEqual(Path(self.dialog.player.source().toLocalFile()), self.page.project.media_list[0])
         self.dialog._compare_source('candidate')
         self.assertEqual(Path(self.dialog.player.source().toLocalFile()), self.dialog.candidates[0]['path'])
         self.dialog.stop()
@@ -637,13 +637,13 @@ class AudioReviewTests(QtTestCase):
     def test_changing_script_while_candidate_is_prepared_invalidates_result(self):
         self.dialog.speed.setValue(1.25)
         self.dialog.prepare(False)
-        self.page.is_import = False
+        self.page.project.audio_loaded = False
         self.page.audio_changed.emit()
         self.wait_task()
         self.assertFalse(self.dialog.apply_button.isEnabled())
         self.assertFalse(self.dialog.play_button.isEnabled())
-        self.page.is_import = True
-        self.page.notes_list[0] = {'page': 1, 'text': '另一份讲稿'}
+        self.page.project.audio_loaded = True
+        self.page.project.notes_list[0] = {'page': 1, 'text': '另一份讲稿'}
         self.page.audio_changed.emit()
         self.assertFalse(self.dialog.candidates)
         self.assertFalse(self.dialog.drafts)

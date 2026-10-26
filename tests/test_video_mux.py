@@ -1,4 +1,4 @@
-"""实际录制、封装、播放字幕及导出失败/取消保护验证。"""
+"""视频封装、字幕播放及导出失败与取消保护验证。"""
 
 from array import array
 from contextlib import contextmanager
@@ -10,13 +10,14 @@ import unittest
 from unittest.mock import Mock, patch
 import wave
 
-from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QSizeF, QTimer, QUrl
+from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QSizeF, QTimer, QUrl, Signal
 from PySide6.QtGui import QImage
-from PySide6.QtMultimedia import QAudioDecoder, QCapturableWindow, QMediaPlayer, QVideoSink
+from PySide6.QtMultimedia import QAudioDecoder, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import QApplication
 
 from app.video.mux import MuxCancelled, VideoCaption, build_video_captions, mux_video
-from app.video.recording import VideoRecording, pcm_format
+from app.video.audio import pcm_format
+from video_fixture import VideoFixtureEncoder
 from app.video.settings import VideoRecordingOptions
 from app.video.timeline import SAMPLE_RATE, VideoTimeline
 
@@ -35,11 +36,9 @@ class Presentation:
     slide_size = QSizeF(960, 540)
 
     def matches_source(self, source): return True
-    def capturable_window(self): return QCapturableWindow()
     def begin(self, page): pass
     def advance(self, page, previous): pass
     def verify(self, page): pass
-    def capture_image(self, image): return image
     def restore(self): pass
     hwnd = 123
     def _verify_window(self): pass
@@ -76,21 +75,24 @@ class VideoMuxTests(unittest.TestCase):
     def record(self):
         target = self.root / '源 视频.mp4'
         timeline = VideoTimeline([1, 1], [self.wav, self.wav], wait_ms=100)
-        recording = VideoRecording(timeline, target, Presentation(),
-                                    options=VideoRecordingOptions(1280, 720))
+        recording = VideoFixtureEncoder(timeline, target, self.image)
         done, errors = [], []
         recording.finished.connect(lambda path: (done.append(path), self.loop.quit()))
         recording.failed.connect(lambda error: (errors.append(error), self.loop.quit()))
-        with patch('app.video.recording.WindowCapture.start',
-                   lambda capture: recording._capture_image(self.image)):
-            QTimer.singleShot(0, recording.start)
-            self.wait()
+        QTimer.singleShot(0, recording.start)
+        self.wait()
         if recording.state != 'done': recording.cancel()
         self.assertTrue(done, errors)
         self.assertFalse(errors)
         recording.deleteLater()
         self.application.processEvents()
         return target, timeline
+
+    def test_probe_reports_video_duration_without_audio_encoder_padding(self):
+        from app.video.native_media import probe_media
+        source, timeline = self.record()
+        info = probe_media(source)
+        self.assertAlmostEqual(info.duration_us, round(timeline.duration * 1000000), delta=1000)
 
     def audio_hash(self, path):
         decoder = QAudioDecoder()
@@ -195,17 +197,34 @@ class VideoMuxTests(unittest.TestCase):
         settings.set('video_recording', VideoRecordingOptions(1280, 720, container=container,
                                                               embed_subtitles=subtitles).to_dict())
         presentation = Presentation()
-        with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]):
+        image = self.image
+
+        class Recording(VideoFixtureEncoder):
+            timeline_ready = Signal(object)
+            phase = Signal(str)
+
+            def __init__(self, timeline, target, presentation, parent=None, options=None):
+                super().__init__(timeline, target, image, parent)
+
+            def start(self):
+                self.timeline_ready.emit(self.timeline)
+                super().start()
+
+        with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]), \
+                patch('ui.dialogs.video_recording_dialog.find_obs', return_value=Path('obs64.exe')), \
+                patch('ui.dialogs.video_recording_dialog.check_obs_version'):
             dialog = VideoRecordingDialog([{'page': 1, 'text': '字幕内容'}], [self.wav],
-                                          ctx=SimpleNamespace(app_settings=settings, config=Mock()))
-        def capture(_capture): dialog.recording._capture_image(self.image)
+                                          ctx=SimpleNamespace(app_settings=settings, config=Mock()),
+                                          initial_mode='obs')
         @contextmanager
         def save_and_refresh():
             with patch('ui.dialogs.video_recording_dialog.list_presentations', return_value=[presentation]), \
+                 patch('ui.dialogs.video_recording_dialog.find_obs', return_value=Path('obs64.exe')), \
+                 patch('ui.dialogs.video_recording_dialog.check_obs_version'), \
                  patch('ui.dialogs.video_recording_dialog.QFileDialog.getSaveFileName',
                        return_value=(str(destination), f'{container.upper()} 视频 (*.{container})')):
                 yield
-        return dialog, save_and_refresh(), patch('app.video.recording.WindowCapture.start', capture)
+        return dialog, save_and_refresh(), patch('ui.dialogs.video_recording_dialog.ObsVideoRecording', Recording)
 
     def test_dialog_saves_subtitles_and_cleans_staging_files(self):
         destination = self.root / '最终视频.mkv'

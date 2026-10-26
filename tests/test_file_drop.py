@@ -208,7 +208,7 @@ class FileImportTests(QtTestCase):
             self.addCleanup(patcher.stop)
         self.page.audio_cache_path = paths.AUDIO_CACHE_DIR
         self.page.session_root_path = paths.SESSION_DIR
-        self.page.notes = {1: '原有讲稿'}
+        self.page.project.notes = {1: '原有讲稿'}
         for method in ('create_warning_info_bar', 'create_error_info_bar',
                        'create_success_info_bar', 'init_general_play', '_bind_presentation_monitor'):
             patcher = patch.object(self.page, method)
@@ -222,14 +222,14 @@ class FileImportTests(QtTestCase):
         self.qt.processEvents()
 
     def test_pptx_import_loads_notes_and_prepares_audio_without_picker(self):
-        self.page.notes = {}
+        self.page.project.notes = {}
         source = make_ppt(self.root / '讲稿 空格.PPTX')
         original = source.read_bytes()
         with patch('ui.pages.reviewer_page.QFileDialog.getOpenFileName') as picker:
             self.assertTrue(self.page.import_file(str(source)))
         picker.assert_not_called()
-        self.assertEqual(self.page.notes, script_io.load_script(source).notes)
-        self.assertEqual(self.page.presentation_path, source)
+        self.assertEqual(self.page.project.notes, script_io.load_script(source).notes)
+        self.assertEqual(self.page.project.presentation_path, source)
         self.page.init_general_play.assert_called_once()
         self.assertEqual(source.read_bytes(), original)
 
@@ -239,16 +239,16 @@ class FileImportTests(QtTestCase):
                                      'pages': [{'page': 2, 'segments': ['第一段', '第二段']}]}),
                           encoding='utf-8')
         self.assertTrue(self.page.import_file(source))
-        self.assertEqual(self.page.notes, {2: '第一段|第二段'})
-        self.assertEqual(self.page.mark, '|')
-        self.assertIsNone(self.page.presentation_path)
+        self.assertEqual(self.page.project.notes, {2: '第一段|第二段'})
+        self.assertEqual(self.page.project.mark, '|')
+        self.assertIsNone(self.page.project.presentation_path)
         word = self.root / '讲稿.DOCX'
         word.write_bytes(b'word fixture')
         data = script_io.ScriptData(notes={3: 'Word 讲稿'})
         with patch.object(script_io, 'load_script', return_value=data) as loader:
             self.assertTrue(self.page.import_file(word))
         loader.assert_called_once_with(word)
-        self.assertEqual(self.page.notes, {3: 'Word 讲稿'})
+        self.assertEqual(self.page.project.notes, {3: 'Word 讲稿'})
 
     def test_package_restores_audio_without_regenerating(self):
         audio = self.root / 'source.wav'
@@ -264,9 +264,9 @@ class FileImportTests(QtTestCase):
             notes={1: '配音'}, mark='●', source_name='课程', generation_profile={}, speaker='test')
         with patch.object(paths, 'ensure_runtime_dirs'):
             self.assertTrue(self.page.import_file(package))
-        self.assertEqual(self.page.notes, {1: '配音'})
-        self.assertTrue(self.page.is_import)
-        self.assertEqual(self.page.media_list, [paths.AUDIO_CACHE_DIR / 'sample.wav'])
+        self.assertEqual(self.page.project.notes, {1: '配音'})
+        self.assertTrue(self.page.project.audio_loaded)
+        self.assertEqual(self.page.project.media_list, [paths.AUDIO_CACHE_DIR / 'sample.wav'])
         self.page.init_general_play.assert_not_called()
 
     def test_busy_invalid_missing_and_directory_imports_preserve_current_notes(self):
@@ -282,14 +282,14 @@ class FileImportTests(QtTestCase):
         folder.mkdir()
         for invalid in (self.root / 'notes.pdf', self.root / 'missing.pptx', folder):
             self.assertFalse(self.page.import_file(invalid))
-        self.assertEqual(self.page.notes, {1: '原有讲稿'})
+        self.assertEqual(self.page.project.notes, {1: '原有讲稿'})
         self.page.init_general_play.assert_not_called()
 
     def test_parse_failure_preserves_current_notes_and_import_button(self):
         source = self.root / 'broken.pptx'
         source.write_bytes(b'broken')
         self.assertFalse(self.page.import_file(source))
-        self.assertEqual(self.page.notes, {1: '原有讲稿'})
+        self.assertEqual(self.page.project.notes, {1: '原有讲稿'})
         self.assertTrue(self.page.getFileButton.isEnabled())
         self.page.create_error_info_bar.assert_called_once()
         self.page.init_general_play.assert_not_called()
@@ -303,10 +303,10 @@ class FileImportTests(QtTestCase):
 
     def link_current_ppt(self):
         source = make_ppt(self.root / '原 PPT.pptx', count=3)
-        self.page.note_file_path = self.page.presentation_path = source
-        self.page.note_file_name = '原 PPT'
-        self.page.presentation_link = presentation_link.describe(source)
-        self.page.notes = {1: '第一段●第二段', 2: '原第二页', 3: '第三页保留'}
+        self.page.project.note_file_path = self.page.project.presentation_path = source
+        self.page.project.note_file_name = '原 PPT'
+        self.page.project.presentation_link = presentation_link.describe(source)
+        self.page.project.notes = {1: '第一段●第二段', 2: '原第二页', 3: '第三页保留'}
         self.page.presentation_monitor.baseline = script_io.load_script(source).notes
         self.page.notes_path_text.set_text(str(source))
         return source
@@ -322,14 +322,14 @@ class FileImportTests(QtTestCase):
         source = self.link_current_ppt()
         original = source.read_bytes()
         baseline = dict(self.page.presentation_monitor.baseline)
-        link = dict(self.page.presentation_link)
+        link = dict(self.page.project.presentation_link)
         word = self.root / '外部编辑.docx'
         exporters.write_docx(word, [{'page': 2, 'text': '修改后的第二页'}], [1])
         self.assertTrue(self.page.import_file(word))
-        self.assertEqual(self.page.notes, {1: '第一段●第二段', 2: '修改后的第二页', 3: '第三页保留'})
-        self.assertEqual(self.page.presentation_link, link)
-        self.assertEqual(self.page.note_file_path, source)
-        self.assertEqual(self.page.note_file_name, '原 PPT')
+        self.assertEqual(self.page.project.notes, {1: '第一段●第二段', 2: '修改后的第二页', 3: '第三页保留'})
+        self.assertEqual(self.page.project.presentation_link, link)
+        self.assertEqual(self.page.project.note_file_path, source)
+        self.assertEqual(self.page.project.note_file_name, '原 PPT')
         self.assertEqual(self.page.notes_path_text.text, str(source))
         self.assertEqual(self.page.presentation_monitor.baseline, baseline)
         self.page._bind_presentation_monitor.assert_not_called()
@@ -340,30 +340,30 @@ class FileImportTests(QtTestCase):
         source = self.link_current_ppt()
         old_record = paths.SESSION_DIR / 'original.json'
         old_record.write_text('{"original": true}', encoding='utf-8')
-        self.page.session_record_path = old_record
+        self.page.project.session_record_path = old_record
         before = self.page.ctx.app_settings.to_dict()
         with patch.object(self.page, 'persist_preferences') as persist:
             self.assertTrue(self.page.import_file(self.script_json({2: '新第一段|新第二段'}, '|')))
-        self.assertEqual(self.page.mark, '●')
-        self.assertEqual(self.page.notes[2], '新第一段●新第二段')
-        self.assertEqual(self.page.notes[1], '第一段●第二段')
-        self.assertEqual(self.page.presentation_path, source)
+        self.assertEqual(self.page.project.mark, '●')
+        self.assertEqual(self.page.project.notes[2], '新第一段●新第二段')
+        self.assertEqual(self.page.project.notes[1], '第一段●第二段')
+        self.assertEqual(self.page.project.presentation_path, source)
         self.assertEqual(self.page.ctx.app_settings.to_dict(), before)
         self.assertEqual(old_record.read_text(encoding='utf-8'), '{"original": true}')
-        self.assertEqual(self.page.session_record_path, old_record)
+        self.assertEqual(self.page.project.session_record_path, old_record)
         persist.assert_not_called()
 
     def test_unchanged_json_does_not_regenerate_or_clear_record(self):
         self.link_current_ppt()
-        self.page.is_import = True
-        self.page.session_record_path = self.root / 'original.json'
+        self.page.project.audio_loaded = True
+        self.page.project.session_record_path = self.root / 'original.json'
         self.assertTrue(self.page.import_file(self.script_json({1: '第一段|第二段'}, '|')))
         self.page.init_general_play.assert_not_called()
-        self.assertEqual(self.page.session_record_path, self.root / 'original.json')
+        self.assertEqual(self.page.project.session_record_path, self.root / 'original.json')
 
     def test_unchanged_import_retries_when_audio_is_not_ready(self):
         self.link_current_ppt()
-        self.page.is_import = False
+        self.page.project.audio_loaded = False
         self.assertTrue(self.page.import_file(self.script_json({1: '第一段|第二段'}, '|')))
         self.page.init_general_play.assert_called_once()
         self.assertEqual(self.page.create_success_info_bar.call_args.args[0], '正在准备配音')
@@ -376,16 +376,16 @@ class FileImportTests(QtTestCase):
 
     def test_invalid_page_updates_leave_link_notes_baseline_and_record_unchanged(self):
         source = self.link_current_ppt()
-        notes = dict(self.page.notes)
+        notes = dict(self.page.project.notes)
         baseline = dict(self.page.presentation_monitor.baseline)
-        self.page.session_record_path = self.root / 'original.json'
+        self.page.project.session_record_path = self.root / 'original.json'
         for page in (0, -1, 4):
             with self.subTest(page=page):
                 self.assertFalse(self.page.import_file(self.script_json({page: '错页讲稿'})))
-                self.assertEqual(self.page.notes, notes)
+                self.assertEqual(self.page.project.notes, notes)
                 self.assertEqual(self.page.presentation_monitor.baseline, baseline)
-                self.assertEqual(self.page.presentation_path, source)
-                self.assertEqual(self.page.session_record_path, self.root / 'original.json')
+                self.assertEqual(self.page.project.presentation_path, source)
+                self.assertEqual(self.page.project.session_record_path, self.root / 'original.json')
                 self.assertTrue(self.page.getFileButton.isEnabled())
         self.page.init_general_play.assert_not_called()
 
@@ -393,9 +393,9 @@ class FileImportTests(QtTestCase):
         source = self.link_current_ppt()
         source.unlink()
         self.assertTrue(self.page.import_file(self.script_json({1: '独立讲稿'})))
-        self.assertEqual(self.page.notes, {1: '独立讲稿'})
+        self.assertEqual(self.page.project.notes, {1: '独立讲稿'})
         self.assertTrue(self.page.is_restricted())
-        self.assertEqual(self.page.presentation_link, {})
+        self.assertEqual(self.page.project.presentation_link, {})
 
     def test_ppt_link_choice_preserves_audio_and_saves_real_notes_baseline(self):
         source = make_ppt(self.root / '待关联.pptx')
@@ -403,17 +403,17 @@ class FileImportTests(QtTestCase):
         existing = {'notes': {'1': '原有讲稿'}, 'generation_profile': {'voice': 'original'},
                     'items': [{'page': 1, 'text': '原有讲稿', 'cache_key': 'original'}]}
         record.write_text(json.dumps(existing), encoding='utf-8')
-        self.page.session_record_path = record
-        self.page.note_file_path = self.root / '原讲稿.docx'
-        self.page.media_list = [paths.AUDIO_CACHE_DIR / 'original.wav']
-        self.page.notes_list = [{'page': 1, 'text': '原有讲稿'}]
-        self.page.is_import = True
+        self.page.project.session_record_path = record
+        self.page.project.note_file_path = self.root / '原讲稿.docx'
+        self.page.project.media_list = [paths.AUDIO_CACHE_DIR / 'original.wav']
+        self.page.project.notes_list = [{'page': 1, 'text': '原有讲稿'}]
+        self.page.project.audio_loaded = True
         with patch.object(self.page, '_choose_ppt_import', return_value='link'):
             self.assertTrue(self.page.import_file(source))
-        self.assertEqual(self.page.notes, {1: '原有讲稿'})
-        self.assertEqual(self.page.media_list, [paths.AUDIO_CACHE_DIR / 'original.wav'])
-        self.assertEqual(self.page.note_file_path, self.root / '原讲稿.docx')
-        self.assertEqual(self.page.presentation_path, source.resolve())
+        self.assertEqual(self.page.project.notes, {1: '原有讲稿'})
+        self.assertEqual(self.page.project.media_list, [paths.AUDIO_CACHE_DIR / 'original.wav'])
+        self.assertEqual(self.page.project.note_file_path, self.root / '原讲稿.docx')
+        self.assertEqual(self.page.project.presentation_path, source.resolve())
         self.assertFalse(self.page.is_restricted())
         self.page.init_general_play.assert_not_called()
         baseline = script_io.load_script(source).notes
@@ -428,18 +428,18 @@ class FileImportTests(QtTestCase):
         source = make_ppt(self.root / '新 PPT.pptx')
         with patch.object(self.page, '_choose_ppt_import', return_value='replace'):
             self.assertTrue(self.page.import_file(source))
-        self.assertEqual(self.page.notes, script_io.load_script(source).notes)
-        self.assertEqual(self.page.note_file_path, source)
+        self.assertEqual(self.page.project.notes, script_io.load_script(source).notes)
+        self.assertEqual(self.page.project.note_file_path, source)
         self.page.init_general_play.assert_called_once()
 
     def test_ppt_choice_cancel_and_incompatible_link_preserve_independent_script(self):
         source = make_ppt(self.root / '待关联.pptx')
-        self.page.notes = {3: '第三页讲稿'}
+        self.page.project.notes = {3: '第三页讲稿'}
         for choice in (None, 'link'):
             with patch.object(self.page, '_choose_ppt_import', return_value=choice):
                 self.assertFalse(self.page.import_file(source))
-            self.assertEqual(self.page.notes, {3: '第三页讲稿'})
-            self.assertIsNone(self.page.presentation_path)
+            self.assertEqual(self.page.project.notes, {3: '第三页讲稿'})
+            self.assertIsNone(self.page.project.presentation_path)
             self.assertTrue(self.page.getFileButton.isEnabled())
         self.page.init_general_play.assert_not_called()
 
@@ -456,14 +456,14 @@ class FileImportTests(QtTestCase):
         task.audio_cache_path = paths.AUDIO_CACHE_DIR
         task.output_path = self.root / 'output'
         task.output_path.mkdir()
-        self.page.mark_split()
-        task.configure(self.page.notes_list, 0)
+        self.page.project.split_notes(comments_enabled=self.page.ctx.app_settings.get('script_comments_enabled'))
+        task.configure(self.page.project.notes_list, 0)
         first = task.save_wav()
         self.assertEqual(first.cache_hit_count, 0)
         engine.save_file.reset_mock()
         self.assertTrue(self.page.import_file(self.script_json({2: '只修改这一段'})))
-        self.page.mark_split()
-        task.configure(self.page.notes_list, 0)
+        self.page.project.split_notes(comments_enabled=self.page.ctx.app_settings.get('script_comments_enabled'))
+        task.configure(self.page.project.notes_list, 0)
         second = task.save_wav()
         self.assertEqual(second.cache_hit_count, 3)
         self.assertEqual(engine.save_file.call_count, 1)

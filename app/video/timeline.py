@@ -50,11 +50,11 @@ class VideoTimeline:
                 frames = reader.getnframes()
                 if frames <= 0:
                     raise ValueError('录制音频为空。')
-            # 实时录制默认等待首屏稳定；静态合成可直接从配音起点开始。
+            # OBS 录制默认等待首屏稳定，PowerPoint 导出可从配音起点开始。
             audio_frame = cursor + (max(wait, round(lead_ms * SAMPLE_RATE / 1000)) if not self.cues else wait)
             self.cues.append(VideoCue(page, path, cursor, audio_frame, audio_frame + frames))
             cursor = audio_frame + frames
-        # 按所需收尾停留补齐完整视频帧，静态合成只在结尾补不足一帧的静音。
+        # 按所需收尾停留补齐完整视频帧。
         self.total_frames = ((cursor + round(tail_ms * SAMPLE_RATE / 1000) + self.frames_per_tick - 1)
                              // self.frames_per_tick * self.frames_per_tick)
 

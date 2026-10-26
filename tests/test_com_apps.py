@@ -1,11 +1,68 @@
 """多实例发现只读取已运行文稿，并按 COM 身份去重。"""
 
 from pathlib import Path
+from contextlib import nullcontext
+import tempfile
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
 from app.presentation import com as com_apps
+
+
+class InstalledApplicationsTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.values = {}
+
+        def read(key, name):
+            try:
+                return self.values[(*key, name)], 1
+            except KeyError:
+                raise FileNotFoundError from None
+
+        registry = NS(HKEY_CLASSES_ROOT=0, KEY_READ=0x20019,
+                      KEY_WOW64_64KEY=256, KEY_WOW64_32KEY=512,
+                      OpenKey=lambda _root, path, _reserved, access: nullcontext((access & 768, path)),
+                      QueryValueEx=read)
+        patcher = patch.dict('sys.modules', {'winreg': registry})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def register(self, index, executable, *, view=256, command=None, server_executable=None):
+        prog_id, _label = com_apps.PROG_IDS[index]
+        clsid = f'{{test-{index}}}'
+        self.values[view, prog_id + r'\CLSID', ''] = clsid
+        key = rf'CLSID\{clsid}\LocalServer32'
+        self.values[view, key, ''] = command or f'"{executable}" /AUTOMATION'
+        if server_executable:
+            self.values[view, key, 'ServerExecutable'] = str(server_executable)
+
+    def test_both_registry_views_are_checked_without_starting_software(self):
+        exe = self.root / 'presentation app.exe'
+        exe.touch()
+        self.register(0, exe, command=f'{exe} /AUTOMATION')
+        self.register(1, exe, view=512)
+        with patch('win32com.client.DispatchEx') as create, \
+                patch('win32com.client.GetActiveObject') as active:
+            self.assertEqual(com_apps.installed_applications(), com_apps.PROG_IDS)
+        create.assert_not_called()
+        active.assert_not_called()
+
+    def test_stale_entries_and_directories_are_not_installed_applications(self):
+        self.register(0, self.root / 'gone.exe')
+        directory = self.root / 'directory.exe'
+        directory.mkdir()
+        self.register(1, directory)
+        self.assertEqual(com_apps.installed_applications(), ())
+
+    def test_explicit_server_executable_takes_precedence_over_command(self):
+        exe = self.root / 'real.exe'
+        exe.touch()
+        self.register(0, 'irrelevant', command='not an executable command', server_executable=exe)
+        self.assertEqual(com_apps.installed_applications(), com_apps.PROG_IDS[:1])
 
 
 def application(library='{44720440-94BF-4940-926D-4F38FECF2A48}', identity=None):

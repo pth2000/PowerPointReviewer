@@ -1,6 +1,7 @@
 """在后台检查并下载新版本。"""
 
 from PySide6.QtCore import QThread, Signal
+from app.logging_setup import get_logger
 
 from app.updates import manager as updater
 
@@ -14,15 +15,20 @@ class UpdateCheckTask(QThread):
     def run(self):
         errors = []
         for index in range(updater.source_count()):
-            manager = updater.create_manager(index)
-            if manager is None:
-                self.checked.emit('unmanaged', None)
+            if self.isInterruptionRequested():
                 return
             try:
+                manager = updater.create_manager(index)
+                if manager is None:
+                    self.checked.emit('unmanaged', None)
+                    return
                 info = manager.check_for_updates()
             except Exception as e:
+                get_logger().warning('检查更新失败：%s', updater.source_name(index), exc_info=True)
                 errors.append(f'{updater.source_name(index)}：{e}')
                 continue
+            if self.isInterruptionRequested():
+                return
             updater.use_source(index)
             self.checked.emit('available' if info else 'latest', info)
             return
@@ -44,6 +50,7 @@ class UpdateDownloadTask(QThread):
             updater.create_manager().download_updates(
                 self.info, lambda value: self.progress.emit(int(value)))
         except Exception as e:
+            get_logger().exception('下载更新失败')
             self.downloaded.emit(self.info, str(e))
             return
         self.downloaded.emit(self.info, '')

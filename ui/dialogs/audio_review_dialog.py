@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from qfluentwidgets import (
     Action, BodyLabel, CaptionLabel, CardWidget, ComboBox, DoubleSpinBox,
-    FluentIcon, InfoBar, InfoBarPosition, LineEdit, MessageBox,
+    InfoBar, InfoBarPosition, LineEdit, MessageBox,
     PrimaryPushButton, PrimaryToolButton,
     ProgressBar, RoundMenu, ScrollArea, Slider, SpinBox,
     StrongBodyLabel, SubtitleLabel, TableWidget, TransparentPushButton, TransparentToolButton,
@@ -25,9 +25,10 @@ from app.audio.playback import AudioOutputWatcher
 from app.logging_setup import get_logger
 from app.documents.statistics import format_duration
 from tasks.audio_review_task import AudioReviewTask
+from ui.icons import SystemIcon
 from ui.dialogs.base import ThemedDialog
 from ui.dialogs.audio_review_widgets import (
-    SEGMENT_ROLE, AudioSourceSwitch, ReviewIcon, ReviewStatusLabel, SegmentDelegate,
+    SEGMENT_ROLE, AudioSourceSwitch, ReviewStatusLabel, SegmentDelegate,
 )
 
 
@@ -35,6 +36,7 @@ class AudioReviewDialog(ThemedDialog):
     def __init__(self, reviewer, parent=None):
         super().__init__(parent)
         self.reviewer = reviewer
+        self.project = reviewer.project
         self.ctx = reviewer.ctx
         self.revision = None
         self.task = None
@@ -65,15 +67,15 @@ class AudioReviewDialog(ThemedDialog):
         heading.addWidget(self.total_label)
         top.addLayout(heading)
         top.addStretch()
-        self.undo_button = TransparentPushButton(ReviewIcon.UNDO, '撤销', self)
+        self.undo_button = TransparentPushButton(SystemIcon.UNDO, '撤销', self)
         self.undo_button.setToolTip('撤销上一次配音更改。')
         self.undo_button.clicked.connect(self.undo)
         top.addWidget(self.undo_button)
-        self.redo_button = TransparentPushButton(ReviewIcon.REDO, '重做', self)
+        self.redo_button = TransparentPushButton(SystemIcon.REDO, '重做', self)
         self.redo_button.setToolTip('重新应用刚刚撤销的配音更改。')
         self.redo_button.clicked.connect(self.redo)
         top.addWidget(self.redo_button)
-        more_button = TransparentToolButton(FluentIcon.MORE, self)
+        more_button = TransparentToolButton(SystemIcon.MORE, self)
         more_button.setToolTip('更多操作')
         self.more_menu = RoundMenu(parent=self)
         self.generate_button = Action('按当前设置重新配音', triggered=lambda: self.prepare(True))
@@ -133,7 +135,6 @@ class AudioReviewDialog(ThemedDialog):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         table_style = 'TableWidget { background: transparent; border: none; }'
         setCustomStyleSheet(self.table, table_style, table_style)
-        self.table.setToolTip('单击选择片段，双击或点击播放图标试听；Ctrl / Shift 可多选。')
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.itemDoubleClicked.connect(lambda _item: self.play(indices=[self.current()]))
         self.table.viewport().installEventFilter(self)
@@ -278,16 +279,16 @@ class AudioReviewDialog(ThemedDialog):
         player_layout.setSpacing(14)
         transport = QHBoxLayout()
         transport.setSpacing(6)
-        self.previous_button = TransparentToolButton(ReviewIcon.PREVIOUS, player)
+        self.previous_button = TransparentToolButton(SystemIcon.PREVIOUS, player)
         self.previous_button.setIconSize(QSize(16, 16))
         self.previous_button.setToolTip('上一段并播放')
         self.previous_button.clicked.connect(lambda: self.navigate(-1))
-        self.play_button = PrimaryToolButton(FluentIcon.PLAY_SOLID.icon(Theme.DARK), player)
+        self.play_button = PrimaryToolButton(SystemIcon.PLAY.icon(Theme.DARK), player)
         self.play_button.setFixedSize(42, 42)
         self.play_button.setIconSize(QSize(17, 17))
         self.play_button.setToolTip('播放')
         self.play_button.clicked.connect(self.toggle_play)
-        self.next_button = TransparentToolButton(ReviewIcon.NEXT, player)
+        self.next_button = TransparentToolButton(SystemIcon.NEXT, player)
         self.next_button.setIconSize(QSize(16, 16))
         self.next_button.setToolTip('下一段并播放')
         self.next_button.clicked.connect(lambda: self.navigate(1))
@@ -393,7 +394,7 @@ class AudioReviewDialog(ThemedDialog):
 
     def reload(self):
         page = self.reviewer
-        if not page.is_import or page.is_busy():
+        if not self.project.audio_loaded or page.is_busy():
             self.stop()
             if self.task is not None:
                 self.task.requestInterruption()
@@ -426,14 +427,14 @@ class AudioReviewDialog(ThemedDialog):
         self.pages.blockSignals(True)
         self.pages.clear()
         self.pages.addItem('全部页面', userData=None)
-        for number in sorted({item['page'] for item in page.notes_list}):
-            count = sum(item['page'] == number for item in page.notes_list)
+        for number in sorted({item['page'] for item in self.project.notes_list}):
+            count = sum(item['page'] == number for item in self.project.notes_list)
             self.pages.addItem(f'第 {number} 页（{count} 段）', userData=number)
         self.pages.setCurrentIndex(0)
         self.pages.blockSignals(False)
-        self.total_label.setText(f'{len(page.notes_list)} 段 · {format_duration(sum(page.notes_duration_list))}')
+        self.total_label.setText(f'{len(self.project.notes_list)} 段 · {format_duration(sum(self.project.notes_duration_list))}')
         self._populate_segments()
-        self._select_index(min(page.current_index, max(0, len(page.notes_list) - 1)))
+        self._select_index(min(self.project.current_index, max(0, len(self.project.notes_list) - 1)))
 
     def _populate_segments(self, *_):
         if self._syncing or self.revision is None:
@@ -445,16 +446,16 @@ class AudioReviewDialog(ThemedDialog):
         number = self.pages.currentData()
         query = self.search.text().strip().casefold()
         counts = {}
-        for index, note in enumerate(self.reviewer.notes_list):
+        for index, note in enumerate(self.project.notes_list):
             counts[note['page']] = counts.get(note['page'], 0) + 1
-            spoken = self.reviewer.audio_edits.get(index, {}).get('spoken_text', note['text'])
+            spoken = self.project.audio_edits.get(index, {}).get('spoken_text', note['text'])
             if (number is not None and note['page'] != number) or query not in (note['text'] + '\n' + spoken).casefold():
                 continue
             row = self.table.rowCount()
             self.table.insertRow(row)
             wrapper = QWidget(self.table)
             row_layout = QHBoxLayout(wrapper)
-            button = TransparentToolButton(FluentIcon.PLAY, wrapper)
+            button = TransparentToolButton(SystemIcon.PLAY, wrapper)
             button.setFixedSize(32, 32)
             button.setIconSize(QSize(16, 16))
             button.setToolTip('播放这一段')
@@ -465,16 +466,15 @@ class AudioReviewDialog(ThemedDialog):
             self.table.setCellWidget(row, 0, wrapper)
             for column, text in ((1, f'{note["page"]} · {counts[note["page"]]}'),
                                  (2, note['text'] or '（空白片段）'),
-                                 (3, format_duration(self.reviewer.notes_duration_list[index]))):
+                                 (3, format_duration(self.project.notes_duration_list[index]))):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, index)
                 if column == 2:
                     item.setData(SEGMENT_ROLE, {
                         'heading': f'第 {note["page"]} 页 · 第 {counts[note["page"]]} 段',
-                        'text': spoken, 'duration': format_duration(self.reviewer.notes_duration_list[index]),
+                        'text': spoken, 'duration': format_duration(self.project.notes_duration_list[index]),
                         'status': self._segment_status(index),
                     })
-                item.setToolTip(note['text'] if column == 2 else text)
                 self.table.setItem(row, column, item)
             self.table.setRowHeight(row, 104)
         count = self.table.rowCount()
@@ -514,16 +514,16 @@ class AudioReviewDialog(ThemedDialog):
         self.play(indices=[index])
 
     def _draft(self, index):
-        edit = self.reviewer.audio_edits.get(index, {})
+        edit = self.project.audio_edits.get(index, {})
         return self.drafts.get(index, {'settings': segment_audio.settings(edit.get('settings')),
-                                       'spoken_text': edit.get('spoken_text', self.reviewer.notes_list[index]['text'])})
+                                       'spoken_text': edit.get('spoken_text', self.project.notes_list[index]['text'])})
 
     def _segment_status(self, index):
         if index in self.candidates:
             return '待采用'
         if index in self.drafts:
             return '待试听'
-        return '已调整' if index in self.reviewer.audio_edits else ''
+        return '已调整' if index in self.project.audio_edits else ''
 
     def _refresh_segment_states(self, indices=None):
         indices = None if indices is None else set(indices)
@@ -535,13 +535,6 @@ class AudioReviewDialog(ThemedDialog):
             data = dict(item.data(SEGMENT_ROLE) or {})
             data['status'] = self._segment_status(index)
             item.setData(SEGMENT_ROLE, data)
-            state = data['status'] or '原始配音'
-            if state in ('待试听', '待采用') and index in self.reviewer.audio_edits:
-                state = '当前配音已调整；另有未采用的更改'
-            original = self.reviewer.notes_list[index]['text']
-            spoken = data.get('text', original)
-            text = spoken if spoken == original else f'朗读：{spoken}\n讲稿原文：{original}'
-            item.setToolTip(f'{state}\n{text}')
 
     def _selection_changed(self):
         if self._syncing:
@@ -549,18 +542,18 @@ class AudioReviewDialog(ThemedDialog):
         index, selected = self.current(), self.selected()
         self._syncing = True
         if index is not None:
-            note = self.reviewer.notes_list[index]
-            offset = sum(item['page'] == note['page'] for item in self.reviewer.notes_list[:index]) + 1
+            note = self.project.notes_list[index]
+            offset = sum(item['page'] == note['page'] for item in self.project.notes_list[:index]) + 1
             self.selection_label.setText(f'第 {note["page"]} 页 · 第 {offset} 段' if len(selected) <= 1
                                          else f'已选择 {len(selected)} 个片段')
-            duration = sum(self.reviewer.notes_duration_list[i] for i in selected)
-            speaker = str(self.reviewer.generation_speaker or '').strip()
+            duration = sum(self.project.notes_duration_list[i] for i in selected)
+            speaker = str(self.project.generation_speaker or '').strip()
             if len(selected) == 1:
-                profile = self.reviewer.audio_edits.get(index, {}).get('voice_profile', {})
+                profile = self.project.audio_edits.get(index, {}).get('voice_profile', {})
                 speaker = str(profile.get('voice_name') or speaker)
             self.selection_detail.setText(f'{speaker or "当前配音"}　{format_duration(duration)}')
             self.selection_detail.setWordWrap(True)
-            edit = self.reviewer.audio_edits.get(index, {}) if len(selected) == 1 else {}
+            edit = self.project.audio_edits.get(index, {}) if len(selected) == 1 else {}
             parts = []
             for key, label, suffix, default in (('speed', '语速 ', '×', 1), ('volume', '音量 ', '%', 100),
                                                 ('leading_ms', '开头 ', ' 毫秒', 0), ('trailing_ms', '结尾 ', ' 毫秒', 0)):
@@ -577,9 +570,9 @@ class AudioReviewDialog(ThemedDialog):
             else:
                 texts = []
                 for selected_index in selected:
-                    selected_note = self.reviewer.notes_list[selected_index]
+                    selected_note = self.project.notes_list[selected_index]
                     selected_offset = sum(item['page'] == selected_note['page']
-                                          for item in self.reviewer.notes_list[:selected_index]) + 1
+                                          for item in self.project.notes_list[:selected_index]) + 1
                     texts.append(f'第 {selected_note["page"]} 页 · 第 {selected_offset} 段\n'
                                  f'{self._draft(selected_index)["spoken_text"]}')
                 self.script_text.setText('\n\n'.join(texts))
@@ -617,9 +610,9 @@ class AudioReviewDialog(ThemedDialog):
             previous = self._draft(index)
             values = ({**previous['settings'], changed_key: options[changed_key]} if changed_key else options)
             draft = {'settings': values, 'spoken_text': previous['spoken_text']}
-            edit = self.reviewer.audio_edits.get(index, {})
+            edit = self.project.audio_edits.get(index, {})
             baseline = {'settings': segment_audio.settings(edit.get('settings')),
-                        'spoken_text': edit.get('spoken_text', self.reviewer.notes_list[index]['text'])}
+                        'spoken_text': edit.get('spoken_text', self.project.notes_list[index]['text'])}
             if draft == baseline:
                 self.drafts.pop(index, None)
             else:
@@ -644,12 +637,12 @@ class AudioReviewDialog(ThemedDialog):
             index in self.candidates or index in self.drafts for index in selected) and idle)
         self.discard_button.setVisible(bool(ready and any(
             index in self.candidates or index in self.drafts for index in selected)))
-        self.restore_button.setEnabled(ready and idle and any(index in self.reviewer.audio_edits for index in selected))
+        self.restore_button.setEnabled(ready and idle and any(index in self.project.audio_edits for index in selected))
         candidates = [self.candidates[i] for i in selected if i in self.candidates]
         self.compare_card.setVisible(bool(prepared))
         self.comparison_detail.setVisible(False)
         if prepared:
-            old = sum(self.reviewer.notes_duration_list[i] for i in selected if i in self.candidates)
+            old = sum(self.project.notes_duration_list[i] for i in selected if i in self.candidates)
             new = sum(item['duration'] for item in candidates)
             self.comparison_detail.setText(f'{format_duration(old)}  →  {format_duration(new)}')
             self.comparison_detail.setVisible(abs(old - new) >= 0.02)
@@ -661,7 +654,7 @@ class AudioReviewDialog(ThemedDialog):
             button.setEnabled(self.revision is not None)
 
     def _ensure_current(self):
-        if self.reviewer.is_busy() or not self.reviewer.is_import or self.revision != self.reviewer.audio_revision():
+        if self.reviewer.is_busy() or not self.project.audio_loaded or self.revision != self.reviewer.audio_revision():
             self.reload()
             self.message.setText('讲稿已更新，请重新选择片段。')
             return False
@@ -679,7 +672,7 @@ class AudioReviewDialog(ThemedDialog):
         try:
             jobs = []
             for index in selected:
-                edit = self.reviewer.audio_edits.get(index, {})
+                edit = self.project.audio_edits.get(index, {})
                 draft = self._draft(index)
                 needs_generation = regenerate
                 job_engine = None
@@ -694,7 +687,7 @@ class AudioReviewDialog(ThemedDialog):
                              'engine': job_engine,
                              'settings': draft['settings'], 'spoken_text': draft['spoken_text'],
                              'voice_profile': segment_audio.public_profile(job_engine.get_generation_profile()) if job_engine else
-                                              edit.get('voice_profile', segment_audio.public_profile(self.reviewer.generation_profile))})
+                                              edit.get('voice_profile', segment_audio.public_profile(self.project.generation_profile))})
             self.stop()
             self._job_revision = self.revision
             self.task = AudioReviewTask(jobs, self._directory.name, parent=self)
@@ -720,6 +713,7 @@ class AudioReviewDialog(ThemedDialog):
         self.play(indices=list(results), source='candidate')
 
     def _failed(self, message):
+        get_logger().error('配音审听准备失败：%s', message)
         self.message.setText(f'配音准备失败：{message}')
 
     def _task_finished(self):
@@ -733,13 +727,12 @@ class AudioReviewDialog(ThemedDialog):
             self.close()
 
     def _reference(self, index):
-        page = self.reviewer
-        return segment_audio.reference(page.note_cache_keys[index], page.note_cache_exts[index],
-                                       page.notes_duration_list[index])
+        return segment_audio.reference(self.project.note_cache_keys[index], self.project.note_cache_exts[index],
+                                       self.project.notes_duration_list[index])
 
     def _snapshot(self, indices):
-        return {index: {'path': self.reviewer.media_list[index],
-                        **self._reference(index), 'edit': copy.deepcopy(self.reviewer.audio_edits.get(index))}
+        return {index: {'path': self.project.media_list[index],
+                        **self._reference(index), 'edit': copy.deepcopy(self.project.audio_edits.get(index))}
                 for index in indices}
 
     def _commit(self, updates, *, remember=True):
@@ -756,7 +749,7 @@ class AudioReviewDialog(ThemedDialog):
         for index in updates:
             self.candidates.pop(index, None)
             self.drafts.pop(index, None)
-        self.total_label.setText(f'{len(self.reviewer.notes_list)} 段 · {format_duration(sum(self.reviewer.notes_duration_list))}')
+        self.total_label.setText(f'{len(self.project.notes_list)} 段 · {format_duration(sum(self.project.notes_duration_list))}')
         self._populate_segments()
 
     def _notify_success(self, text):
@@ -772,20 +765,20 @@ class AudioReviewDialog(ThemedDialog):
             for index in self.selected():
                 candidate = self.candidates[index]
                 key, ext, path = segment_audio.store_audio(candidate['path'], self.reviewer.audio_cache_path)
-                old = self.reviewer.audio_edits.get(index, {})
+                old = self.project.audio_edits.get(index, {})
                 original = old.get('original')
                 if not original:
                     original_key, original_ext, _original_path = segment_audio.store_audio(
-                        self.reviewer.media_list[index], self.reviewer.audio_cache_path)
+                        self.project.media_list[index], self.reviewer.audio_cache_path)
                     original = segment_audio.reference(
-                        original_key, original_ext, self.reviewer.notes_duration_list[index])
+                        original_key, original_ext, self.project.notes_duration_list[index])
                 if candidate['regenerated'] or not old.get('base'):
                     base_key, base_ext, _path = segment_audio.store_audio(candidate['base_path'], self.reviewer.audio_cache_path)
                 else:
                     base = old['base']
                     base_key, base_ext = base['key'], base['ext']
-                edit = {'text': self.reviewer.notes_list[index]['text'],
-                        'profile_id': segment_audio.profile_id(self.reviewer.generation_profile),
+                edit = {'text': self.project.notes_list[index]['text'],
+                        'profile_id': segment_audio.profile_id(self.project.generation_profile),
                         'original': copy.deepcopy(original),
                         'base': segment_audio.reference(base_key, base_ext, candidate['base_duration']),
                         'settings': candidate['settings'], 'spoken_text': candidate['spoken_text'],
@@ -796,6 +789,7 @@ class AudioReviewDialog(ThemedDialog):
                 self._commit(updates)
                 self._notify_success('已采用配音')
         except Exception as exc:
+            get_logger().exception('采用片段配音失败')
             self.message.setText(f'采用失败：{exc}')
 
     def discard(self):
@@ -812,7 +806,7 @@ class AudioReviewDialog(ThemedDialog):
         try:
             updates = {}
             for index in self.selected():
-                edit = self.reviewer.audio_edits.get(index)
+                edit = self.project.audio_edits.get(index)
                 if edit:
                     original = edit['original']
                     updates[index] = {**original, 'path': segment_audio.cache_path(
@@ -823,6 +817,7 @@ class AudioReviewDialog(ThemedDialog):
                 self._commit(updates)
                 self._notify_success('已恢复原始配音')
         except Exception as exc:
+            get_logger().exception('恢复原始配音失败')
             self.message.setText(f'恢复失败：{exc}')
 
     def undo(self):
@@ -855,6 +850,7 @@ class AudioReviewDialog(ThemedDialog):
             self._update_buttons()
             self._notify_success(f'已{action}配音更改')
         except Exception as exc:
+            get_logger().exception('%s配音更改失败', action)
             self.message.setText(f'{action}失败：{exc}')
 
     def protected_keys(self):
@@ -876,10 +872,10 @@ class AudioReviewDialog(ThemedDialog):
             if source == 'candidate' or mode == 2:
                 indices = self.selected()
             elif mode == 1:
-                number = self.reviewer.notes_list[index]['page']
-                indices = [i for i, note in enumerate(self.reviewer.notes_list) if note['page'] == number]
+                number = self.project.notes_list[index]['page']
+                indices = [i for i, note in enumerate(self.project.notes_list) if note['page'] == number]
             elif mode == 3:
-                indices = list(range(index, len(self.reviewer.notes_list)))
+                indices = list(range(index, len(self.project.notes_list)))
             else:
                 indices = [index]
         if not indices or (source == 'candidate' and any(i not in self.candidates for i in indices)):
@@ -902,12 +898,12 @@ class AudioReviewDialog(ThemedDialog):
                 return
             path = candidate['path']
         else:
-            path = self.reviewer.media_list[index]
+            path = self.project.media_list[index]
         if not Path(path).is_file():
             self._audio_error('音频文件缺失，请重新生成这一段。')
             return
-        note = self.reviewer.notes_list[index]
-        number = sum(item['page'] == note['page'] for item in self.reviewer.notes_list[:index]) + 1
+        note = self.project.notes_list[index]
+        number = sum(item['page'] == note['page'] for item in self.project.notes_list[:index]) + 1
         self.playing_label.setText(f'第 {note["page"]} 页 · 第 {number} 段 · {"新配音" if source == "candidate" else "当前配音"}')
         self.compare_tabs.setCurrentItem(source)
         self.player.setSource(QUrl.fromLocalFile(str(Path(path).resolve())))
@@ -928,10 +924,10 @@ class AudioReviewDialog(ThemedDialog):
             self.play(source=source)
 
     def navigate(self, offset):
-        if not self._ensure_current() or not self.reviewer.notes_list:
+        if not self._ensure_current() or not self.project.notes_list:
             return
         current = self._queue[self._queue_offset][0] if self._queue else (self.current() or 0)
-        index = min(max(current + offset, 0), len(self.reviewer.notes_list) - 1)
+        index = min(max(current + offset, 0), len(self.project.notes_list) - 1)
         self._select_index(index)
         self.play(indices=[index])
 
@@ -956,17 +952,17 @@ class AudioReviewDialog(ThemedDialog):
         index = self._queue[self._queue_offset][0] if self._queue else self.current()
         source = self._queue[self._queue_offset][1] if self._queue else (
             self.compare_tabs.currentRouteKey() if self.compare_card.isVisible() else 'current')
-        if not self._queue and index is not None and index < len(self.reviewer.notes_list):
-            note = self.reviewer.notes_list[index]
-            offset = sum(item['page'] == note['page'] for item in self.reviewer.notes_list[:index]) + 1
+        if not self._queue and index is not None and index < len(self.project.notes_list):
+            note = self.project.notes_list[index]
+            offset = sum(item['page'] == note['page'] for item in self.project.notes_list[:index]) + 1
             self.playing_label.setText(f'第 {note["page"]} 页 · 第 {offset} 段 · {"新配音" if source == "candidate" else "当前配音"}')
         duration = self.player.duration() / 1000 if not self.player.source().isEmpty() else 0
         if duration <= 0:
-            if index is not None and 0 <= index < len(self.reviewer.notes_duration_list):
+            if index is not None and 0 <= index < len(self.project.notes_duration_list):
                 if source == 'candidate' and index in self.candidates:
                     duration = self.candidates[index]['duration']
                 else:
-                    duration = self.reviewer.notes_duration_list[index]
+                    duration = self.project.notes_duration_list[index]
         self.time_label.setText(f'{format_duration(position / 1000)} / {format_duration(duration)}')
 
     def _duration_changed(self, duration):
@@ -975,7 +971,7 @@ class AudioReviewDialog(ThemedDialog):
 
     def _playback_state_changed(self, state):
         playing = state == QMediaPlayer.PlaybackState.PlayingState
-        icon = FluentIcon.PAUSE_BOLD if playing else FluentIcon.PLAY_SOLID
+        icon = SystemIcon.PAUSE if playing else SystemIcon.PLAY
         self.play_button.setIcon(icon.icon(Theme.DARK))
         self.play_button.setToolTip('暂停' if playing else '播放')
         active = state != QMediaPlayer.PlaybackState.StoppedState and bool(self._queue)
@@ -999,6 +995,7 @@ class AudioReviewDialog(ThemedDialog):
             self.stop()
 
     def _audio_error(self, message):
+        get_logger().error('审听配音无法播放：%s', message)
         self.stop()
         self.message.setText(f'无法播放：{message}')
 

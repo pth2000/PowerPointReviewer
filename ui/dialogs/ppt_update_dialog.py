@@ -32,13 +32,13 @@ class _ElidedCaption(CaptionLabel):
         self.setTextFormat(Qt.TextFormat.PlainText)
         self.setTextColor('#686868', '#b9b9b9')
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.setToolTip(self.full_text)
         self.installEventFilter(ToolTipFilter(self))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.setText(self.fontMetrics().elidedText(
             self.full_text, Qt.TextElideMode.ElideMiddle, self.width()))
+        self.setToolTip(self.full_text if self.text() != self.full_text else '')
 
 
 class _SummaryCard(CardWidget):
@@ -96,7 +96,7 @@ class PptUpdateDialog(MessageBoxBase):
             label = BodyLabel(text, self.summary_card)
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.setWordWrap(True)
-            label.setToolTip(full_text)
+            label.setToolTip(full_text if text != full_text else '')
             label.installEventFilter(ToolTipFilter(label))
             row.addWidget(label, 1)
             count = CaptionLabel(f'{len(selected)} 页', self.summary_card)

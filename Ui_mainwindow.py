@@ -154,7 +154,7 @@ class Ui_mainwindow(object):
         self.notesPathShowLabel = QLabel(self.importCardWidget)
         self.notesPathShowLabel.setObjectName(u"notesPathShowLabel")
         self.notesPathShowLabel.setStyleSheet(u"font-weight: 700;\n"
-"font-size: 9pt;")
+"font-size: 10pt;")
 
         self.verticalLayout.addWidget(self.notesPathShowLabel)
 

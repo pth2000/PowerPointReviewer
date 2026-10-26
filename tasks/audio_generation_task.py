@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 import shutil
-import traceback
 import uuid
 import wave
 
@@ -15,6 +14,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.audio import processing as audio_processing, segments as segment_audio
 from app import paths
+from app.logging_setup import get_logger
 from tts_engine import TTSEngine
 
 # 空白讲稿仍需占据一个播放槽位，才能维持“讲稿段—音频—翻页动作”的一一对应；
@@ -86,7 +86,7 @@ class AudioGenerationTask(QThread):
         except InterruptedError:
             return
         except Exception as e:
-            traceback.print_exc()
+            get_logger().exception('讲稿配音生成失败')
             self.signal_error.emit(str(e))
             return
 
@@ -139,8 +139,8 @@ class AudioGenerationTask(QThread):
             if temp_path.exists():
                 try:
                     temp_path.unlink()
-                except OSError as e:
-                    print(f'[生成] 清理临时文件失败：{temp_path.name}, 原因: {e}')
+                except OSError:
+                    get_logger().warning('生成后清理临时文件失败：%s', temp_path.name, exc_info=True)
 
     def _save_one_note_wav(self, index, note_dict, generation_profile):
         """生成或复用单条音频，并返回可按输入索引归位的结果元组。"""
@@ -159,7 +159,8 @@ class AudioGenerationTask(QThread):
                 if tuned.is_file() and tuned.stat().st_size:
                     cache_path, cache_key, output_ext = tuned, edit['audio_key'], edit['audio_ext']
             except (KeyError, ValueError, OSError):
-                pass
+                get_logger().warning('第 %s 页第 %s 段已调整配音不可用，将重新生成',
+                                     note_dict['page'], index + 1, exc_info=True)
         path = self.output_path / f'{note_dict["page"]}_{index + 1}.{output_ext}'
 
         cache_hit = (not self.force_regenerate
@@ -184,11 +185,11 @@ class AudioGenerationTask(QThread):
             length = float(getattr(getattr(audio, 'info', None), 'length', 0.0))
             if length > 0:
                 return length
-        except Exception as e:
-            print(f'[生成] 无法读取音频时长：{path.name}, 原因: {e}')
+        except Exception:
+            get_logger().warning('无法读取音频时长：%s', path.name, exc_info=True)
             return 0.0
 
-        print(f'[生成] 无法读取音频时长：{path.name}')
+        get_logger().warning('无法读取音频时长：%s', path.name)
         return 0.0
 
     # 批量生成
@@ -252,7 +253,7 @@ class AudioGenerationTask(QThread):
                 continue
             try:
                 self.tts_engine.save_file_for_stable_local(f'{time_num}', str(path))
-            except Exception as e:
-                print(f'[生成] 倒计时音频 {time_num} 生成失败，已跳过：{e}')
+            except Exception:
+                get_logger().warning('倒计时音频 %s 生成失败，已跳过', time_num, exc_info=True)
                 return
         print('倒计时生成完成')

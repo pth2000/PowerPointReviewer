@@ -5,17 +5,17 @@ from pathlib import Path
 import shutil
 import sys
 
-from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImageReader
 
-from app.presentation.com import PROG_IDS, application_pid
+from app.presentation.com import PROG_IDS, application_candidates, application_pid
 
 
 class SlideRenderCancelled(Exception):
     pass
 
 
-def export_slide_images(source, pages, directory, width, height, *, progress=None, cancelled=None):
+def export_slide_images(source, pages, directory, width, height, *, progress=None, cancelled=None,
+                        preference='auto'):
     """只关闭本次打开的副本；不会退出已有 Office 进程或保存用户文稿。"""
     if sys.platform != 'win32':
         raise RuntimeError('PPT 静态画面导出目前需要 Windows 与 PowerPoint / WPS 演示。')
@@ -54,19 +54,18 @@ def export_slide_images(source, pages, directory, width, height, *, progress=Non
                 running_applications[prog_id] = win32com.client.GetActiveObject(prog_id)
             except Exception:
                 pass
-        # 优先复用已运行的演示软件，避免已有 WPS 时仍额外启动 PowerPoint。
-        providers = sorted(PROG_IDS, key=lambda entry: entry[0] not in running_applications)
-        for prog_id, provider in providers:
+        # 自动模式优先复用运行实例，显式偏好则由统一的软件选择规则排序。
+        providers = application_candidates(
+            [(prog, name, running_applications[prog]) for prog, name in PROG_IDS
+             if prog in running_applications], preference)
+        for prog_id, provider, running_application in providers:
             application = presentation = None
             owned_pid = None
             security = None
             try:
                 check_cancelled()
-                started_application = prog_id not in running_applications
-                if started_application:
-                    application = win32com.client.DispatchEx(prog_id)
-                else:
-                    application = running_applications[prog_id]
+                started_application = running_application is None
+                application = win32com.client.DispatchEx(prog_id) if started_application else running_application
                 application = win32com.client.dynamic.Dispatch(application)
                 opened_application = True
                 pid = application_pid(application)
@@ -133,32 +132,3 @@ def export_slide_images(source, pages, directory, width, height, *, progress=Non
         raise RuntimeError(f'{" / ".join(errors)} 无法导出 PPT 画面，请确认文稿可正常打开并重试。')
     finally:
         pythoncom.CoUninitialize()
-
-
-class SlideRenderTask(QThread):
-    """在独立 COM 线程渲染，取消后等待当前页面导出与副本关闭完成。"""
-
-    progress = Signal(int, int)
-
-    def __init__(self, source, pages, directory, width, height, parent=None):
-        super().__init__(parent)
-        self.source, self.pages, self.directory = source, pages, directory
-        self.width, self.height = width, height
-        self.images = {}
-        self.error = ''
-        self.was_cancelled = False
-
-    def run(self):
-        try:
-            self.images = export_slide_images(
-                self.source, self.pages, self.directory, self.width, self.height,
-                progress=self.progress.emit, cancelled=self.isInterruptionRequested,
-            )
-            self.was_cancelled = self.isInterruptionRequested()
-        except SlideRenderCancelled:
-            self.was_cancelled = True
-        except Exception as exc:
-            self.error = str(exc)
-
-    def cancel(self):
-        self.requestInterruption()

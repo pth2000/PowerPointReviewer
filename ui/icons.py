@@ -6,10 +6,13 @@ qfluentwidgets 只会处理内置图标，而项目资源中的单色 SVG 使用
 品牌色和多色图标不参与改写，因为其配色本身也是图标语义的一部分。
 """
 
+from enum import Enum
+
 from PySide6.QtCore import QByteArray, QFile, QIODevice, QRectF, QSize, Qt
-from PySide6.QtGui import QIcon, QIconEngine, QPainter, QPixmap
+from PySide6.QtGui import QColor, QIcon, QIconEngine, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
-from qfluentwidgets import isDarkTheme
+from qfluentwidgets import FluentIconBase, Theme, isDarkTheme
+from qfluentwidgets.common.icon import getIconColor
 
 # 只替换资源中约定的单色填充，避免破坏多色图标。
 MONOCHROME_FILLS = ('#2c2c2c', '#2C2C2C', '#31303D', '#31303d')
@@ -17,6 +20,107 @@ MONOCHROME_FILLS = ('#2c2c2c', '#2C2C2C', '#31303D', '#31303d')
 # 登记项为“支持 setIcon 的对象 + Qt 资源路径”。
 _registry = []
 _cache = {}
+
+
+class _ResourceIcon(FluentIconBase):
+    """从项目 SVG 资源按当前主题生成矢量图标。"""
+
+    def icon(self, theme=Theme.AUTO, color=None):
+        fill = QColor(color).name() if color is not None else getIconColor(theme)
+        key = (self.path(), fill)
+        if key not in _cache:
+            svg = _read_svg(self.path()).replace('currentColor', fill).replace('#212121', fill)
+            _cache[key] = QIcon(_SvgIconEngine(svg))
+        return _cache[key]
+
+    def render(self, painter, rect, theme=Theme.AUTO, indexes=None, **attributes):
+        color = attributes.get('stroke', attributes.get('fill'))
+        painter.save()
+        painter.translate(rect.x(), rect.y())
+        self.icon(theme, color).paint(painter, 0, 0, round(rect.width()), round(rect.height()))
+        painter.restore()
+
+
+class SystemIcon(_ResourceIcon, Enum):
+    """Lucide 线性图标，使用 SVG 资源并适配明暗主题。"""
+
+    HELP = 'circle-question-mark'
+    HISTORY = 'rotate-ccw-clock'
+    UPDATE = 'refresh-cw'
+    UNDO = 'undo-2'
+    REDO = 'redo-2'
+    PREVIOUS = 'skip-back'
+    NEXT = 'skip-forward'
+    COPYRIGHT = 'copyright'
+    DOCUMENT = 'file-text'
+    FOLDER = 'folder-open'
+    LIST = 'list'
+    TIMER = 'timer'
+    CLOCK = 'clock-3'
+    PLAY = 'play'
+    PAUSE = 'pause'
+    STOP = 'square'
+    RESET = 'rotate-ccw'
+    DOWNLOAD = 'download'
+    INFO = 'info'
+    MORE = 'ellipsis'
+
+    def path(self, theme=Theme.AUTO):
+        return f':/image/image/lucide/{self.value}.svg'
+
+class FluentSystemIcon(_ResourceIcon, Enum):
+    """微软 Fluent System Icons，统一使用为 20px 绘制的 Regular 版本。"""
+
+    ENGINE = 'speaker_settings'
+    SPEED = 'top_speed'
+    VOLUME = 'speaker_2'
+    WAVE = 'sound_wave_circle'
+    LANGUAGE = 'local_language'
+    GLOBE = 'globe'
+    KEY = 'key'
+    MODEL = 'cube'
+    FOLDER = 'folder'
+    INSTRUCTIONS = 'text_description'
+    MICROPHONE = 'mic'
+    NAME = 'text_field'
+    MUSIC = 'music_note_2'
+    DOCUMENT = 'document'
+    LINK = 'link'
+    TIMER = 'timer'
+    NUMBER = 'number_symbol'
+    SHUFFLE = 'arrow_shuffle'
+    LEADING_SPACE = 'padding_left'
+    TRAILING_SPACE = 'padding_right'
+    SAVE = 'save'
+    THEME = 'dark_theme'
+    PALETTE = 'color'
+    FONT = 'text_font'
+    SLIDES = 'slide_multiple'
+    COMMENT = 'comment_note'
+    CHECK = 'document_checkmark'
+    HISTORY = 'history'
+    SYNC = 'arrow_sync'
+    FULL_SCREEN = 'full_screen_maximize'
+    SLIDESHOW = 'slide_play'
+    NEXT_SLIDE = 'slide_arrow_right'
+    LINKED_SLIDE = 'slide_link'
+    STOP = 'stop'
+    KEYBOARD = 'keyboard'
+    HEADPHONE = 'headphones'
+    CONNECT = 'plug_connected'
+    VOICE = 'person_voice'
+    UPDATE = 'arrow_clockwise'
+    INFO = 'info'
+    SLIDE_SETTINGS = 'slide_settings'
+    GUIDE = 'book_open'
+    LOG = 'document_text'
+    SETTING = 'settings'
+    EDIT = 'text_edit_style'
+    VIDEO = 'video_clip'
+    ARCHIVE = 'folder_zip'
+
+    def path(self, theme=Theme.AUTO):
+        return f':/image/image/fluent/ic_fluent_{self.value}_20_regular.svg'
 
 
 class _SvgIconEngine(QIconEngine):

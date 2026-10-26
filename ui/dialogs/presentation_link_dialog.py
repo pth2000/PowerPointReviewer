@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QSizePolicy, QVBoxLayout
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QSizePolicy
 from qfluentwidgets import (
     BodyLabel, ComboBox, MessageBox, PrimaryPushButton, PushButton, SubtitleLabel,
 )
@@ -18,9 +18,7 @@ class PresentationLinkDialog(ThemedDialog):
         self.selected = None
         self.setWindowTitle('关联 PPT')
         self.setMinimumWidth(520)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout = self.create_form_layout(520, (24, 24, 24, 24), 16)
         layout.addWidget(SubtitleLabel('关联 PPT', self))
         description = BodyLabel('选择与当前讲稿对应的 PPT，用于同步翻页和视频导出。', self)
         description.setWordWrap(True)
@@ -45,6 +43,7 @@ class PresentationLinkDialog(ThemedDialog):
         self.use_open_button.clicked.connect(self.choose_open)
         row.addWidget(self.use_open_button)
         layout.addLayout(row)
+        layout.addStretch(1)
         self.error_label = BodyLabel('', self)
         self.error_label.setWordWrap(True)
         self.error_label.hide()
