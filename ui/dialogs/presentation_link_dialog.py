@@ -4,10 +4,16 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QSizePolicy
 from qfluentwidgets import (
-    BodyLabel, ComboBox, MessageBox, PrimaryPushButton, PushButton, SubtitleLabel,
+    BodyLabel,
+    ComboBox,
+    MessageBox,
+    PrimaryPushButton,
+    PushButton,
+    SubtitleLabel,
 )
 
-from app.presentation import link as presentation_link, slideshow
+from app.presentation import link as presentation_link
+from app.presentation import slideshow
 from ui.dialogs.base import ThemedDialog
 
 

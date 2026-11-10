@@ -1,21 +1,21 @@
 """片段配音调整、不可变音频引用及更新时的匹配。"""
 
-from array import array
-from collections import defaultdict, deque
 import copy
-from io import BytesIO
 import hashlib
 import json
 import math
-from pathlib import Path
 import re
 import shutil
 import sys
 import uuid
 import wave
+from array import array
+from collections import defaultdict, deque
+from io import BytesIO
+from pathlib import Path
 
 from app.audio import processing as audio_processing
-
+from app.audio.captions import transfer_captions
 
 DEFAULT_SETTINGS = {'speed': 1.0, 'volume': 100, 'leading_ms': 0, 'trailing_ms': 0}
 _SECRET_KEYS = {'api_key', 'access_token', 'token', 'password', 'authorization'}
@@ -69,7 +69,7 @@ def process_wav(content, options):
     with wave.open(output, 'wb') as writer:
         writer.setparams(params)
         writer.writeframes(samples.tobytes())
-    return output.getvalue()
+    return transfer_captions(content, output.getvalue())
 
 
 def cache_path(directory, reference):

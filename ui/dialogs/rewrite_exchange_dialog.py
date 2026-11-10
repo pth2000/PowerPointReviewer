@@ -3,9 +3,17 @@
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QVBoxLayout
-from qfluentwidgets import BodyLabel, CaptionLabel, PlainTextEdit, PrimaryPushButton, PushButton, SubtitleLabel
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    PlainTextEdit,
+    PrimaryPushButton,
+    PushButton,
+    SubtitleLabel,
+)
 
 from ui.dialogs.base import ThemedDialog
+from ui.scrolling import configure_reading_scroll
 
 
 class RewriteExchangeDialog(ThemedDialog):
@@ -30,6 +38,7 @@ class RewriteExchangeDialog(ThemedDialog):
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.editor = PlainTextEdit(self)
+        configure_reading_scroll(self.editor)
         self.editor.setPlainText(task_text)
         self.editor.setReadOnly(exporting)
         if not exporting:

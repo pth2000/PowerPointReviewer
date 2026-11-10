@@ -9,7 +9,8 @@ from qfluentwidgets import isDarkTheme, qconfig, themeColor
 from qfluentwidgets.common.font import getFont
 from qfluentwidgets.common.icon import drawIcon
 
-from app.documents import package as project_package, io as script_io
+from app.documents import io as script_io
+from app.documents import package as project_package
 from ui.icons import SystemIcon
 
 

@@ -3,9 +3,15 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHeaderView, QTableWidgetItem
 from qfluentwidgets import (
-    BodyLabel, CaptionLabel, MessageBoxBase, SubtitleLabel, TableWidget,
+    BodyLabel,
+    CaptionLabel,
+    MessageBoxBase,
+    SubtitleLabel,
+    TableWidget,
     setCustomStyleSheet,
 )
+
+from ui.scrolling import configure_reading_scroll
 
 
 class AnimationCheckDialog(MessageBoxBase):
@@ -17,6 +23,7 @@ class AnimationCheckDialog(MessageBoxBase):
         description.setWordWrap(True)
         self.viewLayout.addWidget(description)
         self.table = TableWidget(self)
+        configure_reading_scroll(self.table)
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(['页码', '讲稿分段', 'PPT 点击', '检查结果'])
         self.table.setEditTriggers(TableWidget.EditTrigger.NoEditTriggers)

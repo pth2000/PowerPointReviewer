@@ -34,8 +34,8 @@ from qfluentwidgets.common.config import qconfig
 from qfluentwidgets.common.icon import drawIcon
 from qfluentwidgets.common.style_sheet import ThemeColor, updateStyleSheet
 
-from ui import icons
 from app import paths
+from ui import icons
 
 DEFAULT_COLOR = '#B7472A'
 
@@ -305,6 +305,26 @@ def create_color_dialog(color, parent, title: str = '选择主题色'):
 
 CARD_TITLE_POINT_SIZE = 10
 COMPACT_CARD_TITLE_POINT_SIZE = 9
+PAGE_CARD_SPACING = 5
+PAGE_SECTION_SPACING = 20
+PAGE_TITLE_SPACING = 10
+PAGE_TITLE_HEIGHT = 30
+PAGE_TITLE_PIXEL_SIZE = 20
+
+
+def space_page_section(layout, title, *, separated=False):
+    """统一导航页的分区标题、标题下方留白和同一布局内的分区间隔。"""
+    font = title.font()
+    font.setPixelSize(PAGE_TITLE_PIXEL_SIZE)
+    font.setWeight(QFont.Weight.DemiBold)
+    title.setFont(font)
+    title.setFixedHeight(PAGE_TITLE_HEIGHT)
+    index = layout.indexOf(title)
+    spacing = max(0, layout.spacing())
+    if separated:
+        layout.insertSpacing(index, max(0, PAGE_SECTION_SPACING - spacing))
+        index += 1
+    layout.insertSpacing(index + 1, max(0, PAGE_TITLE_SPACING - spacing))
 
 
 def make_card_title(text: str, parent=None, *, point_size=CARD_TITLE_POINT_SIZE) -> StrongBodyLabel:

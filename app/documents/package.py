@@ -13,8 +13,8 @@ from datetime import datetime
 from pathlib import Path
 
 from app import paths
-from app.presentation import link as presentation_link
 from app.audio import segments as segment_audio
+from app.presentation import link as presentation_link
 
 PACKAGE_SUFFIX = '.pprpkg'
 PACKAGE_FILTER = f'讲稿工程包 (*{PACKAGE_SUFFIX})'

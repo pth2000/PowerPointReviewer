@@ -1,9 +1,8 @@
 """以音频采样帧为基准安排配音、动画点击与换页。"""
 
+import wave
 from dataclasses import dataclass
 from pathlib import Path
-import wave
-
 
 SAMPLE_RATE = 48000
 FPS = 30

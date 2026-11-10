@@ -1,8 +1,8 @@
 """在后台检查并下载新版本。"""
 
 from PySide6.QtCore import QThread, Signal
-from app.logging_setup import get_logger
 
+from app.logging_setup import get_logger
 from app.updates import manager as updater
 
 

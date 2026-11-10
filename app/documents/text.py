@@ -2,7 +2,6 @@
 
 import re
 
-
 _LINE_BREAKS = re.compile(r'\r\n|[\r\x0b\x0c\u2028\u2029]')
 _CONTROL_CHARS = re.compile(r'[\x00-\x08\x0e-\x1f\x7f]+')
 

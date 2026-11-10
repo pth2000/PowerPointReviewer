@@ -16,7 +16,6 @@ from ctypes import wintypes
 
 from PySide6.QtCore import QRect
 
-
 WM_MOUSEWHEEL = 0x020A
 WHEEL_DELTA = 120
 

@@ -1,13 +1,11 @@
 """阿里百炼 TTS 引擎：内置音色列表、文件写入回调与基于 tts_v2 的语音合成"""
 
 import os
-from pathlib import Path
 import threading
 import traceback
-from typing import Optional
+from pathlib import Path
 
-# dashscope 导入耗时接近一秒，且只有实际调用百炼时才需要，
-# 因此推迟到调用点再导入，避免拖慢应用启动。
+# 语音 SDK 在首次合成时加载，避免增加主窗口启动开销。
 _DEFAULT_WS_URL = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference'
 _SYNTH_INIT_LOCK = threading.Lock()
 
@@ -264,30 +262,42 @@ def _file_callback_class():
         def __init__(self, output_path: str) -> None:
             self.output_path = Path(output_path)
             self.file = None
-            self.error_message: Optional[str] = None
+            self.error_message: str | None = None
             self.total_bytes: int = 0
             self.events: list[str] = []
             self.done_event = threading.Event()
+            self._file_lock = threading.Lock()
 
         def on_open(self) -> None:
-            self.file = self.output_path.open('wb')
+            with self._file_lock:
+                if self.done_event.is_set():
+                    return
+                self.file = self.output_path.open('wb')
             print(f'[百炼TTS] 连接建立，输出文件：{self.output_path}')
 
         def on_complete(self) -> None:
             print(f'[百炼TTS] 合成完成，累计字节：{self.total_bytes}')
-            self.done_event.set()
+            self._finish()
 
         def on_error(self, message: str) -> None:
             self.error_message = message
             print(f'[百炼TTS] 回调错误：{message}')
-            self.done_event.set()
+            self._finish()
 
         def on_close(self) -> None:
-            if self.file:
-                self.file.close()
-                self.file = None
             print('[百炼TTS] 连接关闭')
-            self.done_event.set()
+            self._finish()
+
+        def _finish(self):
+            with self._file_lock:
+                try:
+                    if self.file:
+                        self.file.close()
+                except OSError as exc:
+                    self.error_message = self.error_message or str(exc)
+                finally:
+                    self.file = None
+                    self.done_event.set()
 
         def on_event(self, message) -> None:
             msg = str(message)
@@ -296,15 +306,14 @@ def _file_callback_class():
                 print(f'[百炼TTS] 事件：{msg}')
 
         def on_data(self, data: bytes) -> None:
-            if self.file:
-                self.file.write(data)
-                self.total_bytes += len(data)
+            with self._file_lock:
+                if self.file:
+                    self.file.write(data)
+                    self.total_bytes += len(data)
 
     _FILE_CALLBACK_CLASS = _FileCallback
     return _FILE_CALLBACK_CLASS
 
-
-# 音频合成
 
 def save(text: str, path: str, *, voices: list[str] = VOICES, voice_index: int = 0,
          rate: float = 1.0, volume: int = 50, pitch: float = 1.0,
@@ -317,7 +326,7 @@ def save(text: str, path: str, *, voices: list[str] = VOICES, voice_index: int =
     """
     try:
         import dashscope
-        from dashscope.audio.tts_v2 import SpeechSynthesizer, AudioFormat
+        from dashscope.audio.tts_v2 import AudioFormat, SpeechSynthesizer
     except ImportError as e:
         raise RuntimeError('百炼语音功能不可用，请重新下载最新版软件后再试。') from e
 
@@ -344,22 +353,28 @@ def save(text: str, path: str, *, voices: list[str] = VOICES, voice_index: int =
                 url=ws_url,
             )
         try:
-            synthesizer.call(text)
-        except Exception as e:
-            print(f'[百炼TTS] call() 抛出异常：{e}')
-            traceback.print_exc()
-            raise RuntimeError(f'百炼语音生成失败：{e}') from e
+            try:
+                synthesizer.call(text)
+            except Exception as e:
+                print(f'[百炼TTS] call() 抛出异常：{e}')
+                traceback.print_exc()
+                raise RuntimeError(f'百炼语音生成失败：{e}') from e
 
-        # call() 返回不代表异步回调已写完文件，必须等待完成、错误或关闭事件。
-        completed = callback.done_event.wait(timeout=30)
-        if not completed:
-            raise RuntimeError('百炼语音生成超时，请检查网络连接后重试。')
-        if callback.error_message:
-            raise RuntimeError(f'百炼语音生成失败：{callback.error_message}')
-        output_path = Path(path)
-        if not output_path.exists() or output_path.stat().st_size == 0:
-            event_tail = callback.events[-3:] if callback.events else []
-            print(f'[百炼TTS] 输出为空；累计字节={callback.total_bytes}；最近事件={event_tail}')
-            raise RuntimeError('百炼未返回可播放的配音，请稍后重试或更换音色。')
+            # 完成信号须在文件关闭后发送，避免后续读取或替换尚未写完的文件。
+            completed = callback.done_event.wait(timeout=30)
+            if not completed:
+                raise RuntimeError('百炼语音生成超时，请检查网络连接后重试。')
+            if callback.error_message:
+                raise RuntimeError(f'百炼语音生成失败：{callback.error_message}')
+            output_path = Path(path)
+            if not output_path.exists() or output_path.stat().st_size == 0:
+                event_tail = callback.events[-3:] if callback.events else []
+                print(f'[百炼TTS] 输出为空；累计字节={callback.total_bytes}；最近事件={event_tail}')
+                raise RuntimeError('百炼未返回可播放的配音，请稍后重试或更换音色。')
+        finally:
+            try:
+                synthesizer.close()
+            finally:
+                callback._finish()
 
     _call()

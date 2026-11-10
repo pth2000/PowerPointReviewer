@@ -1,12 +1,13 @@
 """对本地 TTS 的 PCM WAV 调整语速，并补足头尾停顿。"""
 
-from array import array
-from io import BytesIO
 import math
 import sys
 import wave
+from array import array
+from io import BytesIO
 
 from app.audio import signalsmith
+from app.audio.captions import transfer_captions
 
 DEFAULT_SPEED = 1.0
 DEFAULT_LEADING_SILENCE_MS = 0
@@ -40,6 +41,7 @@ def _read_wav(content):
 
 
 def _change_speed(content, speed):
+    source = content
     params, pcm = _read_wav(content)
     if params.sampwidth != 2 or params.nchannels not in (1, 2):
         raise RuntimeError('当前音频格式不支持调整语速，请使用原速或更换语音服务。')
@@ -51,7 +53,7 @@ def _change_speed(content, speed):
     with wave.open(output, 'wb') as writer:
         writer.setparams(params)
         writer.writeframes(pcm)
-    return output.getvalue()
+    return transfer_captions(source, output.getvalue(), speed=speed)
 
 
 def _silence_frames(samples, channels, limit, *, from_end=False):
@@ -91,4 +93,4 @@ def process_wav(content: bytes, *, speed=DEFAULT_SPEED,
     with wave.open(output, 'wb') as writer:
         writer.setparams(params)
         writer.writeframes(silence_frame * leading + pcm + silence_frame * trailing)
-    return output.getvalue()
+    return transfer_captions(content, output.getvalue(), leading_frames=leading)

@@ -1,8 +1,8 @@
 """发布新版本：构建产物，并同步发布到 Gitee 与 GitHub。
 
-    python release.py --notes notes.md
-    python release.py --notes notes.md --dry-run
-    python release.py --prune
+    uv run --group build release.py --notes notes.md
+    uv run --group build release.py --notes notes.md --dry-run
+    uv run --group build release.py --prune
 
 发布前需要设置环境变量 GITEE_TOKEN 与 GITHUB_TOKEN，并已提交、打好 v<版本号> 标签并推送。
 版本号取自 main.py，Gitee 与 GitHub 使用同一份更新说明。
@@ -16,7 +16,10 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
+
+import requests
 
 import build
 from build import FEED_NAME, PACK_ID, PORTABLE_NAME, RELEASES_DIR, ROOT, SETUP_NAME
@@ -49,7 +52,6 @@ def is_classic(tag: str) -> bool:
 
 def github_tag_commit(tag: str) -> str:
     """返回 GitHub 上该标签指向的提交，不存在时返回空串。"""
-    import requests
 
     headers = {}
     token = os.environ.get('GITHUB_TOKEN', '')
@@ -80,7 +82,6 @@ def git(*args) -> str:
 def gitee(method: str, path: str, token: str = '', params: dict = None,
           data: dict = None, files: dict = None, timeout: int = 60):
     """调用 Gitee 开放接口。"""
-    import requests
 
     params = dict(params or {})
     data = dict(data or {})
@@ -336,8 +337,6 @@ def publish_github(version: str, tag: str, dry_run: bool):
 
 def verify(version: str, tag: str):
     """确认客户端能读到刚发布的更新索引。"""
-    import requests
-    import time
 
     _, feed_bytes = gitee_payload(version, required=False)
     local = hashlib.sha256(feed_bytes).hexdigest()

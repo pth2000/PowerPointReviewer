@@ -1,82 +1,16 @@
 """在独立任务中准备片段候选配音，支持 Qt 解码与本地效果处理。"""
 
-from pathlib import Path
 import uuid
-import wave
+from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, QThread, QTimer, QUrl, Signal
-from PySide6.QtMultimedia import QAudioDecoder, QAudioFormat
+from PySide6.QtCore import QThread, Signal
 
+from app import paths
 from app.audio import segments as segment_audio
-from tasks.audio_generation_task import AudioGenerationTask
+from app.audio.captions import SENTENCE_MODE
+from app.audio.decode import decode_wav
 from app.logging_setup import get_logger
-
-
-def decode_wav(source, target, cancelled=lambda: False, *, normalize=False):
-    """优先直接使用 PCM WAV；其余格式交给随程序附带的 Qt 解码。"""
-    source, target = Path(source), Path(target)
-    if not normalize and source.suffix.lower() == '.wav':
-        try:
-            content = source.read_bytes()
-            from app.audio.processing import _read_wav
-            params, _pcm = _read_wav(content)
-            if params.sampwidth == 2 and params.nchannels in (1, 2):
-                target.write_bytes(content)
-                return
-        except (OSError, RuntimeError):
-            pass
-    decoder = QAudioDecoder()
-    audio_format = QAudioFormat()
-    audio_format.setSampleRate(48000)
-    audio_format.setChannelCount(1)
-    audio_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-    decoder.setAudioFormat(audio_format)
-    loop, timer, poll = QEventLoop(), QTimer(), QTimer()
-    timer.setSingleShot(True)
-    errors, completed = [], []
-    writer = wave.open(str(target), 'wb')
-    writer.setnchannels(1)
-    writer.setsampwidth(2)
-    writer.setframerate(48000)
-
-    def fail(message):
-        errors.append(message)
-        loop.quit()
-
-    def read():
-        buffer = decoder.read()
-        if buffer.isValid() and buffer.format() == audio_format:
-            writer.writeframesraw(bytes(buffer.constData()))
-        else:
-            fail('无法读取这段音频，请重新生成后再试。')
-
-    def finish():
-        completed.append(True)
-        loop.quit()
-
-    decoder.bufferReady.connect(read)
-    decoder.finished.connect(finish)
-    decoder.error.connect(lambda _code: fail(decoder.errorString()))
-    timer.timeout.connect(lambda: fail('音频准备超时，请重试。'))
-    poll.timeout.connect(lambda: loop.quit() if cancelled() else None)
-    try:
-        decoder.setSource(QUrl.fromLocalFile(str(source.resolve())))
-        timer.start(60000)
-        poll.start(100)
-        decoder.start()
-        if not errors and not completed and not cancelled():
-            loop.exec()
-    finally:
-        timer.stop()
-        poll.stop()
-        decoder.stop()
-        writer.close()
-    if cancelled():
-        raise InterruptedError('已取消')
-    if errors or not completed:
-        raise RuntimeError(errors[0] if errors else '无法准备这段音频。')
-    from app.audio.processing import _read_wav
-    _read_wav(target.read_bytes())
+from tasks.audio_generation_task import AudioGenerationTask
 
 
 class AudioReviewTask(QThread):
@@ -104,7 +38,12 @@ class AudioReviewTask(QThread):
                     base = prefix.with_suffix('.source.' + engine.get_output_extension())
                     text = str(job['spoken_text'])
                     if text.strip():
-                        engine.save_file(text, str(base))
+                        options = engine.get_current_option_values()
+                        cancellation = ({'cancelled': self.isInterruptionRequested,
+                                         'sentence_cache_dir': paths.AUDIO_CACHE_DIR,
+                                         'force_sentence_regeneration': True}
+                                        if options.get('sentence_mode') == SENTENCE_MODE else {})
+                        engine.save_file(text, str(base), **cancellation)
                     else:
                         AudioGenerationTask._write_silence(base, base.suffix.lstrip('.'))
                 decoded = prefix.with_suffix('.decoded.wav')

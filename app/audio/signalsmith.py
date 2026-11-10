@@ -1,9 +1,9 @@
 """通过 ctypes 调用随程序提供的 Signalsmith PCM16 变速组件。"""
 
 import ctypes
-from functools import lru_cache
 import math
 import sys
+from functools import lru_cache
 
 from app.paths import resource_root
 

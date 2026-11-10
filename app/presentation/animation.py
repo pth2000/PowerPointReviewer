@@ -4,16 +4,15 @@
 对象触发及无法可靠读取的结构返回待确认项，不当作零次点击。
 """
 
+import posixpath
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-import posixpath
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
-from app.presentation.visibility import hidden_shape_ids, targets_hidden_shapes
 from app.presentation.media import is_media_control_sequence, media_shape_ids
-
+from app.presentation.visibility import hidden_shape_ids, targets_hidden_shapes
 
 _P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 _R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'

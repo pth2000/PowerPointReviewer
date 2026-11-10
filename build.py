@@ -1,7 +1,7 @@
 """构建 PyInstaller 产物，并用 Velopack 生成安装器、便携包与更新包。
 
-    python build.py
-    python build.py --notes notes.md
+    uv run --group build build.py
+    uv run --group build build.py --notes notes.md
 
 版本号取自 main.py。releases 目录中保留的上一版完整包会被用来生成增量包。
 发布到 Gitee 与 GitHub 请使用 release.py。
@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -29,12 +30,16 @@ PORTABLE_NAME = f'{PACK_ID}-win-Portable.zip'
 
 
 def read_version() -> str:
-    """读取 main.py 中的版本号。"""
+    """读取版本号，并确认项目元数据与运行时版本一致。"""
     text = (ROOT / 'main.py').read_text(encoding='utf-8-sig')
     match = re.search(r"^VERSION = '([^']+)'", text, re.MULTILINE)
     if not match:
         sys.exit('无法从 main.py 读取 VERSION')
-    return match.group(1)
+    version = match.group(1)
+    project = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8-sig'))['project']
+    if project['version'] != version:
+        sys.exit('main.py 与 pyproject.toml 的版本号不一致，请同步修改后再发布')
+    return version
 
 
 def find_vpk() -> str:

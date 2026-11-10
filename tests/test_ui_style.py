@@ -8,9 +8,9 @@ from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtGui import QFont
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QLabel
-from qfluentwidgets import BodyLabel, CardWidget, StrongBodyLabel, SubtitleLabel
-
+from qfluentwidgets import CardWidget, StrongBodyLabel, SubtitleLabel
 from test_sync_playback import SyncPlaybackFixture
+
 from ui import theme
 from ui.pages.tools_page import ToolsInterface
 
@@ -34,12 +34,11 @@ class UiStyleTests(SyncPlaybackFixture):
     def test_designer_and_dynamic_card_titles_share_the_same_type_style(self):
         reference = self.style(self.settings.engineSelectPathLabel)
         self.assertEqual(reference, (-1, 10, QFont.Weight.Bold))
-        for page in (self.settings.importWidget, self.tools):
+        for page in (self.settings.importWidget, *self.settings.preference_sections, self.tools):
             for label in page.findChildren(StrongBodyLabel):
                 with self.subTest(text=label.text()):
                     self.assertEqual(self.style(label), reference)
-        for label in (self.page.notesPathLabel_5, self.page.notesPathShowLabel,
-                      self.page.currentLabel, self.page.currentLabel_2):
+        for label in (self.page.notesPathLabel_5, self.page.notesPathShowLabel):
             self.assertEqual(self.style(label), reference)
 
     def test_about_cards_keep_the_existing_compact_title_style(self):
@@ -54,17 +53,22 @@ class UiStyleTests(SyncPlaybackFixture):
     def assert_settings_order(self):
         settings = self.settings
         layout = settings.verticalLayout_2
-        sections = [layout.itemAt(i).widget().text() for i in range(layout.count())
-                    if isinstance(layout.itemAt(i).widget(), SubtitleLabel)]
+        layouts = [layout, *(section.layout() for section in settings.preference_sections)]
+        sections = [current.itemAt(i).widget().text() for current in layouts
+                    for i in range(current.count())
+                    if isinstance(current.itemAt(i).widget(), SubtitleLabel)]
         self.assertEqual(sections, ['配音设置', '讲稿与播放', '放映控制', '外观'])
         self.assertEqual(settings.SubtitleLabel_2.text(), '关于与帮助')
         cards = [settings.CardWidget_5, settings._preview_text_card, settings.CardWidget_4,
                  settings.resume_session_switch.parentWidget(), settings.script_comments_switch.parentWidget(),
-                 settings.animation_check_switch.parentWidget(), settings.hotkey_card,
+                 settings.animation_check_switch.parentWidget(), settings.countdown_card, settings.hotkey_card,
                  settings.presentation_preference_combo.parentWidget(), settings.sync_playback_switch.parentWidget(),
                  settings.page_turn_card, settings.slideshow_preferences_card,
                  settings.theme_mode_combo.parentWidget(), settings.ui_font_combo.parentWidget()]
-        indices = [layout.indexOf(card) for card in cards]
+        ordered_cards = [current.itemAt(i).widget() for current in layouts
+                         for i in range(current.count())
+                         if isinstance(current.itemAt(i).widget(), CardWidget)]
+        indices = [ordered_cards.index(card) for card in cards]
         self.assertTrue(all(index >= 0 for index in indices))
         self.assertEqual(indices, sorted(set(indices)))
         if settings._voice_card is not None:
@@ -92,23 +96,14 @@ class UiStyleTests(SyncPlaybackFixture):
         self.assertEqual(beginner.count(), 1)
         self.assertEqual(advanced.count(), 1)
 
-    def test_original_home_fields_keep_application_defaults(self):
-        default = QLabel(self.page)
-        self.addCleanup(default.deleteLater)
-        reference = self.style(default)
-        for name in ('currentStatusShowLabel', 'currentStatusLabel', 'currentPageShowLabel',
-                     'currentPageLabel', 'currentIndexShowLabel', 'currentIndexLabel',
-                     'pageJumpShowLabel', 'infoShowLabel'):
-            label = getattr(self.page, name)
-            self.assertIs(type(label), QLabel)
-            self.assertEqual(self.style(label), reference)
-
-    def test_slideshow_fields_use_the_same_original_body_style(self):
-        for label in self.settings.slideshow_preferences_card.findChildren(BodyLabel):
-            self.assertEqual(self.style(label), (-1, 10, QFont.Weight.Normal))
+    def test_slideshow_titles_match_independent_setting_titles(self):
+        titles = self.settings.slideshow_preferences_card.findChildren(StrongBodyLabel)
+        self.assertEqual(len(titles), 5)
+        for label in titles:
+            self.assertEqual(self.style(label), self.style(self.settings.engineSelectPathLabel))
 
     def test_font_family_changes_preserve_title_and_body_hierarchy(self):
-        labels = (self.page.notesPathShowLabel, self.page.currentStatusLabel,
+        labels = (self.page.notesPathShowLabel, self.page.statusLabel,
                   self.settings.engineSelectPathLabel, self.settings.versionShowLabel,
                   self.settings.SubtitleLabel)
         before = [self.style(label) for label in labels]
@@ -119,7 +114,7 @@ class UiStyleTests(SyncPlaybackFixture):
         root = Path(__file__).resolve().parent.parent
         for filename, page, names in (
             ('Ui_mainwindow.ui', self.page,
-             ('notesPathLabel_5', 'notesPathShowLabel', 'currentLabel', 'currentLabel_2')),
+             ('notesPathLabel_5', 'notesPathShowLabel')),
             ('settingInterface.ui', self.settings,
              ('engineSelectPathLabel', 'savePathLabel', 'versionShowLabel', 'copyrightShowLabel')),
         ):

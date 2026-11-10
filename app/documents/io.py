@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# PPT / Word 解析库按实际文件类型延迟加载，JSON 导入不需要这两个依赖。
 
 SCRIPT_SUFFIXES = ('.pptx', '.docx', '.json')
 SCRIPT_FILTER = '讲稿文件 (*.pptx *.docx *.json)'

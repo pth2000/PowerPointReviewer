@@ -1,10 +1,10 @@
 """多实例发现只读取已运行文稿，并按 COM 身份去重。"""
 
-from pathlib import Path
-from contextlib import nullcontext
 import tempfile
-from types import SimpleNamespace as NS
 import unittest
+from contextlib import nullcontext
+from pathlib import Path
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from app.presentation import com as com_apps

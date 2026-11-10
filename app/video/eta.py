@@ -1,8 +1,8 @@
 """仅用当前任务的实时进度估算剩余时间，不保存设备基准或跨任务历史。"""
 
+import math
 from collections import deque
 from dataclasses import dataclass
-import math
 from statistics import median
 
 

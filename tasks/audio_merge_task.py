@@ -1,12 +1,12 @@
 """将不同格式的配音通过 Qt 统一为 WAV 后逐段合并。"""
 
-from pathlib import Path
 import tempfile
 import wave
+from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from tasks.audio_review_task import decode_wav
+from app.audio.decode import decode_wav
 from app.logging_setup import get_logger
 
 

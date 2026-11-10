@@ -1,11 +1,10 @@
 """设置页可见时自动更新放映状态，隐藏时停止探测。"""
 
-from types import SimpleNamespace as NS
 import unittest
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QEventLoop, QTimer
-
 from test_sync_playback import SyncPlaybackFixture
 
 

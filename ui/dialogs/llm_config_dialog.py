@@ -16,8 +16,10 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
+from app.logging_setup import log_error
 from tasks.rewrite_task import LLMModelsTask, LLMTestTask
 from ui.dialogs.base import ThemedDialog
+from ui.scrolling import configure_reading_scroll
 
 
 class LLMConfigMessageBox(MessageBoxBase):
@@ -226,6 +228,7 @@ class LLMConfigMessageBox(MessageBoxBase):
         dialog.resize(680, 440)
         layout = QVBoxLayout(dialog)
         detail = PlainTextEdit(dialog)
+        configure_reading_scroll(detail)
         detail.setReadOnly(True)
         detail.setPlainText(message)
         layout.addWidget(detail)
@@ -237,7 +240,6 @@ class LLMConfigMessageBox(MessageBoxBase):
 
     def _info(self, level: str, title: str, text: str):
         if level == 'error':
-            from app.logging_setup import log_error
             log_error(title, text)
         factory = {'success': InfoBar.success, 'warning': InfoBar.warning, 'error': InfoBar.error}[level]
         return factory(title=title, content=text, orient=Qt.Horizontal, isClosable=True,

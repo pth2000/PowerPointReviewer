@@ -1,8 +1,8 @@
 """识别媒体自身的播放控件，区别于需要讲稿配合的对象触发动画。"""
 
+import zipfile
 from functools import lru_cache
 from pathlib import Path
-import zipfile
 
 from app.logging_setup import get_logger
 

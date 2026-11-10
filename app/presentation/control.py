@@ -1,16 +1,15 @@
 """连接 PowerPoint / WPS 放映，绑定采集窗口并按页码、点击索引控制。"""
 
 import ctypes
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QSizeF
 from PySide6.QtGui import QImage
 
-from app.presentation.com_window import slideshow_hwnd
 from app.presentation import window_target
 from app.presentation.com import ensure_com, running_applications
-
+from app.presentation.com_window import slideshow_hwnd
 
 _PROCESSES = {'PowerPoint': {'powerpnt.exe'}, 'WPS 演示': {'wps.exe', 'wpp.exe'}}
 

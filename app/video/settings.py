@@ -4,7 +4,6 @@ from dataclasses import asdict, dataclass
 
 from app.video.timeline import FPS, SUPPORTED_FRAME_RATES
 
-
 RESOLUTIONS = (
     ('720p（1280 × 720）', 1280, 720),
     ('1080p（1920 × 1080）', 1920, 1080),

@@ -1,25 +1,31 @@
 """发现已安装的 OBS，启动独立便携实例，不读取或修改用户的 OBS 配置。"""
 
 import configparser
-from contextlib import contextmanager
 import fnmatch
 import json
 import logging
 import os
-from pathlib import Path
 import secrets
 import shutil
 import socket
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
+from pathlib import Path
 
+import pywintypes
+import win32api
+import win32con
+import win32file
+import win32gui
+import win32job
+import win32process
 from PySide6.QtCore import QLockFile
 
 from app.paths import DATA_DIR
 from app.video.mux import MuxCancelled
 from app.video.obs_client import ObsClient, ObsRequestError
-
 
 logger = logging.getLogger(__name__)
 RUNTIME_DIR = DATA_DIR / 'cache/obs-studio'
@@ -46,7 +52,6 @@ def _external_libraries():
     if not getattr(sys, 'frozen', False):
         yield
         return
-    import win32api
     original = win32api.GetDllDirectory()
     try:
         win32api.SetDllDirectory(None)
@@ -57,9 +62,6 @@ def _external_libraries():
 
 def wait_saved(path, cancelled, timeout=30):
     """停止返回后仍可能有复用子进程写入，必须等待独占读取成功。"""
-    import win32con
-    import win32file
-    import pywintypes
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if cancelled():
@@ -96,8 +98,6 @@ def find_obs(configured=''):
 
 def check_obs_version(executable):
     """只读文件版本，在启动和复制程序前识别过旧的安装。"""
-    import win32api
-    import pywintypes
     try:
         version = win32api.GetFileVersionInfo(str(executable), '\\')
     except (OSError, pywintypes.error):
@@ -279,7 +279,7 @@ class ObsRuntime:
                         if exc.code != 207 or time.monotonic() >= deadline:
                             raise
                         if self.cancelled():
-                            raise MuxCancelled()
+                            raise MuxCancelled() from exc
                         time.sleep(.1)
                 required = {'GetVersion', 'GetStats', 'GetRecordStatus', 'StartRecord', 'StopRecord',
                             'GetInputList', 'RemoveInput', 'CreateInput', 'SetInputSettings',
@@ -296,9 +296,6 @@ class ObsRuntime:
         # 应用意外退出时由 Windows 回收本次 OBS 及其编码子进程，避免后台持续录制。
         if self.process.poll() is not None:
             return
-        import win32api
-        import win32con
-        import win32job
         job = win32job.CreateJobObject(None, 'PowerPointReviewer-OBS-' + secrets.token_hex(16))
         try:
             limits = win32job.QueryInformationJobObject(job, win32job.JobObjectExtendedLimitInformation)
@@ -310,9 +307,9 @@ class ObsRuntime:
                 win32job.AssignProcessToJobObject(job, process)
             finally:
                 process.Close()
-        except Exception:
+        except Exception as exc:
             job.Close()
-            raise RuntimeError('无法准备 OBS 录制进程，请关闭本次导出后重试。')
+            raise RuntimeError('无法准备 OBS 录制进程，请关闭本次导出后重试。') from exc
         self.job = job
 
     def _stop_process(self):
@@ -321,9 +318,6 @@ class ObsRuntime:
             self.client = None
         if self.process and self.process.poll() is None:
             # 只关闭本次创建的 PID，不影响用户正在运行的 OBS。
-            import win32gui
-            import win32process
-            import pywintypes
             windows = []
             def close_window(hwnd, _):
                 try:

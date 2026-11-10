@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from ui.file_drop_overlay import FileDropOverlay
 from ui.widget_state import active_modal_dialog
 
+
 class FileDropImport(QObject):
     """拦截主窗口子控件的文件拖放，避免文件路径落入输入框。"""
 

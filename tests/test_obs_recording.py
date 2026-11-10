@@ -3,25 +3,37 @@
 import base64
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import tempfile
-from types import SimpleNamespace as NS
 import wave
+from pathlib import Path
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
+import test_powerpoint_export_ui as native_ui
 from PySide6.QtCore import QObject, QRect, QTimer, Signal
 from PySide6.QtTest import QSignalSpy
-
 from qt_test_case import QtTestCase
+
 from app.video.mux import MuxCancelled, build_video_captions
-from app.video.obs import (ObsVideoRecording, _CaptureWorker, capture_transform, capture_window_value,
-                           check_output_space, shifted_timeline)
+from app.video.obs import (
+    ObsVideoRecording,
+    _CaptureWorker,
+    capture_transform,
+    capture_window_value,
+    check_output_space,
+    shifted_timeline,
+)
 from app.video.obs_client import ObsClient
-from app.video.obs_runtime import ObsRuntime, check_obs_version, find_obs, wait_saved, _external_libraries
+from app.video.obs_runtime import (
+    ObsRuntime,
+    _external_libraries,
+    check_obs_version,
+    find_obs,
+    wait_saved,
+)
 from app.video.settings import VideoRecordingOptions
 from app.video.timeline import SAMPLE_RATE, TimelineAudio, VideoTimeline
-import test_powerpoint_export_ui as native_ui
 
 
 class FakeSocket(QObject):

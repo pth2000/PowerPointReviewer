@@ -1,23 +1,23 @@
 """Gitee 历史附件、保留策略及真实跨版本更新验证。"""
 
-from contextlib import contextmanager
 import hashlib
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
-from pathlib import Path
 import shutil
 import sys
 import tempfile
+import unittest
+import zipfile
+from contextlib import contextmanager
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 from types import SimpleNamespace
-import unittest
 from unittest.mock import patch
-import zipfile
 
-from app.updates.download import MirroredUpdateManager
+import release
 from app import paths
 from app.audio import signalsmith
-import release
+from app.updates.download import MirroredUpdateManager
 
 
 class ResourcePathTests(unittest.TestCase):
@@ -62,9 +62,9 @@ class ReleasePayloadTests(unittest.TestCase):
         data = f'{version}-{kind}'.encode()
         name = f'{release.PACK_ID}-{version}-{kind.lower()}.nupkg'
         (self.root / name).write_bytes(data)
-        self.assets.append(dict(PackageId=release.PACK_ID, Version=version, Type=kind,
-                                FileName=name, Size=len(data), SHA1=hashlib.sha1(data).hexdigest(),
-                                SHA256=hashlib.sha256(data).hexdigest()))
+        self.assets.append({'PackageId': release.PACK_ID, 'Version': version, 'Type': kind,
+                                'FileName': name, 'Size': len(data), 'SHA1': hashlib.sha1(data).hexdigest(),
+                                'SHA256': hashlib.sha256(data).hexdigest()})
 
     def test_publish_current_files_with_history_metadata(self):
         original = (self.root / release.FEED_NAME).read_bytes()
@@ -134,8 +134,9 @@ class ReleasePayloadTests(unittest.TestCase):
 
 class MirroredManagerTests(unittest.TestCase):
     def test_too_many_or_large_deltas_choose_full_and_report_full_size(self):
-        from app.updates import manager as updater
         import velopack
+
+        from app.updates import manager as updater
         for sizes in ([1] * 11, [60, 60]):
             with self.subTest(sizes=sizes):
                 info = SimpleNamespace(TargetFullRelease=SimpleNamespace(Size=100),
@@ -148,8 +149,9 @@ class MirroredManagerTests(unittest.TestCase):
                 self.assertEqual(updater.download_size(result), 100)
 
     def test_both_sources_use_mirrors_and_custom_feed_stays_local(self):
-        from app.updates import manager as updater
         import velopack
+
+        from app.updates import manager as updater
         with patch.object(updater.paths, 'IS_VELOPACK_INSTALL', True), \
              patch.object(updater, 'custom_feed', return_value=''), \
              patch('app.updates.download.MirroredUpdateManager') as mirrors:
@@ -239,7 +241,7 @@ class VelopackHistoryTests(unittest.TestCase):
                           if asset['Version'] in ('1.6.0', '1.6.1', '1.6.2', '1.6.3')]
         self.feed = json.dumps(feed).encode('utf-8')
         factory = tempfile.TemporaryDirectory
-        patcher = patch('app.updates.download.tempfile.TemporaryDirectory',
+        patcher = patch('app.updates.download.TemporaryWorkspace',
                         side_effect=lambda **kwargs: factory(dir=self.root, **kwargs))
         patcher.start()
         self.addCleanup(patcher.stop)

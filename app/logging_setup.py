@@ -1,8 +1,4 @@
-"""运行日志：把诊断输出落盘，供打包版排查问题。
-
-打包后控制台被关闭，print 的内容直接丢弃，出问题时用户手里只剩界面上的一句提示。
-本模块接管标准输出与未捕获异常，统一写入滚动日志文件。
-"""
+"""汇集应用日志、标准流与未捕获异常，脱敏后写入滚动日志文件。"""
 
 import ctypes
 import logging
@@ -12,8 +8,10 @@ import threading
 import traceback
 from logging.handlers import RotatingFileHandler
 
-from app import paths
+from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+from PySide6.QtGui import QGuiApplication
 
+from app import paths
 
 LOGGER_NAME = 'pptreviewer'
 
@@ -27,16 +25,20 @@ def get_logger() -> logging.Logger:
 
 def log_error(context, detail=''):
     """保存用户可见的失败；仍处于 except 内时一并保留完整堆栈。"""
-    get_logger().error('%s%s', context, f'：{detail}' if detail else '',
-                       exc_info=sys.exc_info()[0] is not None, stacklevel=2)
+    get_logger().error(
+        '%s%s',
+        context,
+        f'：{detail}' if detail else '',
+        exc_info=sys.exc_info()[0] is not None,
+        stacklevel=2,
+    )
 
 
 def _redact(text):
     text = re.sub(r'(?i)(\b(?:Bearer|Basic)\s+)[A-Za-z0-9._~+/=-]+', r'\1***', text)
     fields = r'(?:api[_-]?key|token|password|passwd|client[_-]?secret|ocp-apim-subscription-key)'
-    text = re.sub(rf'''(?ix)({fields}["']?\s*[:=]\s*)(["'])(.*?)\2''',
-                  r'\1\2***\2', text)
-    text = re.sub(rf'''(?ix)({fields}["']?\s*[:=]\s*)([^\s,;&"'}}]+)''', r'\1***', text)
+    text = re.sub(rf"""(?ix)({fields}["']?\s*[:=]\s*)(["'])(.*?)\2""", r'\1\2***\2', text)
+    text = re.sub(rf"""(?ix)({fields}["']?\s*[:=]\s*)([^\s,;&"'}}]+)""", r'\1***', text)
     text = re.sub(r'(?i)(https?://)[^\s/@:]+:[^\s/@]+@', r'\1***@', text)
     return re.sub(r'\bsk-[A-Za-z0-9_-]{12,}\b', '***', text)
 
@@ -68,8 +70,12 @@ class _SourceFilter(logging.Filter):
     """
 
     def filter(self, record):
-        if (not record.name.startswith(('pptreviewer', 'app.', 'ui.', 'tasks.', 'engines.', 'tts_engine'))
-                and record.levelno < logging.WARNING):
+        if (
+            not record.name.startswith(
+                ('pptreviewer', 'app.', 'ui.', 'tasks.', 'engines.', 'tts_engine')
+            )
+            and record.levelno < logging.WARNING
+        ):
             return False
         text = record.getMessage()
         if record.exc_info:
@@ -81,17 +87,13 @@ class _SourceFilter(logging.Filter):
             record.stack_info = _redact(record.stack_info)
         source = str(getattr(record, 'source', None) or record.module)
         if len(source) > _SOURCE_WIDTH:
-            source = '…' + source[-(_SOURCE_WIDTH - 1):]
+            source = '…' + source[-(_SOURCE_WIDTH - 1) :]
         record.source = source
         return True
 
 
 class _StreamToLog:
-    """把写往标准流的内容同时送到原始流与日志。
-
-    项目里已有大量 print 调用，第三方库也会直接写标准输出。接管这两个流可以
-    一次性覆盖，不用逐处改写。源码运行时原始流还在，控制台输出不受影响。
-    """
+    """按线程缓冲标准流，同时保留源码运行时的控制台输出。"""
 
     def __init__(self, original, level: int):
         self._original = original
@@ -151,22 +153,29 @@ def _install_excepthooks() -> None:
         get_logger().error(
             '未捕获异常\n%s',
             ''.join(traceback.format_exception(exc_type, exc_value, exc_tb)).rstrip(),
-            extra={'source': '!异常'})
+            extra={'source': '!异常'},
+        )
 
     def handle_thread(args):
         if issubclass(args.exc_type, SystemExit):
             return
         name = args.thread.name if args.thread is not None else '未知线程'
         get_logger().error(
-            '线程 %s 未捕获异常\n%s', name,
-            ''.join(traceback.format_exception(
-                args.exc_type, args.exc_value, args.exc_traceback)).rstrip(),
-            extra={'source': '!异常'})
+            '线程 %s 未捕获异常\n%s',
+            name,
+            ''.join(
+                traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)
+            ).rstrip(),
+            extra={'source': '!异常'},
+        )
 
     def handle_unraisable(args):
-        get_logger().error('无法传播的异常：%s', args.err_msg or type(args.object).__name__,
-                           exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
-                           extra={'source': '!异常'})
+        get_logger().error(
+            '无法传播的异常：%s',
+            args.err_msg or type(args.object).__name__,
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+            extra={'source': '!异常'},
+        )
 
     sys.excepthook = handle_main
     threading.excepthook = handle_thread
@@ -174,14 +183,21 @@ def _install_excepthooks() -> None:
 
 
 def _install_qt_messages():
-    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
-
     def handle(kind, context, message):
-        level = {QtMsgType.QtWarningMsg: logging.WARNING, QtMsgType.QtCriticalMsg: logging.ERROR,
-                 QtMsgType.QtFatalMsg: logging.CRITICAL}.get(kind)
+        level = {
+            QtMsgType.QtWarningMsg: logging.WARNING,
+            QtMsgType.QtCriticalMsg: logging.ERROR,
+            QtMsgType.QtFatalMsg: logging.CRITICAL,
+        }.get(kind)
         if level:
-            get_logger().log(level, '%s%s', message,
-                             f'（{context.function}）' if context.function else '', extra={'source': 'Qt'})
+            get_logger().log(
+                level,
+                '%s%s',
+                message,
+                f'（{context.function}）' if context.function else '',
+                extra={'source': 'Qt'},
+            )
+
     qInstallMessageHandler(handle)
 
 
@@ -190,15 +206,19 @@ def log_display():
 
     需在 QApplication 创建之后调用。
     """
-    from PySide6.QtGui import QGuiApplication
-
     logger = get_logger()
     banner = {'source': '启动'}
     for screen in QGuiApplication.screens():
         size = screen.geometry()
-        logger.info('屏幕 %s %dx%d 逻辑DPI %.0f 缩放 %.2f', screen.name(), size.width(),
-                    size.height(), screen.logicalDotsPerInch(), screen.devicePixelRatio(),
-                    extra=banner)
+        logger.info(
+            '屏幕 %s %dx%d 逻辑DPI %.0f 缩放 %.2f',
+            screen.name(),
+            size.width(),
+            size.height(),
+            screen.logicalDotsPerInch(),
+            screen.devicePixelRatio(),
+            extra=banner,
+        )
     if sys.platform != 'win32':
         return
     try:
@@ -225,10 +245,14 @@ def setup(version: str = '', *, max_bytes: int = 1024 * 1024, backup_count: int 
     logger.propagate = False
 
     handler = RotatingFileHandler(
-        paths.LOG_FILE, maxBytes=max_bytes, backupCount=backup_count, encoding='utf-8')
-    handler.setFormatter(logging.Formatter(
-        f'%(asctime)s %(levelname)-7s %(source)-{_SOURCE_WIDTH}s %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'))
+        paths.LOG_FILE, maxBytes=max_bytes, backupCount=backup_count, encoding='utf-8'
+    )
+    handler.setFormatter(
+        logging.Formatter(
+            f'%(asctime)s %(levelname)-7s %(source)-{_SOURCE_WIDTH}s %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+        )
+    )
     handler.addFilter(_SourceFilter())
     logger.addHandler(handler)
     logging.getLogger().addHandler(handler)
@@ -246,11 +270,19 @@ def setup(version: str = '', *, max_bytes: int = 1024 * 1024, backup_count: int 
     _configured = True
     banner = {'source': '启动'}
     logger.info('=' * 60, extra=banner)
-    logger.info('PowerPointReviewer %s（%s）', version or '未知版本',
-                '打包运行' if getattr(sys, 'frozen', False) else '源码运行', extra=banner)
-    logger.info('Python %s / 日志上限 %.1f MB × %d 个备份',
-                sys.version.split()[0], max_bytes / 1024 / 1024, backup_count + 1,
-                extra=banner)
+    logger.info(
+        'PowerPointReviewer %s（%s）',
+        version or '未知版本',
+        '打包运行' if getattr(sys, 'frozen', False) else '源码运行',
+        extra=banner,
+    )
+    logger.info(
+        'Python %s / 日志上限 %.1f MB × %d 个备份',
+        sys.version.split()[0],
+        max_bytes / 1024 / 1024,
+        backup_count + 1,
+        extra=banner,
+    )
     logger.info('应用根目录 %s', paths.APP_ROOT, extra=banner)
     logger.info('数据目录 %s', paths.DATA_ROOT, extra=banner)
     return logger

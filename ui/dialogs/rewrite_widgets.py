@@ -3,11 +3,18 @@
 from PySide6.QtCore import QEvent, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import QFrame, QStyle, QWidget
-from qfluentwidgets import PlainTextEdit, SegmentedWidget, isDarkTheme, setCustomStyleSheet, themeColor
+from qfluentwidgets import (
+    PlainTextEdit,
+    SegmentedWidget,
+    isDarkTheme,
+    setCustomStyleSheet,
+    themeColor,
+)
 from qfluentwidgets.common.font import getFont
 from qfluentwidgets.common.style_sheet import CustomStyleSheet, setStyleSheet
 from qfluentwidgets.components.widgets.list_view import ListItemDelegate
 
+from ui.scrolling import configure_reading_scroll
 
 PREVIEW_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 STATUS_ROLE = PREVIEW_ROLE + 1
@@ -27,6 +34,7 @@ def workspace_frame(parent, name, light, dark):
 
 def text_editor(parent, *, reading=False, font_size=16):
     editor = PlainTextEdit(parent)
+    configure_reading_scroll(editor)
     editor.layer.hide()
     font = editor.font()
     font.setPixelSize(font_size)

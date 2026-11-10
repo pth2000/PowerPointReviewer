@@ -19,6 +19,7 @@ from qfluentwidgets import (
 from app.presentation import window_target
 from ui.dialogs.base import ThemedDialog
 from ui.dialogs.window_preview import WindowPreview
+from ui.scrolling import configure_reading_scroll
 
 
 class WindowTargetDialog(ThemedDialog):
@@ -55,6 +56,7 @@ class WindowTargetDialog(ThemedDialog):
         layout.addWidget(tip)
 
         self.table = TableWidget(self)
+        configure_reading_scroll(self.table)
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(['窗口标题', '程序'])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)

@@ -1,15 +1,14 @@
 """将讲稿采样时间轴与 PowerPoint 的顺序动画、视频帧对齐。"""
 
-from dataclasses import dataclass
 import math
-from pathlib import Path
 import posixpath
+from dataclasses import dataclass
+from pathlib import Path
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
-from app.video.timeline import SAMPLE_RATE
 from app.presentation.media import is_media_control_sequence, media_shape_ids
-
+from app.video.timeline import SAMPLE_RATE
 
 P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'

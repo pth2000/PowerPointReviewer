@@ -1,17 +1,24 @@
 """共用视频时间轴与配音解码验证。"""
 
-from array import array
-from pathlib import Path
 import tempfile
 import unittest
 import wave
+from array import array
+from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
+from app.audio.captions import read_captions, write_captions
 from app.video.audio import RecordingAudioPreparation
 from app.video.settings import VideoRecordingOptions
-from app.video.timeline import FRAMES_PER_TICK, SAMPLE_RATE, SUPPORTED_FRAME_RATES, TimelineAudio, VideoTimeline
+from app.video.timeline import (
+    FRAMES_PER_TICK,
+    SAMPLE_RATE,
+    SUPPORTED_FRAME_RATES,
+    TimelineAudio,
+    VideoTimeline,
+)
 
 
 def write_wav(path, frames, value=5000, sample_rate=SAMPLE_RATE):
@@ -130,6 +137,9 @@ class AudioPreparationTests(unittest.TestCase):
         inputs = [self.root / 'one.wav', self.root / 'two.wav']
         write_wav(inputs[0], 22050, sample_rate=22050)
         write_wav(inputs[1], 24000, sample_rate=24000)
+        inputs[1].write_bytes(write_captions(inputs[1].read_bytes(), [
+            {'start': 0, 'end': 6000, 'text': '第一句。'},
+            {'start': 6000, 'end': 24000, 'text': '第二句。'}]))
         result, errors = [], []
         preparation = RecordingAudioPreparation(inputs, self.root)
         preparation.finished.connect(lambda paths: (result.extend(paths), self.loop.quit()))
@@ -139,6 +149,10 @@ class AudioPreparationTests(unittest.TestCase):
         preparation.cancel()
         self.assertFalse(errors, errors)
         self.assertEqual(len(result), 2)
+        timing = read_captions(result[1])
+        self.assertIsNotNone(timing)
+        self.assertEqual(timing['rate'], SAMPLE_RATE)
+        self.assertEqual(timing['cues'][1]['start'], 12000)
         for path in result:
             with wave.open(str(path), 'rb') as reader:
                 self.assertEqual(reader.getframerate(), SAMPLE_RATE)

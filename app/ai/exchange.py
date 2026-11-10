@@ -5,7 +5,6 @@ import json
 
 from app.ai import rewrite
 
-
 RESULT_FORMAT = 'powerpointreviewer-ai-result'
 RESULT_VERSION = 1
 

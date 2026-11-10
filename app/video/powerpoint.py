@@ -1,28 +1,30 @@
 """用已保存文稿的独占副本生成视频，讲稿时间轴负责翻页与顺序点击。"""
 
-from collections import Counter
-from contextlib import contextmanager
 import logging
 import math
-from pathlib import Path
 import shutil
 import sys
 import tempfile
 import time
+from collections import Counter
+from contextlib import contextmanager
+from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, QThread, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QThread, QTimer, Signal
 
-from app.presentation.visibility import hidden_shape_ids
 from app.presentation.com import application_candidates, application_pid, running_applications
-from app.video.export_progress import ExportProgressMonitor, powerpoint_process_id
+from app.presentation.visibility import hidden_shape_ids
 from app.video.eta import RemainingTimeDisplay, RemainingTimeEstimator
+from app.video.export_progress import ExportProgressMonitor, powerpoint_process_id
 from app.video.mux import MuxCancelled, build_video_captions, mux_video
-from app.video.native_media import ensure_native_media_available, join_narration, probe_media
 from app.video.narration import NarrationEncoder
+from app.video.native_media import ensure_native_media_available, join_narration, probe_media
 from app.video.powerpoint_timing import (
-    build_powerpoint_schedule, read_slide_elements, scan_slide_timings,
+    build_powerpoint_schedule,
+    read_slide_elements,
+    scan_slide_timings,
 )
-
+from app.workspaces import TemporaryWorkspace
 
 logger = logging.getLogger('pptreviewer.video.powerpoint')
 
@@ -51,7 +53,7 @@ class PowerPointTimingError(RuntimeError):
 @contextmanager
 def _export_workspace():
     """仅清理本次独占目录；短暂占用可重试，清理失败不应丢失完整成片。"""
-    workspace = tempfile.TemporaryDirectory(prefix='pptreviewer-export-')
+    workspace = TemporaryWorkspace(prefix='pptreviewer-export-')
     try:
         yield Path(workspace.name)
     finally:
@@ -248,6 +250,7 @@ def _configure_slide(slide, plan, timing, tick_us, check_cancelled=None):
 def _render_video(presentation, path, options, timeout, *, check_cancelled,
                   progress=None, pid=None, duration_us=None, estimate=None, provider='PowerPoint', stage=None):
     """仅正式画面导出启用进度监听；所有出口都先停监听再清理文稿。"""
+    # COM 库在实际导出的线程内加载，保留 Qt / COM 的初始化顺序。
     import pythoncom
     monitor = None
     estimator = RemainingTimeEstimator()
@@ -681,7 +684,6 @@ class PowerPointExportTask(QThread):
                 encoder.session.setAudioBufferInput(None)
                 encoder.deleteLater()
                 # recorder 已停止，释放文件句柄后才能清理独占目录。
-                from PySide6.QtCore import QCoreApplication, QEvent
                 QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
                 if self.isInterruptionRequested() or outcome == ['cancelled']:
                     raise MuxCancelled()

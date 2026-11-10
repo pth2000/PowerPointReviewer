@@ -1,10 +1,10 @@
 """在后台执行逐页 AI 改写和接口连通性测试。"""
 
-from app.logging_setup import get_logger
-
 from PySide6.QtCore import QThread, Signal
 
-from app.ai import client as llm_client, rewrite
+from app.ai import client as llm_client
+from app.ai import rewrite
+from app.logging_setup import get_logger
 
 
 class RewriteTask(QThread):

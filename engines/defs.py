@@ -1,5 +1,6 @@
 """引擎注册表：包含所有引擎的 schema 定义和内置音色列表"""
 
+from app.audio.captions import CONTINUOUS_MODE, SENTENCE_MODE
 from engines.qwen_clone import AUDIO_LANGUAGE_TYPES, AUDIO_TTS_MODELS, VC_MODELS
 
 # Auto 表示由模型自行判断；旧 VC 模型在运行期使用较小的语言集合。
@@ -72,8 +73,8 @@ ENGINE_DEFS = [
         'description': '使用阿里云百炼 CosyVoice 语音合成，音色丰富',
         'help': '需要阿里云百炼账号与 API Key，按用量计费。',
         'supports_voice': True,
-        'parallel_enabled': False,
-        'parallel_workers': 1,
+        'parallel_enabled': True,
+        'parallel_workers': 2,
         'retry_times': 2,
         'retry_delay': 0.8,
         'options': [
@@ -121,8 +122,8 @@ ENGINE_DEFS = [
         'description': '使用千问复刻的专属音色合成语音',
         'help': '在“复刻音色管理”中上传一段参考音频即可创建音色。音色保存在云端，可反复使用。需要阿里云百炼账号与 API Key。',
         'supports_voice': True,
-        'parallel_enabled': False,
-        'parallel_workers': 1,
+        'parallel_enabled': True,
+        'parallel_workers': 2,
         'retry_times': 2,
         'retry_delay': 0.8,
         'options': [
@@ -209,9 +210,9 @@ ENGINE_DEFS = [
     },
     {
         'id': 'qwentts',
-        'name': '本地 · qwentts.cpp',
-        'description': '连接本机或局域网的 qwentts.cpp 服务，离线合成语音',
-        'help': '先在 qwentts.cpp 启动器中选择模型和语言并启动服务，再填写服务地址、测试连接和选择音色。复刻音色可在服务网页中创建，再刷新音色列表。',
+        'name': '自部署 · qwentts.cpp',
+        'description': '连接已部署的 qwentts.cpp 服务，合成讲稿配音',
+        'help': '服务可部署在本机或其他设备。确认服务已启动后，填写服务地址、测试连接并选择音色。模型和语言在服务端设置，复刻音色可在服务网页中创建，再刷新音色列表。',
         'supports_voice': True,
         'parallel_enabled': False,
         'parallel_workers': 1,
@@ -220,8 +221,8 @@ ENGINE_DEFS = [
         'options': [
             {
                 'key': 'base_url', 'label': '服务地址',
-                'description': '填写本地语音服务的地址与端口',
-                'help': '例如 http://127.0.0.1:8080，请与启动器中显示的服务地址一致。填写后点击“测试连接”。',
+                'description': '填写 qwentts.cpp 服务的地址与端口',
+                'help': '本机服务例如 http://127.0.0.1:8080，连接其他设备时请填写该设备的服务地址。填写后点击“测试连接”。',
                 'type': 'text', 'default': 'http://127.0.0.1:8080'
             },
             {
@@ -258,7 +259,7 @@ ENGINE_DEFS = [
             },
             {
                 'key': 'request_timeout', 'label': '请求超时（秒）',
-                'description': '设置等待本地语音合成的最长时间',
+                'description': '设置等待服务生成语音的最长时间',
                 'help': '默认 300 秒。CPU 或旧显卡生成较慢时可适当调大，最长 1800 秒。',
                 'type': 'int', 'min': 10, 'max': 1800, 'step': 10, 'default': 300
             }
@@ -266,8 +267,14 @@ ENGINE_DEFS = [
     }
 ]
 
-# 所有模式共用留白定义，各模式分别保存参数；不覆盖已有配置。
+# 通用配音选项按引擎分别保存。
 for engine in ENGINE_DEFS:
+    engine['options'].append({
+        'key': 'sentence_mode', 'label': '配音分段',
+        'description': '选择整段朗读或按短句生成配音',
+        'help': '整段配音保留连贯的朗读。短句配音按自然句子分别生成，更新讲稿和失败重试时可复用已完成的句子。分别合成可能影响语气和停顿，修改此选项后需重新生成配音。',
+        'type': 'choice', 'choices': [CONTINUOUS_MODE, SENTENCE_MODE], 'default': CONTINUOUS_MODE,
+    })
     format_help = ' Edge 启用留白后输出 WAV，文件体积会增大。' if engine['id'] == 'edge' else ''
     for key, label, position in (('leading_silence_ms', '开头留白（毫秒）', '开头'),
                                  ('trailing_silence_ms', '结尾留白（毫秒）', '结尾')):

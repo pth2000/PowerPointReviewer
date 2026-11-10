@@ -1,19 +1,18 @@
 """验证逐页汇总、时长缺失处理及统计入口的播放状态隔离。"""
 
-from types import SimpleNamespace as NS
 import unittest
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QWidget
+from qt_test_case import QtTestCase
 
+from app.audio.playback import PlaybackBus
 from app.documents.statistics import build_statistics, count_characters, format_duration
 from app.settings_store import AppSettings
-from app.audio.playback import PlaybackBus
 from ui.dialogs.script_statistics_dialog import ScriptStatisticsDialog
 from ui.pages.reviewer_page import PPTReviewer
-
-from qt_test_case import QtTestCase
 
 
 class StatisticsTests(unittest.TestCase):
@@ -61,6 +60,20 @@ class StatisticsTests(unittest.TestCase):
 
 class StatisticsInterfaceTests(QtTestCase):
 
+    def test_sentence_counts_add_a_compact_column_without_changing_segment_totals(self):
+        statistics = build_statistics({1: '讲稿'}, [{'page': 1}], [1], sentence_counts=[3])
+        parent = QWidget()
+        parent.resize(760, 560)
+        dialog = ScriptStatisticsDialog(statistics, parent)
+        try:
+            self.assertEqual(dialog.table.columnCount(), 5)
+            self.assertEqual(dialog.table.horizontalHeaderItem(3).text(), '句数')
+            self.assertEqual(dialog.table.item(0, 3).text(), '3')
+            self.assertEqual(dialog.summary_values['配音段数'].text(), '1')
+        finally:
+            dialog.deleteLater()
+            parent.deleteLater()
+
     def setUp(self):
         self.root = QWidget()
         self.root.resize(760, 560)
@@ -86,9 +99,10 @@ class StatisticsInterfaceTests(QtTestCase):
         page = self.make_page()
         page.check_import()
         self.assertTrue(page.infoPushButton.isEnabled())
-        self.assertFalse(page.pageJumpSpinBox.isEnabled())
-        self.assertFalse(page.pageJumpToolButton.isEnabled())
+        self.assertFalse(page.playing_script_preview.page_position.isEnabled())
         self.assertFalse(page.playButton.isEnabled())
+        self.assertEqual(page.playButton.accessibleName(), '播放')
+        self.assertTrue(page.generate_audio_link.isEnabled())
         page.project.notes_duration_list = [9, 9, 9]  # 尚未就绪时不能展示旧配音时长。
         with patch('ui.pages.reviewer_page.ScriptStatisticsDialog') as dialog, \
              patch('ui.pages.reviewer_page.AudioGenerationTask.get_audio_duration') as read_audio:
@@ -111,12 +125,12 @@ class StatisticsInterfaceTests(QtTestCase):
         self.assertEqual(dialog.call_args.args[0].duration, 7)
         self.assertEqual(page.project.current_index, 2)
         self.assertTrue(page.project.audio_loaded)
-        self.assertTrue(page.pageJumpSpinBox.isEnabled())
+        self.assertTrue(page.playing_script_preview.page_position.isEnabled())
         stop.assert_not_called()
         read_audio.assert_not_called()
 
     def test_large_table_is_scrollable_and_fits_small_window(self):
-        result = build_statistics({page: '讲稿' for page in range(1, 201)},
+        result = build_statistics(dict.fromkeys(range(1, 201), '讲稿'),
                                   [{'page': page} for page in range(1, 201)], [20] * 200)
         dialog = ScriptStatisticsDialog(result, self.root)
         dialog.show()
@@ -129,15 +143,16 @@ class StatisticsInterfaceTests(QtTestCase):
                                                                           dialog.yesButton.rect().center())))
         dialog.hide()
 
-    def test_long_duration_with_units_wraps_without_clipping_in_small_window(self):
-        result = build_statistics({page: '讲稿' for page in range(1, 201)},
+    def test_hour_duration_with_units_stays_on_one_line_without_clipping_in_small_window(self):
+        result = build_statistics(dict.fromkeys(range(1, 201), '讲稿'),
                                   [{'page': page} for page in range(1, 201)], [34000.29] * 200)
         dialog = ScriptStatisticsDialog(result, self.root)
         dialog.show()
         self.qt.processEvents()
         duration = dialog.summary_values['配音总时长']
         self.assertIn('小时', duration.text())
-        self.assertGreaterEqual(duration.height(), duration.heightForWidth(duration.width()))
+        self.assertFalse(duration.wordWrap())
+        self.assertLessEqual(duration.fontMetrics().horizontalAdvance(duration.text()), duration.contentsRect().width())
         self.assertLessEqual(dialog.widget.height(), self.root.height() - 20)
         text = dialog.table.item(0, 3).text()
         self.assertLessEqual(dialog.table.fontMetrics().horizontalAdvance(text),

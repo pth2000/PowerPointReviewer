@@ -1,6 +1,5 @@
 """隔离验证日志入口、异常堆栈、脱敏及文件滚动，避免改写测试进程的全局钩子。"""
 
-from pathlib import Path
 import os
 import re
 import subprocess
@@ -8,6 +7,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from pathlib import Path
 
 from app.logging_setup import _redact
 
@@ -74,10 +74,21 @@ class LoggingSetupTests(unittest.TestCase):
             logging.shutdown()
         ''')
         text = logs['app.log']
+        exception_types = {
+            'handled-error': 'ValueError',
+            'thread-error': 'RuntimeError',
+            'qthread-error': 'RuntimeError',
+            'qt-callback-error': 'RuntimeError',
+            'unraisable-error': 'ValueError',
+            'main-error': 'RuntimeError',
+        }
         for marker in ('module-info', 'dependency-warning', 'stdout', 'stderr-without-newline',
                        'handled-error', 'handled-notice', 'thread-error', 'qthread-error',
                        'qt-callback-error', 'unraisable-error', 'main-error', 'qt-warning'):
-            self.assertEqual(len(re.findall(r'(?<![\w-])' + marker + r'-marker\b', text)),
+            # Python 3.14 的回溯会同时显示 raise 源码，按异常末行检查是否重复记录。
+            pattern = (rf'(?m)^{exception_types[marker]}: {marker}-marker\b'
+                       if marker in exception_types else rf'(?<![\w-]){marker}-marker\b')
+            self.assertEqual(len(re.findall(pattern, text)),
                              1, marker + ': ' + text)
         self.assertIn('Traceback (most recent call last)', text)
         for secret in ('private-123', 'sample-token-value', 'private-pass'):

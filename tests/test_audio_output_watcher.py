@@ -1,15 +1,14 @@
 """默认音频设备的轮询仅在播放期间运行。"""
 
-from types import SimpleNamespace as NS
 import unittest
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtMultimedia import QMediaPlayer
+from qt_test_case import QtTestCase
 
 from app.audio.playback import AudioOutputWatcher
-
-from qt_test_case import QtTestCase
 
 
 class Player(QObject):

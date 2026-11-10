@@ -6,8 +6,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.audio.concurrency import SynthesisHttpError
 
-# dashscope 导入耗时接近一秒，只有实际调用千问时才需要，推迟到调用点导入。
+# 语音 SDK 与 requests 在联网操作时加载，避免增加主窗口启动开销。
 
 
 _REGION_HTTP_BASE = {
@@ -437,8 +438,7 @@ def delete_voice(*, voice: str, api_key: str = '', region: str = 'cn-beijing',
 def _extract_audio_url(response: Any) -> str:
     """从合成响应中提取临时音频下载地址。
 
-    dashscope 响应继承自 ``dict``，其 ``__getattr__`` 在字段缺失时会抛 ``KeyError``，
-    因此必须使用字典接口读取可选字段。
+    dashscope 响应继承自 ``dict``，使用字典接口读取可选字段，避免缺失字段触发属性异常。
     """
     output = response.get('output') or {}
     url = str((output.get('audio') or {}).get('url', '') or '').strip()
@@ -449,7 +449,7 @@ def _extract_audio_url(response: Any) -> str:
 
 def _save_audio_tts(text: str, path: str, *, model: str, voice: str, workspace_id: str,
                     region: str, api_key: str, language_type: str, instructions: str,
-                    rate: float, volume: int, pitch: float, request_timeout: int) -> None:
+                    rate: float, volume: int, pitch: float, request_timeout: int, http_session=None) -> None:
     """Qwen-Audio-TTS 系列的非实时合成。
 
     该系列走工作空间专属的 MaaS 端点，与 Qwen3-TTS-VC 的公共端点不通用；
@@ -476,14 +476,15 @@ def _save_audio_tts(text: str, path: str, *, model: str, voice: str, workspace_i
     if instructions.strip():
         body_input['instruction'] = instructions.strip()
 
-    resp = requests.post(
+    client = http_session if http_session is not None else requests
+    resp = client.post(
         url,
         json={'model': model, 'input': body_input},
         headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
         timeout=max(int(request_timeout), 10),
     )
     if resp.status_code != 200:
-        raise RuntimeError(_describe_http_error(resp))
+        raise SynthesisHttpError(_describe_http_error(resp), resp)
 
     try:
         payload = resp.json()
@@ -491,17 +492,18 @@ def _save_audio_tts(text: str, path: str, *, model: str, voice: str, workspace_i
         raise RuntimeError('无法读取生成的配音，请稍后重试。') from e
 
     audio_url = _extract_audio_url(payload)
-    _download_audio(audio_url, path, request_timeout=request_timeout)
+    _download_audio(audio_url, path, request_timeout=request_timeout,
+                    **({'http_session': http_session} if http_session is not None else {}))
 
 
-def _download_audio(audio_url: str, path: str, *, request_timeout: int) -> None:
+def _download_audio(audio_url: str, path: str, *, request_timeout: int, http_session=None) -> None:
     """下载合成结果并落盘"""
     import requests
 
-
-    resp = requests.get(audio_url, timeout=max(int(request_timeout), 10))
+    client = http_session if http_session is not None else requests
+    resp = client.get(audio_url, timeout=max(int(request_timeout), 10))
     if resp.status_code != 200:
-        raise RuntimeError(f'合成音频下载失败（HTTP {resp.status_code}），请稍候重试。')
+        raise SynthesisHttpError(f'合成音频下载失败（HTTP {resp.status_code}），请稍候重试。', resp)
 
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -522,7 +524,7 @@ def save(text: str,
          rate: float = 1.0,
          volume: int = 50,
          pitch: float = 1.0,
-         request_timeout: int = 60) -> None:
+         request_timeout: int = 60, http_session=None) -> None:
     """使用已复刻音色合成语音，并将临时下载结果保存到本地。"""
     key = _get_api_key(api_key)
     target_voice = (voice or '').strip()
@@ -536,6 +538,7 @@ def save(text: str,
             region=region, api_key=key, language_type=language_type,
             instructions=instructions, rate=rate, volume=volume, pitch=pitch,
             request_timeout=request_timeout,
+            http_session=http_session,
         )
         return
 
@@ -553,4 +556,7 @@ def save(text: str,
         kwargs['language_type'] = language_type.strip()
 
     response = dashscope.MultiModalConversation.call(**kwargs)
-    _download_audio(_extract_audio_url(response), path, request_timeout=request_timeout)
+    if response.status_code != 200:
+        raise SynthesisHttpError(_describe_response_error(response), response)
+    _download_audio(_extract_audio_url(response), path, request_timeout=request_timeout,
+                    **({'http_session': http_session} if http_session is not None else {}))

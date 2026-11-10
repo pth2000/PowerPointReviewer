@@ -1,23 +1,37 @@
 """片段配音试听、候选采用、恢复与持久化的完整流程。"""
 
-from array import array
 import copy
 import json
 import math
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace as NS
 import unittest
-from unittest.mock import Mock, patch
 import wave
+from array import array
+from pathlib import Path
+from types import SimpleNamespace as NS
+from unittest.mock import Mock, patch
 
-from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QItemSelectionModel, QTimer, Qt
-from qfluentwidgets import TransparentToolButton
+from PySide6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QEventLoop,
+    QItemSelectionModel,
+    QPoint,
+    QRect,
+    Qt,
+    QTimer,
+)
+from PySide6.QtTest import QTest
+from qt_test_case import QtTestCase
 
-from app.audio import cache as audio_cache, segments as segment_audio
-from app.documents import export as exporters, package as project_package
 from app import paths
+from app.audio import cache as audio_cache
+from app.audio import segments as segment_audio
+from app.audio.captions import write_captions
 from app.audio.playback import PlaybackBus
+from app.audio.sentences import SentenceTimeline, load_sentences
+from app.documents import export as exporters
+from app.documents import package as project_package
 from app.settings_store import AppSettings
 from tasks.audio_generation_task import AudioGenerationTask
 from tasks.audio_merge_task import AudioMergeTask
@@ -26,8 +40,6 @@ from tts_engine import TTSEngine
 from ui.dialogs.audio_review_dialog import AudioReviewDialog
 from ui.dialogs.audio_review_widgets import SEGMENT_ROLE
 from ui.pages.reviewer_page import PPTReviewer
-
-from qt_test_case import QtTestCase
 
 
 def make_wav(path, seconds=1.0, amplitude=4000):
@@ -146,6 +158,152 @@ class AudioReviewTests(QtTestCase):
         self.assertIn(0, self.dialog.candidates, self.dialog.message.text())
         self.dialog.stop()
 
+    def test_focus_from_home_reveals_current_segment_and_preserves_other_drafts(self):
+        self.dialog.speed.setValue(1.25)
+        draft = copy.deepcopy(self.dialog.drafts[0])
+        self.dialog.search.setText('第一段')
+        self.assertEqual(self.dialog.table.rowCount(), 1)
+        self.dialog.focus_segment(2)
+        self.assertEqual(self.dialog.current(), 2)
+        self.assertEqual(self.dialog.search.text(), '')
+        self.assertEqual(self.dialog.drafts[0], draft)
+
+    def test_workspace_expands_list_while_inspector_and_waveform_keep_bounds(self):
+        self.dialog.resize(960, 620)
+        self.qt.processEvents()
+        splitter = self.dialog.workspace_splitter
+        narrow = splitter.widget(0).width()
+        for width in (1180, 1800):
+            self.dialog.resize(width, 800)
+            self.qt.processEvents()
+            self.assertGreater(splitter.widget(0).width(), narrow)
+            self.assertGreaterEqual(splitter.widget(1).width(), 340)
+            self.assertLessEqual(splitter.widget(1).width(), 420)
+            self.assertEqual(self.dialog.seek.height(), 48)
+            for control in (self.dialog.apply_button, self.dialog.play_button, self.dialog.seek):
+                self.assertTrue(self.dialog.rect().contains(control.mapTo(self.dialog, control.rect().center())))
+        self.assertTrue(self.dialog.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint)
+
+    def test_workspace_fits_small_logical_desktop_and_preserves_access_to_actions(self):
+        for width, height in ((940, 600), (1090, 620)):
+            screen = Mock()
+            screen.availableGeometry.return_value = QRect(0, 0, width, height)
+            self.dialog._fit_workspace_screen(screen)
+            self.qt.processEvents()
+            self.assertLessEqual(self.dialog.width(), width - 32)
+            self.assertLessEqual(self.dialog.height(), height - 48)
+            self.assertTrue(self.dialog.rect().contains(
+                self.dialog.render_button.mapTo(self.dialog, self.dialog.render_button.rect().center())))
+            self.assertTrue(self.dialog.rect().contains(
+                self.dialog.seek.mapTo(self.dialog, self.dialog.seek.rect().center())))
+
+    def test_player_controls_share_one_row_on_small_and_large_desktops(self):
+        screen = Mock()
+        screen.availableGeometry.return_value = QRect(0, 0, 940, 600)
+        self.dialog._fit_workspace_screen(screen)
+        self.page.project.notes_duration_list[0] = 5025
+        self.dialog._position_changed(3675000)
+        self.assertEqual(self.dialog.elapsed_label.text(), '1:01:15')
+        self.assertEqual(self.dialog.duration_label.text(), '1:23:45')
+        for width in (908, 1180, 1800):
+            self.dialog.resize(width, 760)
+            self.qt.processEvents()
+            bar = self.dialog.player_bar
+            centers = []
+            for control in (self.dialog.previous_button, self.dialog.play_button,
+                            self.dialog.next_button, self.dialog.seek, self.dialog.elapsed_label,
+                            self.dialog.duration_label):
+                rect = control.rect().translated(control.mapTo(bar, QPoint()))
+                self.assertTrue(bar.rect().contains(rect))
+                centers.append(rect.center().y())
+            self.assertLessEqual(max(centers) - min(centers), 1)
+            self.assertLessEqual(bar.height(), 72)
+            self.assertGreaterEqual(self.dialog.seek.width(), 120)
+            self.assertEqual(self.dialog.play_button.size().width(), 44)
+            self.assertLess(self.dialog.elapsed_label.geometry().right(), self.dialog.seek.geometry().left())
+            self.assertLess(self.dialog.seek.geometry().right(), self.dialog.duration_label.geometry().left())
+
+    def test_candidate_and_current_comparison_stay_on_current_segment(self):
+        self.render()
+        self.qt.processEvents()
+        self.assertTrue(self.dialog.compare_card.isVisible())
+        self.dialog._compare_source('candidate')
+        self.assertEqual(self.dialog._active_audio, (0, 'candidate'))
+        self.assertIsNot(self.dialog.compare_card.parentWidget(), self.dialog.player_bar)
+        self.dialog._compare_source('current')
+        self.qt.processEvents()
+        self.assertEqual(self.dialog._active_audio, (0, 'current'))
+        self.dialog.stop()
+        with patch.object(self.dialog, '_play_current'):
+            self.dialog.play()
+            self.assertEqual(self.dialog._active_audio, (0, 'current'))
+
+    def test_waveform_tracks_selected_and_candidate_files_and_releases_on_close(self):
+        self.dialog._select_index(2)
+        self.assertEqual(Path(self.dialog.seek._desired[0]), self.page.project.media_list[2])
+        self.dialog._select_index(0)
+        self.render()
+        self.dialog._compare_source('candidate')
+        self.assertEqual(Path(self.dialog.seek._desired[0]), self.dialog.candidates[0]['path'])
+        self.dialog.stop()
+        self.dialog.candidates.clear()
+        self.dialog.drafts.clear()
+        self.dialog.close()
+        self.assertIsNone(self.dialog.seek._desired)
+        self.assertFalse(self.dialog.seek._cache)
+
+    def test_seeking_before_playback_loads_selected_audio_and_uses_pending_position(self):
+        self.dialog._select_index(1)
+        self.assertTrue(self.dialog.player.source().isEmpty())
+        with patch.object(self.dialog.sentence_playback, 'seek_position') as seek:
+            self.dialog._seek(450)
+        seek.assert_called_once_with(450)
+        self.assertEqual(Path(self.dialog.player.source().toLocalFile()), self.page.project.media_list[1])
+        self.assertEqual(self.dialog._active_audio, (1, 'current'))
+
+    def test_first_waveform_drag_can_continue_after_loading_audio_and_stop_ends_drag(self):
+        rect = self.dialog.seek._plot_rect()
+        start = rect.center().toPoint()
+        end = start + QPoint(round(rect.width() / 4), 0)
+        with patch.object(self.dialog.sentence_playback, 'seek_position') as seek:
+            QTest.mousePress(self.dialog.seek, Qt.MouseButton.LeftButton, pos=start)
+            self.assertTrue(self.dialog.seek.isSliderDown())
+            QTest.mouseMove(self.dialog.seek, end)
+            QTest.mouseRelease(self.dialog.seek, Qt.MouseButton.LeftButton, pos=end)
+        self.assertAlmostEqual(seek.call_args.args[0], 750, delta=5)
+        self.assertFalse(self.dialog.seek.isSliderDown())
+        self.dialog.seek.setSliderDown(True)
+        self.dialog.stop()
+        self.assertFalse(self.dialog.seek.isSliderDown())
+
+    def test_audio_ready_clears_previous_unavailable_notice(self):
+        self.page.project.audio_loaded = False
+        self.dialog.reload()
+        self.assertIsNone(self.dialog.revision)
+        self.assertIn('配音准备好后', self.dialog.message.text())
+        self.page.project.audio_loaded = True
+        self.dialog.reload()
+        self.assertIsNotNone(self.dialog.revision)
+        self.assertEqual(self.dialog.message.text(), '')
+        self.assertFalse(self.dialog.message.isVisible())
+        self.assertEqual(self.dialog.table.rowCount(), 3)
+
+    def test_ready_result_received_while_worker_is_busy_recovers_when_worker_finishes(self):
+        with patch.object(self.page, 'is_busy', return_value=True):
+            self.page.audio_changed.emit()
+            self.assertIsNone(self.dialog.revision)
+            self.assertTrue(self.dialog.message.isVisible())
+        self.page.presentation_state_changed.emit()
+        self.assertIsNotNone(self.dialog.revision)
+        self.assertEqual(self.dialog.table.rowCount(), 3)
+        self.assertFalse(self.dialog.message.isVisible())
+        self.assertEqual(self.dialog.script_text.text(), '第一段')
+
+    def test_unchanged_audio_refresh_does_not_clear_an_actual_error(self):
+        self.dialog.message.setText('配音准备失败：服务暂时不可用')
+        self.dialog.reload()
+        self.assertEqual(self.dialog.message.text(), '配音准备失败：服务暂时不可用')
+
     def test_render_compare_adopt_restore_and_undo_update_one_record(self):
         original = self.page.project.media_list[0].read_bytes()
         before = self.record.read_bytes()
@@ -243,7 +401,7 @@ class AudioReviewTests(QtTestCase):
         task.output_path.mkdir()
         with patch.object(self.engine, 'validate_generation_settings'), \
              patch.object(self.engine, 'save_file') as synthesize:
-            task.configure(self.page.project.notes_list[:1], 0, audio_edits=self.page.project.audio_edits)
+            task.configure(self.page.project.notes_list[:1], audio_edits=self.page.project.audio_edits)
             result = task.save_wav()
         synthesize.assert_not_called()
         self.assertEqual(result.cache_keys, [key])
@@ -397,7 +555,7 @@ class AudioReviewTests(QtTestCase):
              patch('ui.dialogs.audio_review_dialog.AudioReviewTask') as task:
             self.dialog.prepare(False)
         task.assert_not_called()
-        play.assert_called_once_with(indices=[0])
+        play.assert_called_once_with()
         self.assertFalse(self.dialog.candidates)
 
     def test_batch_effects_reuse_current_audio_and_display_selected_scripts(self):
@@ -521,32 +679,28 @@ class AudioReviewTests(QtTestCase):
         self.assertEqual(output.read_bytes(), before)
         self.assertFalse(list(self.root.glob('.audio-merge-*')))
 
-    def test_playback_ranges_finish_and_stop_ignore_stale_end_signal(self):
-        self.dialog.play_range.setCurrentIndex(1)
-        with patch.object(self.dialog, '_play_queued') as queued:
+    def test_segment_completion_does_not_advance_and_ignores_stale_end_signal(self):
+        with patch.object(self.dialog, '_play_current') as start:
             self.dialog.play()
-            self.assertEqual(self.dialog._queue, [(0, 'current'), (1, 'current')])
+            self.assertEqual(self.dialog._active_audio, (0, 'current'))
             serial = self.dialog._play_serial
-            self.dialog._advance(serial)
-            self.assertEqual(self.dialog._queue_offset, 1)
-            count = queued.call_count
-            self.dialog._advance(serial)
-            self.assertEqual(self.dialog._queue_offset, 1)
+            self.dialog._finish_playback(serial)
             self.assertFalse(self.dialog._playing)
-            self.assertEqual(queued.call_count, count)
-            self.dialog._advance(serial)
-            self.assertEqual(queued.call_count, count)
-            self.dialog.play()
-            serial = self.dialog._play_serial
-            count = queued.call_count
+            self.assertEqual(self.dialog._active_audio, (0, 'current'))
+            start.assert_called_once()
             self.dialog.stop()
-            self.dialog._advance(serial)
-            self.assertEqual(queued.call_count, count)
-        self.dialog.play_range.setCurrentIndex(3)
-        self.dialog._select_index(1)
-        with patch.object(self.dialog, '_play_queued'):
+            self.dialog.play(index=1)
+            self.dialog._finish_playback(serial)
+            self.assertTrue(self.dialog._playing)
+            self.assertEqual(self.dialog._active_audio, (1, 'current'))
+
+    def test_page_filter_and_multiple_selection_do_not_expand_playback(self):
+        self.dialog.pages.setCurrentIndex(1)
+        self.dialog.table.selectAll()
+        current = self.dialog.current()
+        with patch.object(self.dialog, '_play_current'):
             self.dialog.play()
-            self.assertEqual(self.dialog._queue, [(1, 'current'), (2, 'current')])
+            self.assertEqual(self.dialog._active_audio, (current, 'current'))
 
     def test_close_reopen_and_discard_clean_draft(self):
         self.dialog.resize(960, 620)
@@ -574,20 +728,111 @@ class AudioReviewTests(QtTestCase):
         self.assertTrue(Path(self.dialog._directory.name).is_dir())
         self.render()
 
-    def test_editor_expands_complete_selected_text_and_follows_window_width(self):
+    def test_complete_text_follows_width_without_resizing_on_selection(self):
         self.page.project.notes_list[0]['text'] = '这里是一段需要逐句核对读音和节奏的较长讲稿。' * 30
         self.page.audio_changed.emit()
         self.dialog.resize(960, 620)
         self.qt.processEvents()
         narrow = self.dialog.table.rowHeight(0)
-        self.assertTrue(self.dialog.table.item(0, 2).data(SEGMENT_ROLE)['expanded'])
+        self.assertGreater(narrow, 200)
         self.dialog.resize(1180, 760)
         self.qt.processEvents()
         self.assertLess(self.dialog.table.rowHeight(0), narrow)
-        expanded = self.dialog.table.rowHeight(0)
+        complete = self.dialog.table.rowHeight(0)
         self.dialog._select_index(1)
-        self.assertLess(self.dialog.table.rowHeight(0), expanded)
-        self.assertFalse(self.dialog.table.item(0, 2).data(SEGMENT_ROLE)['expanded'])
+        self.qt.processEvents()
+        self.assertEqual(self.dialog.table.rowHeight(0), complete)
+
+    def test_preview_is_optional_and_follows_the_selected_page(self):
+        self.assertFalse(self.dialog.inspector_tabs.items['slides'].isEnabled())
+        source = self.root / '讲稿.pptx'
+        source.write_bytes(b'presentation')
+        self.page.project.presentation_path = source
+        with patch('ui.dialogs.slide_preview.QThreadPool'):
+            self.dialog._selection_changed()
+            self.assertTrue(self.dialog.inspector_tabs.items['slides'].isEnabled())
+            self.assertFalse(self.dialog.slide_preview.isVisible())
+            self.dialog.inspector_tabs.items['slides'].click()
+            self.qt.processEvents()
+            self.assertTrue(self.dialog.slide_preview.isVisible())
+            self.assertFalse(self.dialog.script_panel.isVisible())
+            self.assertTrue(self.dialog.speed.isVisible())
+            self.assertTrue(self.dialog.volume.isVisible())
+            self.assertEqual(self.dialog.inspector_tabs.currentRouteKey(), 'slides')
+            self.assertEqual(self.dialog.slide_preview._page, 1)
+            self.dialog._select_index(2)
+            self.assertEqual(self.dialog.slide_preview._page, 2)
+            self.dialog.inspector_tabs.items['script'].click()
+            self.assertFalse(self.dialog.slide_preview.isVisible())
+            self.assertTrue(self.dialog.script_panel.isVisible())
+            self.dialog.slide_preview._task.signals.deleteLater()
+            self.dialog.slide_preview._task = None
+
+    def test_missing_presentation_keeps_script_visible(self):
+        self.dialog._set_inspector_view('slides')
+        self.assertEqual(self.dialog.inspector_tabs.currentRouteKey(), 'script')
+        self.assertTrue(self.dialog.script_panel.isVisible())
+        self.assertFalse(self.dialog.slide_preview.isVisible())
+
+    def test_reopening_starts_with_script_and_does_not_restart_slide_loading(self):
+        source = self.root / '讲稿.pptx'
+        source.write_bytes(b'presentation')
+        self.page.project.presentation_path = source
+        with patch('ui.dialogs.slide_preview.QThreadPool') as pool:
+            self.dialog._selection_changed()
+            self.dialog.inspector_tabs.items['slides'].click()
+            self.qt.processEvents()
+            self.assertEqual(pool.globalInstance.return_value.start.call_count, 1)
+            self.dialog.close()
+            self.dialog.show()
+            self.qt.processEvents()
+            self.assertEqual(self.dialog.inspector_tabs.currentRouteKey(), 'script')
+            self.assertFalse(self.dialog.slide_preview.isVisible())
+            self.assertEqual(pool.globalInstance.return_value.start.call_count, 1)
+            self.dialog.slide_preview._task.signals.deleteLater()
+            self.dialog.slide_preview._task = None
+
+    def test_large_review_loads_sentence_data_only_for_visible_rows_and_after_scroll(self):
+        project = self.page.project
+        project.notes = dict.fromkeys(range(1, 201), '第一段●第二段●第三段')
+        project.split_notes(comments_enabled=False)
+        project.media_list = [project.media_list[0]] * 600
+        project.notes_duration_list = [1] * 600
+        project.note_cache_keys = ['voice0'] * 600
+        project.note_cache_exts = ['wav'] * 600
+        project.current_index = 300
+        with patch('ui.dialogs.audio_review_dialog.load_sentences', return_value=SentenceTimeline()) as read:
+            self.dialog.reload()
+            self.qt.processEvents()
+            self.assertEqual(self.dialog.current(), 300)
+            self.assertLess(read.call_count, 40)
+            read.reset_mock()
+            self.dialog.table.verticalScrollBar().setValue(self.dialog.table.verticalScrollBar().maximum())
+            self.qt.processEvents()
+            self.assertIn('sentence_key', self.dialog.table.item(599, 2).data(SEGMENT_ROLE))
+            self.assertLess(read.call_count, 30)
+
+    def test_script_and_preview_share_space_and_keep_sentence_details(self):
+        self._install_sentences()
+        source = self.root / '讲稿.pptx'
+        source.write_bytes(b'presentation')
+        self.page.project.presentation_path = source
+        with patch('ui.dialogs.slide_preview.QThreadPool'):
+            self.dialog._selection_changed()
+            self.assertTrue(self.dialog.transcript.isVisible())
+            self.assertTrue(self.dialog.sentence_count.isVisible())
+            self.dialog.inspector_tabs.items['slides'].click()
+            self.qt.processEvents()
+            self.dialog._refresh_sentence_view()
+            self.assertFalse(self.dialog.transcript.isVisible())
+            self.assertFalse(self.dialog.sentence_count.isVisible())
+            self.assertTrue(self.dialog.slide_preview.isVisible())
+            self.dialog.inspector_tabs.items['script'].click()
+            self.assertTrue(self.dialog.transcript.isVisible())
+            self.assertTrue(self.dialog.sentence_count.isVisible())
+            self.assertFalse(self.dialog.slide_preview.isVisible())
+            self.dialog.slide_preview._task.signals.deleteLater()
+            self.dialog.slide_preview._task = None
 
     def test_play_buttons_stay_centered_in_rows_after_search_and_filter_changes(self):
         self.page.project.notes_list[0]['text'] = '搜索目标第一段，这是一段需要核对的讲稿。' * 8
@@ -598,13 +843,11 @@ class AudioReviewTests(QtTestCase):
         def assert_buttons_centered():
             self.qt.processEvents()
             for row in range(self.dialog.table.rowCount()):
-                cell = self.dialog.table.cellWidget(row, 0)
-                button = cell.findChild(TransparentToolButton)
                 rect = self.dialog.table.visualRect(self.dialog.table.model().index(row, 0))
-                center = button.mapTo(self.dialog.table.viewport(), button.rect().center())
-                self.assertLessEqual(abs(center.y() - rect.center().y()), 1)
-                self.assertTrue(rect.contains(cell.geometry()))
-                self.assertTrue(cell.rect().contains(button.geometry()))
+                button = self.dialog.table.itemDelegate().play_rect(rect)
+                self.assertLessEqual(abs(button.center().y() - rect.center().y()), 1)
+                self.assertTrue(rect.contains(button.toAlignedRect()))
+                self.assertIsNone(self.dialog.table.cellWidget(row, 0))
 
         assert_buttons_centered()
         for query in ('搜', '搜索', '第二段', '没有匹配的内容', '目标', ''):
@@ -619,6 +862,30 @@ class AudioReviewTests(QtTestCase):
         self.dialog.pages.setCurrentIndex(0)
         assert_buttons_centered()
 
+    def test_row_play_hit_target_selects_and_plays_the_correct_segment(self):
+        self.dialog._select_index(2)
+        self.qt.processEvents()
+        cell = self.dialog.table.visualRect(self.dialog.table.model().index(2, 0))
+        button = self.dialog.table.itemDelegate().play_rect(cell)
+        with patch.object(self.dialog, 'play') as play:
+            QTest.mouseClick(self.dialog.table.viewport(), Qt.MouseButton.LeftButton,
+                             pos=button.center().toPoint())
+            play.assert_called_once_with(index=2)
+
+    def test_row_play_drag_out_cancels_press_without_playing(self):
+        self.qt.processEvents()
+        table = self.dialog.table
+        delegate = table.itemDelegate()
+        cell = table.visualRect(table.model().index(0, 0))
+        button = delegate.play_rect(cell)
+        text = table.visualRect(table.model().index(0, 2))
+        with patch.object(self.dialog, 'play') as play:
+            QTest.mousePress(table.viewport(), Qt.MouseButton.LeftButton, pos=button.center().toPoint())
+            QTest.mouseMove(table.viewport(), text.center())
+            QTest.mouseRelease(table.viewport(), Qt.MouseButton.LeftButton, pos=text.center())
+            play.assert_not_called()
+        self.assertIsNone(delegate._pressed_play)
+
     def test_new_and_current_audio_share_player_without_changing_saved_audio(self):
         before = self.record.read_bytes()
         self.assertTrue(self.dialog.render_button.isVisible())
@@ -631,8 +898,65 @@ class AudioReviewTests(QtTestCase):
         self.dialog._compare_source('candidate')
         self.assertEqual(Path(self.dialog.player.source().toLocalFile()), self.dialog.candidates[0]['path'])
         self.dialog.stop()
-        self.assertIn('0.67', self.dialog.time_label.text())
+        self.assertIn('0.67', self.dialog.duration_label.text())
         self.assertEqual(self.record.read_bytes(), before)
+
+    def _install_sentences(self):
+        self.dialog.stop()
+        path = self.page.project.media_list[0]
+        path.write_bytes(write_captions(path.read_bytes(), [
+            {'start': 0, 'end': 12000, 'text': '第一句。'},
+            {'start': 12000, 'end': 24000, 'text': '第二句。'},
+        ]))
+        self.page.project.notes_list[0]['text'] = '第一句。第二句。'
+        self.dialog.reload()
+        self.dialog._select_index(0)
+        self.qt.processEvents()
+        return path
+
+    def test_sentence_transcript_click_seeks_without_advancing_powerpoint(self):
+        self._install_sentences()
+        self.assertFalse(self.dialog.transcript.isHidden())
+        self.assertTrue(self.dialog.script_text.isHidden())
+        self.assertEqual(len(self.dialog.transcript.sentences), 2)
+        self.assertEqual(self.dialog.sentence_count.text(), '2 句')
+        point = self.dialog.transcript.sentence_rect(2).center().toPoint()
+        with patch.object(self.page, 'send_page_down') as advance:
+            QTest.mouseClick(self.dialog.transcript, Qt.MouseButton.LeftButton, pos=point)
+            self.assertEqual(self.dialog._active_audio, (0, 'current'))
+            self.assertEqual(len(self.dialog.sentence_playback.timeline), 2)
+            self.assertTrue(self.dialog.sentence_playback._pending == 500 or self.dialog.player.position() >= 500)
+        advance.assert_not_called()
+        self.dialog.stop()
+
+    def test_sentence_transcript_supports_keyboard_and_falls_back_for_ordinary_audio(self):
+        self._install_sentences()
+        self.dialog.transcript.setFocus()
+        with patch.object(self.dialog, '_play_sentence') as play:
+            self.dialog.transcript.activated.disconnect()
+            self.dialog.transcript.activated.connect(play)
+            QTest.keyClick(self.dialog.transcript, Qt.Key.Key_Down)
+            QTest.keyClick(self.dialog.transcript, Qt.Key.Key_Return)
+            play.assert_called_once_with(2)
+        self.dialog._select_index(1)
+        self.assertTrue(self.dialog.transcript.isHidden())
+        self.assertFalse(self.dialog.script_text.isHidden())
+        self.assertTrue(self.dialog.sentence_count.isHidden())
+
+    def test_sentence_metadata_follows_candidate_adoption_and_undo(self):
+        path = self._install_sentences()
+        self.dialog.speed.setValue(2)
+        self.dialog.prepare(False)
+        self.wait_task()
+        self.dialog.stop()
+        candidate = load_sentences(self.dialog.candidates[0]['path'])
+        self.assertAlmostEqual(candidate.spans[1].start, 0.25, delta=0.02)
+        self.dialog.adopt()
+        self.assertEqual(self.dialog._sentence_timeline(0), candidate)
+        self.dialog.undo()
+        self.assertEqual(self.dialog._sentence_timeline(0), load_sentences(path))
+        self.dialog.redo()
+        self.assertEqual(self.dialog._sentence_timeline(0), candidate)
 
     def test_changing_script_while_candidate_is_prepared_invalidates_result(self):
         self.dialog.speed.setValue(1.25)

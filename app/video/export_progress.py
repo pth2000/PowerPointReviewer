@@ -1,12 +1,14 @@
 """可选的 PowerPoint 画面进度监听，失败时不影响导出。"""
 
 import ctypes
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 
+import win32process
+
+from app.presentation import window_target
 from app.presentation.com import application_pid
 from app.video.mux import _library
-
 
 logger = logging.getLogger('pptreviewer.video.powerpoint')
 
@@ -14,13 +16,11 @@ logger = logging.getLogger('pptreviewer.video.powerpoint')
 def powerpoint_process_id(application):
     """缺少 HWND 的隐藏实例只在进程唯一时关联，避免猜测多个实例的归属。"""
     try:
-        import win32process
-        from app.presentation.window_target import _process_name
         pid = application_pid(application)
-        if pid and _process_name(pid).lower() == 'powerpnt.exe':
+        if pid and window_target._process_name(pid).lower() == 'powerpnt.exe':
             return pid
         candidates = [pid for pid in win32process.EnumProcesses()
-                      if pid and _process_name(pid).lower() == 'powerpnt.exe']
+                      if pid and window_target._process_name(pid).lower() == 'powerpnt.exe']
         return candidates[0] if len(candidates) == 1 else None
     except Exception:
         logger.debug('无法确认 PowerPoint 进度监听的进程', exc_info=True)

@@ -1,12 +1,13 @@
 """验证友好显示不会丢失服务响应，也不会改变音频格式参数。"""
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import requests
 from PySide6.QtWidgets import QWidget
+from qt_test_case import QtTestCase
 
 from app.ai import client as llm_client
 from app.settings_store import AppSettings
@@ -14,8 +15,6 @@ from engines.qwen_clone import AUDIO_TTS_MODELS
 from ui.dialogs.llm_config_dialog import LLMConfigMessageBox
 from ui.dialogs.qwen_clone_voice_dialog import QwenCloneVoiceDialog
 from ui.dialogs.rewrite_dialog import RewriteDialog
-
-from qt_test_case import QtTestCase
 
 
 def make_response(status, body):

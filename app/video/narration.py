@@ -2,12 +2,17 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QElapsedTimer, QTimer, QUrl, Signal
-from PySide6.QtMultimedia import QAudioBuffer, QAudioBufferInput, QMediaCaptureSession, QMediaFormat, QMediaRecorder
+from PySide6.QtCore import QElapsedTimer, QObject, QTimer, QUrl, Signal
+from PySide6.QtMultimedia import (
+    QAudioBuffer,
+    QAudioBufferInput,
+    QMediaCaptureSession,
+    QMediaFormat,
+    QMediaRecorder,
+)
 
 from app.video.audio import pcm_format
 from app.video.timeline import SAMPLE_RATE, TimelineAudio
-
 
 AUDIO_BIT_RATE = 128000
 

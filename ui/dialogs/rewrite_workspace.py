@@ -4,14 +4,35 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QSplitter, QStackedWidget, QVBoxLayout, QWidget
 from qfluentwidgets import (
-    BodyLabel, CaptionLabel, CheckBox, ComboBox, HorizontalSeparator, ListWidget,
-    PrimaryPushButton, ProgressBar, PushButton, ScrollArea,
-    StrongBodyLabel, SubtitleLabel, setCustomStyleSheet,
+    BodyLabel,
+    CaptionLabel,
+    CheckBox,
+    ComboBox,
+    HorizontalSeparator,
+    ListWidget,
+    PrimaryPushButton,
+    ProgressBar,
+    PushButton,
+    ScrollArea,
+    StrongBodyLabel,
+    SubtitleLabel,
+    setCustomStyleSheet,
+)
+
+from ui.dialogs.rewrite_widgets import (
+    ManuscriptPageDelegate,
+    WorkspaceSwitch,
 )
 from ui.dialogs.rewrite_widgets import (
-    ManuscriptPageDelegate, WorkspaceSwitch, metadata_label as _muted,
-    text_editor as _editor, workspace_frame as _frame,
+    metadata_label as _muted,
 )
+from ui.dialogs.rewrite_widgets import (
+    text_editor as _editor,
+)
+from ui.dialogs.rewrite_widgets import (
+    workspace_frame as _frame,
+)
+from ui.scrolling import configure_reading_scroll
 
 
 def _pane(label, editor, parent):
@@ -28,8 +49,7 @@ def _pane(label, editor, parent):
 class RewriteWorkspace:
     def setup_workspace(self):
         self.setWindowTitle('AI 优化')
-        self.setMinimumSize(960, 680)
-        self.resize(1120, 780)
+        self.configure_workspace_size(1120, 780, minimum=(960, 680))
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 22, 24, 18)
         root.setSpacing(18)
@@ -88,7 +108,8 @@ class RewriteWorkspace:
         sidebar = _frame(surface, 'rewriteSidebar',
                          'QFrame#rewriteSidebar { background: #F8F8FA; border-top-left-radius: 11px; border-bottom-left-radius: 11px; }',
                          'QFrame#rewriteSidebar { background: #252525; border-top-left-radius: 11px; border-bottom-left-radius: 11px; }')
-        sidebar.setFixedWidth(252)
+        sidebar.setMinimumWidth(190)
+        sidebar.setMaximumWidth(252)
         left = QVBoxLayout(sidebar)
         left.setContentsMargins(12, 22, 12, 12)
         left.setSpacing(10)
@@ -122,6 +143,7 @@ class RewriteWorkspace:
         controls.addWidget(summary)
         layout.addLayout(controls)
         listing = ListWidget(parent)
+        configure_reading_scroll(listing)
         listing.setItemDelegate(ManuscriptPageDelegate(listing))
         listing.setAccessibleName('应用页面' if review else '处理页面')
         style = 'ListWidget { border: none; background: transparent; outline: none; padding: 0; }'
@@ -137,6 +159,7 @@ class RewriteWorkspace:
         surface, layout, sidebar, left = self._workspace()
         self.page_list = self._page_picker(sidebar, left)
         self.setup_scroll = ScrollArea(surface)
+        configure_reading_scroll(self.setup_scroll)
         self.setup_scroll.setWidgetResizable(True)
         self.setup_scroll.enableTransparentBackground()
         self.setup_scroll.viewport().setAutoFillBackground(False)

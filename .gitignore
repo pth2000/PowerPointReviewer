@@ -13,10 +13,12 @@
 # Python
 __pycache__/
 *.py[cod]
+/.ruff_cache/
 
 # 开发环境
 /.venv/
+/.venv-*/
+/.uv-cache/
+/.uv-python/
 .idea/
 .vscode/
-# 本地维护文档，不随仓库发布
-/RELEASING.md

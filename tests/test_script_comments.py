@@ -1,13 +1,14 @@
 """整行注释的解析、讲稿文档回导与字幕输出。"""
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
-from app.documents import export as exporters, io as script_io
-from app.presentation.monitor import changed_pages
+from app.documents import export as exporters
+from app.documents import io as script_io
 from app.documents.text import normalize, replace_spoken_text, spoken_text
+from app.presentation.monitor import changed_pages
 
 
 class ScriptCommentsTests(unittest.TestCase):

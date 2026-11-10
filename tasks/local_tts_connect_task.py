@@ -1,9 +1,9 @@
-"""本地 TTS 服务连接测试与音色刷新线程。"""
+"""qwentts.cpp 服务连接测试与音色刷新线程。"""
 
 from PySide6.QtCore import QThread, Signal
 
-from engines import qwentts
 from app.logging_setup import get_logger
+from engines import qwentts
 
 
 class LocalTtsConnectTask(QThread):
@@ -19,7 +19,7 @@ class LocalTtsConnectTask(QThread):
             info = qwentts.query_service(self.base_url, cancelled=self.isInterruptionRequested)
         except Exception as exc:
             if not self.isInterruptionRequested():
-                get_logger().exception('本地 TTS 服务连接失败')
+                get_logger().exception('qwentts.cpp 服务连接失败')
                 self.signal_error.emit(str(exc))
             return
         if not self.isInterruptionRequested():

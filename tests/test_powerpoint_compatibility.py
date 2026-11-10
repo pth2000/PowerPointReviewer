@@ -1,15 +1,17 @@
 """导出前识别旧版 PowerPoint，以及被静默降低的输出参数。"""
 
-from pathlib import Path
-from types import SimpleNamespace as NS
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
 import wave
+from pathlib import Path
+from types import SimpleNamespace as NS
+from unittest.mock import Mock, patch
 
 from app.video.native_media import MediaInfo
 from app.video.powerpoint import (
-    VideoExportUnavailable, _check_export_parameters, _check_powerpoint_version,
+    VideoExportUnavailable,
+    _check_export_parameters,
+    _check_powerpoint_version,
     _export_presentation_video,
 )
 from app.video.powerpoint_timing import SlideTiming

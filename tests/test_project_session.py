@@ -1,10 +1,10 @@
 """不创建窗口，验证工程状态、历史兼容和更新重试的业务边界。"""
 
 import json
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace as NS
 import unittest
+from pathlib import Path
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from app.project import history

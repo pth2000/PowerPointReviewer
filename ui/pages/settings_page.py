@@ -2,27 +2,25 @@
 
 import time
 import webbrowser
-from app.logging_setup import log_error
-from ui.dialogs.unsaved_settings_dialog import UnsavedSettingsDialog
 from functools import partial
+from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout, QWidget
 from qfluentwidgets import (
-    BodyLabel,
     CaptionLabel,
     CardWidget,
     ComboBox,
     DoubleSpinBox,
     FluentIcon,
-    IconWidget,
     HorizontalSeparator,
+    IconWidget,
     InfoBadge,
-    InfoLevel,
     InfoBar,
     InfoBarPosition,
+    InfoLevel,
     LineEdit,
     MessageBox,
     PrimaryPushButton,
@@ -34,25 +32,30 @@ from qfluentwidgets import (
     isDarkTheme,
 )
 
-from app.audio import cache as audio_cache
-from ui import icons, theme
 from app import paths
+from app.app_context import AppContext
+from app.audio import cache as audio_cache
+from app.audio.countdown import MAX_COUNTDOWN_SECONDS, MIN_COUNTDOWN_SECONDS
+from app.audio.playback import AudioOutputWatcher
+from app.logging_setup import get_logger, log_error
 from app.presentation import slideshow, window_target
 from app.presentation.com import PREFERENCES, PROG_IDS, installed_applications
 from app.updates import manager as updater
-from app.app_context import AppContext
-from app.audio.playback import AudioOutputWatcher
-from app.logging_setup import get_logger
-from ui.widget_state import active_modal_dialog, set_enabled
-from settingInterface import Ui_settingInterface
-from tasks.preview_task import PreviewTask
-from tasks.voice_catalog_task import VoiceCatalogTask
-from tasks.local_tts_connect_task import LocalTtsConnectTask
+from app.workspaces import TemporaryWorkspace
 from engines import qwentts
+from settingInterface import Ui_settingInterface
+from tasks.local_tts_connect_task import LocalTtsConnectTask
+from tasks.preview_task import PreviewTask
+from tasks.update_task import UpdateCheckTask, UpdateDownloadTask
+from tasks.voice_catalog_task import VoiceCatalogTask
+from ui import icons, theme
 from ui.dialogs.hotkey_dialog import HotkeyDialog
 from ui.dialogs.preview_text_dialog import PreviewTextMessageBox
-from ui.dialogs.window_target_dialog import WindowTargetDialog
 from ui.dialogs.qwen_clone_voice_dialog import QwenCloneVoiceDialog
+from ui.dialogs.unsaved_settings_dialog import UnsavedSettingsDialog
+from ui.dialogs.window_target_dialog import WindowTargetDialog
+from ui.settings_layout import SettingsColumns
+from ui.widget_state import active_modal_dialog, set_enabled
 
 
 class SettingInterface(QWidget, Ui_settingInterface):
@@ -60,6 +63,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
     CONTROL_WIDTH = 180
     CONTROL_SPACING = 8
+    CARD_SPACING = theme.PAGE_CARD_SPACING
+    ROW_PADDING = 20
     OPTION_ICONS = {
         'rate': icons.FluentSystemIcon.SPEED,
         'speed': icons.FluentSystemIcon.SPEED,
@@ -83,6 +88,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         'temperature': icons.FluentSystemIcon.SHUFFLE,
         'leading_silence_ms': icons.FluentSystemIcon.LEADING_SPACE,
         'trailing_silence_ms': icons.FluentSystemIcon.TRAILING_SPACE,
+        'sentence_mode': FluentIcon.ALIGNMENT,
     }
 
     # 设置页只发出重新生成意图，主窗口负责将其转接给主页。
@@ -90,6 +96,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
     hotkeys_changed = Signal()
     page_turn_mode_changed = Signal()
     sync_playback_changed = Signal(bool)
+    countdown_preferences_changed = Signal(bool, int)
     slideshow_preferences_changed = Signal()
     usage_guide_requested = Signal()
     advanced_guide_requested = Signal()
@@ -102,6 +109,11 @@ class SettingInterface(QWidget, Ui_settingInterface):
         super().__init__(parent=parent)
         self.ctx = context
         self.setupUi(self)
+        self.verticalLayout_4.setSpacing(theme.PAGE_SECTION_SPACING)
+        self.verticalLayout_2.setSpacing(self.CARD_SPACING)
+        self.verticalLayout_6.setSpacing(self.CARD_SPACING)
+        self.horizontalLayout_14.setSpacing(self.ROW_PADDING)
+        self.horizontalLayout_15.setSpacing(self.ROW_PADDING)
         self.savePushButton.setFixedWidth(self.CONTROL_WIDTH)
         self.versionPrimaryPushButton.setFixedWidth(self.CONTROL_WIDTH)
         self.engineSelectComboBox.setFixedWidth(self.CONTROL_WIDTH)
@@ -114,11 +126,11 @@ class SettingInterface(QWidget, Ui_settingInterface):
         icons.apply(self.giteeButton, ':/image/image/gitee.svg')
         self.versionLabel.setText(self.ctx.version)
         self.bgScrollArea.enableTransparentBackground()
-        # 统一旧 .ui 标题与动态新增分区的命名风格。
         self.SubtitleLabel.setText('配音设置')
         self.SubtitleLabel_2.setText('关于与帮助')
-        self._space_section(self.verticalLayout_2, self.SubtitleLabel)
-        self._space_section(self.verticalLayout_6, self.SubtitleLabel_2, separated=True)
+        theme.space_page_section(self.verticalLayout_2, self.SubtitleLabel)
+        theme.space_page_section(self.verticalLayout_6, self.SubtitleLabel_2)
+        self._setup_responsive_sections()
 
         # 引擎 schema 字段名到运行期控件的映射。
         self.dynamic_option_widgets = {}
@@ -130,11 +142,9 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self._catalog_thread = None
         self._qwentts_task = None
         self._qwentts_card = None
-        self._qwentts_status = None
         self._qwentts_test_button = None
         self._qwentts_refresh_button = None
         self._qwentts_voice_combo = None
-        self._qwentts_error = ''
         self._qwen_clone_manage_card = None
         self._preview_text_card = None
         self.saved_state = None
@@ -143,6 +153,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.can_regenerate_check = lambda: False
         self.sync_playback_available_check = lambda: False
         self.sync_playback_unavailable_hint = lambda: '请先导入讲稿'
+        self.playback_preferences_locked_check = lambda: False
         self.page_turn_source = lambda: None
         self.page_turn_description = lambda: slideshow.describe(self.page_turn_source())
 
@@ -201,6 +212,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.ctx.playback_bus.stop_requested.connect(self.on_stop_requested)
 
         self.preview_thread = None
+        self._preview_directory = None
         self._preview_requested = False
         self.previewButton.clicked.connect(self.preview_audio)
 
@@ -218,6 +230,44 @@ class SettingInterface(QWidget, Ui_settingInterface):
         widget.setFixedSize(QSize(20, 20))
         layout.insertWidget(0, widget, alignment=Qt.AlignmentFlag.AlignVCenter)
         layout.insertSpacing(1, max(0, 20 - layout.spacing()))
+
+    def _make_setting_row(self, widget, title, caption, icon, help_text='', *,
+                          compact=False, grouped=False):
+        """独立卡片和卡内设置行共用标题、说明与控件排版。"""
+        layout = QHBoxLayout(widget)
+        horizontal = 0 if grouped else self.ROW_PADDING
+        layout.setContentsMargins(horizontal, self.ROW_PADDING, horizontal, self.ROW_PADDING)
+        layout.setSpacing(self.ROW_PADDING)
+        self._insert_option_icon(layout, icon, widget)
+        info = QVBoxLayout()
+        info.setSpacing(0)
+        point_size = theme.COMPACT_CARD_TITLE_POINT_SIZE if compact else theme.CARD_TITLE_POINT_SIZE
+        widget.title_label = theme.make_card_title(title, widget, point_size=point_size)
+        widget.title_row, widget.help_icon = theme.make_title_row(widget.title_label, help_text)
+        info.addLayout(widget.title_row)
+        widget.caption_label = CaptionLabel(caption, widget)
+        widget.caption_label.setWordWrap(True)
+        widget.caption_label.setVisible(bool(caption))
+        info.addWidget(widget.caption_label)
+        layout.addLayout(info, 1)
+        return layout
+
+    def _make_setting_group(self):
+        """相关设置共用一个外框，行间使用内缩分隔线。"""
+        card = CardWidget(self.importWidget)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(self.ROW_PADDING, 0, self.ROW_PADDING, 0)
+        layout.setSpacing(0)
+        return card
+
+    def _add_group_row(self, card, title, caption, icon, help_text=''):
+        item = QWidget(card)
+        item.separator = HorizontalSeparator(card) if card.layout().count() else None
+        if item.separator is not None:
+            card.layout().addWidget(item.separator)
+        self._make_setting_row(item, title, caption, icon, help_text, grouped=True)
+        card.layout().addWidget(item)
+        return item
 
     # 未保存状态
 
@@ -356,9 +406,11 @@ class SettingInterface(QWidget, Ui_settingInterface):
                 return
             # 试听文件必须与主页扫描的 TEMP_DIR 根目录隔离。
             paths.PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+            if self._preview_directory is None:
+                self._preview_directory = TemporaryWorkspace(prefix='voice-preview-', dir=paths.PREVIEW_DIR)
             self.clean_preview_files()
             preview_ext = self.ctx.tts_engine.get_output_extension()
-            preview_path = paths.PREVIEW_DIR / f'preview_{time.time_ns()}.{preview_ext}'
+            preview_path = Path(self._preview_directory.name) / f'preview_{time.time_ns()}.{preview_ext}'
 
             set_enabled(self.previewButton, False)
             self.previewButton.setText('生成中…')
@@ -377,14 +429,25 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self.previewButton.setEnabled(True)
             self.previewButton.setText('试听')
 
-    @staticmethod
-    def clean_preview_files():
-        """删除旧试听文件，避免重复试听持续占用磁盘。"""
-        for path in paths.PREVIEW_DIR.glob('preview_*'):
+    def clean_preview_files(self):
+        """只删除本窗口的旧试听，不影响其他程序实例。"""
+        if self._preview_directory is None:
+            return
+        for path in Path(self._preview_directory.name).glob('preview_*'):
             try:
                 path.unlink()
             except OSError as e:
                 print(f'[试听] 清理旧试听文件失败：{path.name}, 原因: {e}')
+
+    def release_preview_workspace(self):
+        self.preview_player.stop()
+        self.preview_player.setSource(QUrl())
+        if self._preview_directory is not None:
+            try:
+                self._preview_directory.cleanup()
+            except OSError:
+                get_logger().warning('试听临时目录暂未释放，将在下次启动重试', exc_info=True)
+            self._preview_directory = None
 
     def on_preview_generated(self, path):
         """恢复按钮状态，并以互斥方式播放新试听音频。"""
@@ -432,7 +495,6 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self.verticalLayout_2.removeWidget(self._qwentts_card)
             self._qwentts_card.deleteLater()
         self._qwentts_card = None
-        self._qwentts_status = None
         self._qwentts_test_button = None
         self._qwentts_refresh_button = None
         self._qwentts_voice_combo = None
@@ -445,29 +507,40 @@ class SettingInterface(QWidget, Ui_settingInterface):
         anchor = self._preview_text_card if self._preview_text_card is not None else self.CardWidget_4
         return max(self.verticalLayout_2.indexOf(anchor), 0)
 
-    def _space_section(self, layout, title, *, separated=False):
-        """统一版块之间和标题下方的留白。"""
-        index = layout.indexOf(title)
-        if separated:
-            layout.insertSpacing(index, 14)
-            index += 1
-        layout.insertSpacing(index + 1, 4)
-
     def add_section_label(self, title: str, append: bool = False):
-        """创建分区标题，并按配置生命周期选择插入位置。
-
-        ``append=True`` 用于即时保存的外观区块，将其放在显式保存卡片之后。
-        """
-        label = SubtitleLabel(title, self.importWidget)
-        label.setMinimumSize(QSize(0, 30))
-        label.setMaximumSize(QSize(16777215, 30))
+        """即时生效的偏好使用独立分区，语音设置保留在试听与保存之前。"""
         if append:
-            self.verticalLayout_2.addWidget(label)
+            section = QWidget(self.settings_columns)
+            layout = QVBoxLayout(section)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(self.CARD_SPACING)
+            self.preference_sections.append(section)
+            self._preference_section_layout = layout
+            label = SubtitleLabel(title, section)
+            layout.addWidget(label)
+            theme.space_page_section(layout, label)
+            self.settings_columns.set_sections([self.importWidget, *self.preference_sections, self.about_section])
         else:
+            label = SubtitleLabel(title, self.importWidget)
             self.verticalLayout_2.insertWidget(
                 max(self.verticalLayout_2.indexOf(self.CardWidget_4), 0), label)
-        self._space_section(self.verticalLayout_2, label, separated=True)
+            theme.space_page_section(self.verticalLayout_2, label, separated=True)
         return label
+
+    def _setup_responsive_sections(self):
+        self.verticalLayout_4.removeWidget(self.importWidget)
+        self.verticalLayout_4.removeItem(self.verticalLayout_6)
+        self.about_section = QWidget(self.scrollAreaWidgetContents)
+        self.about_section.setLayout(self.verticalLayout_6)
+        self.verticalLayout_6.setContentsMargins(0, 0, 0, 0)
+        spacer = self.verticalLayout_6.itemAt(self.verticalLayout_6.count() - 1)
+        if spacer is not None and spacer.spacerItem() is not None:
+            self.verticalLayout_6.takeAt(self.verticalLayout_6.count() - 1)
+        self.preference_sections = []
+        self.settings_columns = SettingsColumns(self.importWidget, self.about_section,
+                                               self.scrollAreaWidgetContents)
+        self.verticalLayout_4.addWidget(self.settings_columns, 0, Qt.AlignmentFlag.AlignTop)
+        self.verticalLayout_4.addStretch()
 
     def setup_appearance_cards(self):
         """创建即时生效的主题模式、主题色和界面字体卡片。"""
@@ -528,51 +601,17 @@ class SettingInterface(QWidget, Ui_settingInterface):
         font_card.layout().addWidget(self.ui_font_combo)
 
     def _make_appearance_card(self, title: str, caption: str, help_text: str = '', *, icon=icons.FluentSystemIcon.SETTING):
-        """创建外观设置卡片骨架，并返回可追加控件的布局。"""
-        card = CardWidget(self.importWidget)
-        h_layout = QHBoxLayout(card)
-        h_layout.setContentsMargins(20, 20, 20, 20)
-        self._insert_option_icon(h_layout, icon, card)
-
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(0)
-
-        title_row, card.help_icon = theme.make_title_row(
-            theme.make_card_title(title, card), help_text)
-        info_layout.addLayout(title_row)
-
-        caption_label = CaptionLabel(card)
-        caption_label.setText(caption)
-        caption_label.setWordWrap(True)
-        info_layout.addWidget(caption_label)
-
-        h_layout.addLayout(info_layout, stretch=1)
-        h_layout.addSpacing(20)
-
-        card.title_row = title_row
-        self.verticalLayout_2.addWidget(card)
+        """创建即时生效的偏好设置卡片，加入当前分区。"""
+        card = CardWidget(self._preference_section_layout.parentWidget())
+        self._make_setting_row(card, title, caption, icon, help_text)
+        self._preference_section_layout.addWidget(card)
         return card
 
     def _make_about_card(self, title, caption, icon, help_text=''):
         """沿用“关于”区域的紧凑卡片样式，按创建顺序排在版权之前。"""
         card = CardWidget(self.scrollAreaWidgetContents)
         card.setFixedHeight(80)
-        layout = QHBoxLayout(card)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(20)
-        icon_widget = IconWidget(icon, card)
-        icon_widget.setFixedSize(QSize(20, 20))
-        layout.addWidget(icon_widget)
-        info = QVBoxLayout()
-        info.setSpacing(0)
-        title_row, card.help_icon = theme.make_title_row(
-            theme.make_card_title(title, card, point_size=theme.COMPACT_CARD_TITLE_POINT_SIZE), help_text)
-        info.addLayout(title_row)
-        label = CaptionLabel(caption, card)
-        label.setWordWrap(True)
-        info.addWidget(label)
-        layout.addLayout(info, 1)
-        card.title_row = title_row
+        self._make_setting_row(card, title, caption, icon, help_text, compact=True)
         self.verticalLayout_6.insertWidget(self.verticalLayout_6.indexOf(self.importCardWidget), card)
         return card
 
@@ -638,6 +677,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.add_section_label('讲稿与播放', append=True)
         self.setup_resume_session_card()
         self.setup_script_preferences_cards()
+        self.setup_countdown_card()
         self.setup_hotkey_card()
         self.add_section_label('放映控制', append=True)
         self.setup_presentation_preference_card()
@@ -681,9 +721,9 @@ class SettingInterface(QWidget, Ui_settingInterface):
             combo.setItemText(index, label if available[value] else label + '（未安装）')
         set_enabled(combo, bool(installed))
         self._installed_presentation_preferences = available
-        self._update_presentation_preference_caption()
+        self._update_presentation_preference_hint()
 
-    def _update_presentation_preference_caption(self):
+    def _update_presentation_preference_hint(self):
         available = self._installed_presentation_preferences
         names = {value: name for (value, _), (_prog, name) in zip(PREFERENCES[1:], PROG_IDS)}
         installed = [names[value] for value in available if available[value]]
@@ -696,10 +736,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
             text = f'当前可用：{installed[0]}'
         else:
             text = '选择放映时优先使用的软件'
-        self.presentation_preference_caption.setText(text)
-        # 已保存但后来卸载的首选项可能超出按钮宽度，保留完整名称供查看。
-        self.presentation_preference_combo.setToolTip(
-            self.presentation_preference_combo.currentText() if selected in names and not available[selected] else '')
+        self.presentation_preference_combo.setToolTip(text)
 
     def on_presentation_preference_changed(self, _index):
         selected = self.presentation_preference_combo.currentData()
@@ -711,7 +748,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
             return
         self.ctx.app_settings.set('presentation_preference', self.presentation_preference_combo.currentData())
         self.ctx.config.save_later()
-        self._update_presentation_preference_caption()
+        self._update_presentation_preference_hint()
 
     def setup_usage_guide_card(self):
         card = self._make_about_card(
@@ -734,6 +771,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
     def setup_script_preferences_cards(self):
         options = (
+            ('auto_generate_audio', '自动生成配音', '导入或更新讲稿后自动生成配音',
+             '关闭后可先处理和导出讲稿，需要配音时点击首页的“生成配音”或“更新配音”。'),
             ('script_comments_enabled', '识别讲稿注释', '朗读时跳过以 // 开头的整行文字',
              '在备注中以 // 开头的整行文字会作为注释保留，可在 // 前添加空格或缩进。'
              '正文中的网址和行末 // 按正文朗读。调整后在下次生成配音时生效。'),
@@ -745,7 +784,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
         for key, title, caption, help_text in options:
             card = self._make_appearance_card(
                 title, caption, help_text=help_text,
-                icon=icons.FluentSystemIcon.COMMENT if key == 'script_comments_enabled' else icons.FluentSystemIcon.CHECK)
+                icon={'script_comments_enabled': icons.FluentSystemIcon.COMMENT,
+                      'auto_generate_audio': icons.FluentSystemIcon.MICROPHONE}.get(key, icons.FluentSystemIcon.CHECK))
             control = SwitchButton(card)
             control.setOnText('启用')
             control.setOffText('停用')
@@ -757,6 +797,65 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def on_script_preference_changed(self, key, checked):
         self.ctx.app_settings.set(key, bool(checked))
         self.ctx.config.save_later()
+
+    def setup_countdown_card(self):
+        card = self.countdown_card = self._make_setting_group()
+        self.countdown_switch = SwitchButton(card)
+        self.countdown_switch.setOnText('启用')
+        self.countdown_switch.setOffText('停用')
+        self.countdown_seconds_spin = SpinBox(card)
+        self.countdown_seconds_spin.setRange(MIN_COUNTDOWN_SECONDS, MAX_COUNTDOWN_SECONDS)
+        self.countdown_seconds_spin.setSuffix(' 秒')
+        self.countdown_seconds_spin.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
+        for title, caption, icon, control in (
+            ('倒计时播放', '开始朗读前显示倒计时，每秒播放提示音', icons.FluentSystemIcon.TIMER,
+             self.countdown_switch),
+            ('倒计时时长', '设置倒计时持续的秒数', icons.SystemIcon.CLOCK,
+             self.countdown_seconds_spin),
+        ):
+            item = self._add_group_row(card, title, caption, icon)
+            if control is self.countdown_seconds_spin:
+                self.countdown_duration_row = item
+                self.countdown_duration_separator = item.separator
+            item.layout().addWidget(control)
+        self._preference_section_layout.addWidget(card)
+        self.refresh_countdown_preferences()
+        self.countdown_switch.checkedChanged.connect(self.on_countdown_preferences_changed)
+        self.countdown_seconds_spin.valueChanged.connect(self.on_countdown_preferences_changed)
+
+    def on_countdown_preferences_changed(self, *_):
+        if self.playback_preferences_locked_check():
+            self.refresh_countdown_preferences()
+            return
+        values = {
+            'countdown_enabled': self.countdown_switch.isChecked(),
+            'countdown_seconds': self.countdown_seconds_spin.value(),
+        }
+        self._refresh_countdown_duration()
+        if any(self.ctx.app_settings.get(key) != value for key, value in values.items()):
+            self.ctx.app_settings.update(values)
+            self.ctx.config.save_later()
+        self.countdown_preferences_changed.emit(values['countdown_enabled'], values['countdown_seconds'])
+
+    def refresh_countdown_preferences(self, *_):
+        with QSignalBlocker(self.countdown_switch), QSignalBlocker(self.countdown_seconds_spin):
+            self.countdown_switch.setChecked(bool(self.ctx.app_settings.get('countdown_enabled')))
+            self.countdown_seconds_spin.setValue(int(self.ctx.app_settings.get('countdown_seconds')))
+        self._refresh_countdown_duration()
+
+    def _refresh_countdown_duration(self):
+        enabled = self.countdown_switch.isChecked()
+        locked = self.playback_preferences_locked_check()
+        self.countdown_duration_row.setVisible(enabled)
+        self.countdown_duration_separator.setVisible(enabled)
+        set_enabled(self.countdown_switch, not locked)
+        set_enabled(self.countdown_seconds_spin, enabled and not locked)
+        for control in (self.countdown_switch, self.countdown_seconds_spin):
+            control.setToolTip('请先停止播放，再修改此设置。' if locked else '')
+
+    def refresh_playback_preferences_state(self, *_):
+        self.refresh_countdown_preferences()
+        self.refresh_sync_playback_state()
 
     def setup_resume_session_card(self):
         card = self._make_appearance_card(
@@ -800,7 +899,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         card = self._make_appearance_card(
             '同步翻页', '朗读讲稿时同步控制 PPT 放映',
             icon=icons.FluentSystemIcon.SYNC,
-            help_text='与主页的同步翻页开关保持一致，调整后立即生效。'
+            help_text='与主页的同步翻页开关保持一致，请在播放前调整。'
                       '未关联 PPT 时，请先在“历史记录列表”中关联文稿。')
         self.sync_playback_switch = SwitchButton(card)
         self.sync_playback_switch.setOnText('启用')
@@ -811,7 +910,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.refresh_sync_playback_state()
 
     def on_sync_playback_changed(self, checked):
-        if not self.sync_playback_available_check():
+        if not self.sync_playback_available_check() or self.playback_preferences_locked_check():
             self.refresh_sync_playback_state()
             return
         checked = bool(checked)
@@ -826,8 +925,10 @@ class SettingInterface(QWidget, Ui_settingInterface):
         control.setChecked(bool(self.ctx.app_settings.get('scroll_enabled')))
         control.blockSignals(False)
         available = bool(self.sync_playback_available_check())
-        set_enabled(control, available)
-        control.setToolTip(self.sync_playback_unavailable_hint() if not available else '')
+        locked = self.playback_preferences_locked_check()
+        set_enabled(control, available and not locked)
+        control.setToolTip('请先停止播放，再修改此设置。' if locked else
+                           self.sync_playback_unavailable_hint() if not available else '')
         if hasattr(self, 'slideshow_preference_switches'):
             self.refresh_slideshow_preferences_state()
 
@@ -847,29 +948,12 @@ class SettingInterface(QWidget, Ui_settingInterface):
     )
 
     def setup_slideshow_preferences_card(self):
-        card = CardWidget(self.importWidget)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 6, 20, 6)
-        layout.setSpacing(0)
+        card = self._make_setting_group()
         self.slideshow_preferences_card = card
         self.slideshow_preference_switches = {}
         self.slideshow_preference_labels = {}
-        item = QWidget(card)
-        row = QHBoxLayout(item)
-        row.setContentsMargins(0, 12, 0, 12)
-        row.setSpacing(16)
-        self._insert_option_icon(row, icons.FluentSystemIcon.FULL_SCREEN, item)
-        display_info = QVBoxLayout()
-        display_info.setSpacing(3)
-        display_label = BodyLabel('放映显示', item)
-        font = display_label.font()
-        font.setPointSize(theme.CARD_TITLE_POINT_SIZE)
-        display_label.setFont(font)
-        display_info.addWidget(display_label)
-        display_caption = CaptionLabel('设置自动开始放映时的显示方式', item)
-        display_caption.setWordWrap(True)
-        display_info.addWidget(display_caption)
-        row.addLayout(display_info, 1)
+        item = self._add_group_row(card, '放映显示', '设置自动开始放映时的显示方式',
+                                   icons.FluentSystemIcon.FULL_SCREEN)
         self.slideshow_display_combo = ComboBox(item)
         self.slideshow_display_combo.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
         self.slideshow_display_combo.addItem('全屏放映', userData=False)
@@ -878,54 +962,34 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self.slideshow_display_combo.setToolTip('选择自动开始 PowerPoint 放映时的显示方式。\n'
                                                '已开始的放映沿用当前方式。需要在其他窗口中操作时，可选择窗口放映。')
         self.slideshow_display_combo.currentIndexChanged.connect(self.on_slideshow_display_changed)
-        row.addWidget(self.slideshow_display_combo)
-        layout.addWidget(item)
-        layout.addWidget(HorizontalSeparator(card))
+        item.layout().addWidget(self.slideshow_display_combo)
         for key, title, caption, help_text in self.SLIDESHOW_PREFERENCES:
-            if self.slideshow_preference_switches:
-                layout.addWidget(HorizontalSeparator(card))
-            item = QWidget(card)
-            row = QHBoxLayout(item)
-            row.setContentsMargins(0, 12, 0, 12)
-            row.setSpacing(16)
             icon = {
                 'slideshow_auto_start': icons.FluentSystemIcon.SLIDESHOW,
                 'slideshow_follow_page': icons.FluentSystemIcon.NEXT_SLIDE,
                 'slideshow_sync_navigation': icons.FluentSystemIcon.LINKED_SLIDE,
                 'slideshow_stop_on_exit': icons.FluentSystemIcon.STOP,
             }[key]
-            self._insert_option_icon(row, icon, item)
-            info = QVBoxLayout()
-            info.setSpacing(3)
-            title_label = BodyLabel(title, item)
-            font = title_label.font()
-            font.setPointSize(theme.CARD_TITLE_POINT_SIZE)
-            font.setWeight(QFont.Weight.Normal)
-            title_label.setFont(font)
-            title_row, _help = theme.make_title_row(title_label, help_text)
-            info.addLayout(title_row)
-            label = CaptionLabel(caption, item)
-            label.setWordWrap(True)
-            info.addWidget(label)
-            self.slideshow_preference_labels[key] = (title_label, label)
-            row.addLayout(info, stretch=1)
+            item = self._add_group_row(card, title, caption, icon, help_text)
+            self.slideshow_preference_labels[key] = (item.title_label, item.caption_label)
             control = SwitchButton(item)
             control.setOnText('启用')
             control.setOffText('停用')
             control.setChecked(bool(self.ctx.app_settings.get(key)))
             control.checkedChanged.connect(partial(self.on_slideshow_preference_changed, key))
             self.slideshow_preference_switches[key] = control
-            row.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
-            layout.addWidget(item)
-        self.verticalLayout_2.addWidget(card)
+            item.layout().addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._preference_section_layout.addWidget(card)
         self.refresh_slideshow_preferences_state()
 
     def refresh_slideshow_preferences_state(self):
         com = self.ctx.app_settings.get('page_turn_mode') == 'com'
         self.slideshow_preferences_card.setVisible(com)
         available = bool(self.sync_playback_available_check())
-        enabled = com and available and bool(self.ctx.app_settings.get('scroll_enabled'))
-        hint = (self.sync_playback_unavailable_hint() if not available else
+        locked = self.playback_preferences_locked_check()
+        enabled = com and available and not locked and bool(self.ctx.app_settings.get('scroll_enabled'))
+        hint = ('请先停止播放，再修改此设置。' if locked else
+                self.sync_playback_unavailable_hint() if not available else
                 '请先启用同步翻页' if not enabled else '')
         self.slideshow_display_combo.blockSignals(True)
         self.slideshow_display_combo.setCurrentIndex(int(bool(self.ctx.app_settings.get('slideshow_windowed'))))
@@ -948,7 +1012,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
                                  '#ffffff' if enabled else '#777777')
 
     def on_slideshow_preference_changed(self, key, checked):
-        if (not self.sync_playback_available_check()
+        if (self.playback_preferences_locked_check() or not self.sync_playback_available_check()
                 or not self.ctx.app_settings.get('scroll_enabled')
                 or self.ctx.app_settings.get('page_turn_mode') != 'com'):
             self.refresh_slideshow_preferences_state()
@@ -1143,23 +1207,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
         编辑和试听入口放在同一卡片中，使文本来源与操作保持邻近。
         """
         card = CardWidget(self.importWidget)
-        h_layout = QHBoxLayout(card)
-        h_layout.setContentsMargins(20, 20, 20, 20)
-        self._insert_option_icon(h_layout, icons.FluentSystemIcon.HEADPHONE, card)
-
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(0)
-
-        title_lbl = theme.make_card_title('试听文字', card)
-        info_layout.addWidget(title_lbl)
-
-        cap_lbl = CaptionLabel(card)
-        cap_lbl.setText('编辑试听时朗读的内容')
-        cap_lbl.setWordWrap(True)
-        info_layout.addWidget(cap_lbl)
-
-        h_layout.addLayout(info_layout, stretch=1)
-        h_layout.addSpacing(20)
+        h_layout = self._make_setting_row(
+            card, '试听文字', '编辑试听时朗读的内容', icons.FluentSystemIcon.HEADPHONE)
 
         controls = QWidget(card)
         controls.setFixedWidth(self.CONTROL_WIDTH)
@@ -1193,46 +1242,27 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def create_dynamic_option_card(self, option_schema):
         """根据单个 schema 字段创建标签和对应输入控件。"""
         card = CardWidget(self.importWidget)
-        h_layout = QHBoxLayout(card)
-        h_layout.setContentsMargins(20, 20, 20, 20)
-        self._insert_option_icon(
-            h_layout, self.OPTION_ICONS.get(option_schema.get('key'), icons.FluentSystemIcon.SETTING), card)
-
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(0)
-
         title = option_schema.get('label', option_schema.get('key', '配置项'))
-        title_row, card.help_icon = theme.make_title_row(
-            theme.make_card_title(title, card), option_schema.get('help', ''))
-        info_layout.addLayout(title_row)
-        card.title_row = title_row
-
-        desc_label = CaptionLabel(card)
-        desc_label.setText(option_schema.get('description', ''))
-        desc_label.setWordWrap(True)
-        info_layout.addWidget(desc_label)
-
-        h_layout.addLayout(info_layout, stretch=1)
-        h_layout.addSpacing(20)
+        h_layout = self._make_setting_row(
+            card, title, option_schema.get('description', ''),
+            self.OPTION_ICONS.get(option_schema.get('key'), icons.FluentSystemIcon.SETTING),
+            option_schema.get('help', ''))
 
         option_type = option_schema.get('type')
         default_value = option_schema.get('default')
 
         if option_type == 'int':
             control = SpinBox(card)
-            control.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
             control.setRange(int(option_schema.get('min', -9999)), int(option_schema.get('max', 9999)))
             control.setSingleStep(int(option_schema.get('step', 1)))
             control.setValue(int(default_value if default_value is not None else 0))
         elif option_type == 'float':
             control = DoubleSpinBox(card)
-            control.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
             control.setRange(float(option_schema.get('min', -9999.0)), float(option_schema.get('max', 9999.0)))
             control.setSingleStep(float(option_schema.get('step', 0.1)))
             control.setValue(float(default_value if default_value is not None else 0.0))
         elif option_type == 'choice':
             control = ComboBox(card)
-            control.setFixedWidth(self.CONTROL_WIDTH)
             # choice 可由引擎在运行期提供，例如 Edge 地区目录。
             choices = self.ctx.tts_engine.get_option_choices(option_schema)
             control.addItems(choices)
@@ -1242,14 +1272,13 @@ class SettingInterface(QWidget, Ui_settingInterface):
                 control.setCurrentIndex(0)
         elif option_type == 'password':
             control = LineEdit(card)
-            control.setMinimumSize(QSize(240, 33))
             control.setEchoMode(QLineEdit.EchoMode.Password)
             control.setText(str(default_value if default_value is not None else ''))
         else:
             control = LineEdit(card)
-            control.setMinimumSize(QSize(240, 33))
             control.setText(str(default_value if default_value is not None else ''))
 
+        control.setFixedSize(QSize(self.CONTROL_WIDTH, 33))
         h_layout.addWidget(control)
 
         self.verticalLayout_2.insertWidget(self.tail_index(), card)
@@ -1353,7 +1382,6 @@ class SettingInterface(QWidget, Ui_settingInterface):
         """将控件值写入当前引擎，并标记为未保存。"""
         self.ctx.tts_engine.set_current_option(key, value)
         if self.ctx.tts_engine.get_mode() == 'qwentts' and key == 'base_url':
-            self._qwentts_error = ''
             self.update_qwentts_service_card()
         if key == 'model':
             self.update_qwen_option_controls()
@@ -1391,23 +1419,8 @@ class SettingInterface(QWidget, Ui_settingInterface):
             return
 
         card = CardWidget(self.importWidget)
-        h_layout = QHBoxLayout(card)
-        h_layout.setContentsMargins(20, 20, 20, 20)
-
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(0)
-
-        self._insert_option_icon(h_layout, icons.FluentSystemIcon.VOICE, card)
-        title_lbl = theme.make_card_title('发音人选择', card)
-        info_layout.addWidget(title_lbl)
-
-        cap_lbl = CaptionLabel(card)
-        cap_lbl.setText('选择合成语音时使用的音色')
-        cap_lbl.setWordWrap(True)
-        info_layout.addWidget(cap_lbl)
-
-        h_layout.addLayout(info_layout, stretch=1)
-        h_layout.addSpacing(20)
+        h_layout = self._make_setting_row(
+            card, '发音人选择', '选择合成语音时使用的音色', icons.FluentSystemIcon.VOICE)
 
         combo = ComboBox(card)
         combo.setFixedWidth(self.CONTROL_WIDTH)
@@ -1417,15 +1430,17 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
         # 只有 Edge 音色目录会由服务端持续更新，因此只为该引擎提供刷新按钮。
         self._voice_refresh_button = None
+        controls = QHBoxLayout()
+        controls.setSpacing(self.CONTROL_SPACING)
         if self.ctx.tts_engine.get_mode() == 'edge':
-            h_layout.setSpacing(self.CONTROL_SPACING)
             refresh_button = ToolButton(icons.SystemIcon.UPDATE, card)
             refresh_button.setFixedSize(QSize(33, 33))
             refresh_button.setToolTip('联网刷新音色列表')
             refresh_button.clicked.connect(self.refresh_voice_catalog)
-            h_layout.addWidget(refresh_button)
+            controls.addWidget(refresh_button)
             self._voice_refresh_button = refresh_button
-        h_layout.addWidget(combo)
+        controls.addWidget(combo)
+        h_layout.addLayout(controls)
 
         self.verticalLayout_2.insertWidget(self.tail_index(), card)
 
@@ -1447,32 +1462,20 @@ class SettingInterface(QWidget, Ui_settingInterface):
     def setup_qwentts_service_card(self):
         """始终提供连接入口；尚无音色时允许使用 Base 模型的默认声音。"""
         if self._qwentts_card is None:
-            card = CardWidget(self.importWidget)
-            layout = QVBoxLayout(card)
-            layout.setContentsMargins(20, 20, 20, 20)
-            layout.setSpacing(12)
-            row = QHBoxLayout()
-            self._insert_option_icon(row, icons.FluentSystemIcon.CONNECT, card)
-            info = QVBoxLayout()
-            title_row, card.help_icon = theme.make_title_row(
-                theme.make_card_title('本地服务连接', card),
-                '先启动 qwentts.cpp 服务，再测试连接。语言和模型在服务启动器中设置。'
+            card = self._make_setting_group()
+            connection_row = self._add_group_row(
+                card, '服务连接', '连接 qwentts.cpp 服务，读取模型与音色',
+                icons.FluentSystemIcon.CONNECT,
+                '可连接本机或其他设备部署的 qwentts.cpp 服务。语言和模型在服务端设置。'
                 '更换模型或创建复刻音色后，请刷新列表并重新生成旧音频。')
-            card.title_row = title_row
-            info.addLayout(title_row)
-            self._qwentts_status = CaptionLabel(card)
-            self._qwentts_status.setWordWrap(True)
-            info.addWidget(self._qwentts_status)
-            row.addLayout(info, 1)
             self._qwentts_test_button = PrimaryPushButton('测试连接', card)
             self._size_action_button(self._qwentts_test_button)
             self._qwentts_test_button.clicked.connect(self.test_qwentts_connection)
-            row.addWidget(self._qwentts_test_button)
-            layout.addLayout(row)
-            voice_row = QHBoxLayout()
-            voice_row.setSpacing(self.CONTROL_SPACING)
-            self._insert_option_icon(voice_row, icons.FluentSystemIcon.VOICE, card)
-            voice_row.addWidget(theme.make_card_title('发音人选择', card), 1)
+            connection_row.layout().addWidget(self._qwentts_test_button)
+            voice_row = self._add_group_row(card, '发音人选择', '选择合成语音时使用的音色',
+                                            icons.FluentSystemIcon.VOICE)
+            controls = QHBoxLayout()
+            controls.setSpacing(self.CONTROL_SPACING)
             self._qwentts_voice_combo = ComboBox(card)
             self._qwentts_voice_combo.setFixedWidth(self.CONTROL_WIDTH)
             self._qwentts_voice_combo.currentTextChanged.connect(self._qwentts_voice_combo.setToolTip)
@@ -1481,9 +1484,9 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self._qwentts_refresh_button.setFixedSize(QSize(33, 33))
             self._qwentts_refresh_button.setToolTip('重新连接并刷新模型与音色')
             self._qwentts_refresh_button.clicked.connect(self.test_qwentts_connection)
-            voice_row.addWidget(self._qwentts_refresh_button)
-            voice_row.addWidget(self._qwentts_voice_combo)
-            layout.addLayout(voice_row)
+            controls.addWidget(self._qwentts_refresh_button)
+            controls.addWidget(self._qwentts_voice_combo)
+            voice_row.layout().addLayout(controls)
             self.verticalLayout_2.insertWidget(self.tail_index(), card)
             self._qwentts_card = card
         self.update_qwentts_service_card()
@@ -1498,21 +1501,7 @@ class SettingInterface(QWidget, Ui_settingInterface):
         if instruction_control is not None:
             set_enabled(instruction_control, not base_model)
         busy = self._qwentts_task is not None
-        if busy:
-            status = '正在测试连接…'
-        elif self._qwentts_error:
-            status = '连接失败：' + self._qwentts_error
-        elif info:
-            status = f"已连接 · 当前模型：{info['model']} · {len(info['voices'])} 个音色"
-            if not info['voices']:
-                status += '\n使用模型默认声音。复刻音色请在服务网页中创建后刷新。'
-        else:
-            status = '请先启动本地服务，然后点击“测试连接”'
-            if values.get('model'):
-                status += f"\n已保存模型：{values['model']}"
-        if base_model:
-            status += '\n当前为声音克隆模型，朗读风格取自参考音频。'
-        self._qwentts_status.setText(status)
+        self._qwentts_test_button.setText('连接中…' if busy else '测试连接')
         voices = info['voices'] if info else []
         combo = self._qwentts_voice_combo
         combo.blockSignals(True)
@@ -1541,8 +1530,6 @@ class SettingInterface(QWidget, Ui_settingInterface):
         try:
             address = qwentts.normalize_base_url(address)
         except (RuntimeError, ValueError) as exc:
-            self._qwentts_error = str(exc)
-            self.update_qwentts_service_card()
             self.create_error_info_bar('连接失败', str(exc))
             return
         self._qwentts_task = LocalTtsConnectTask(address, self)
@@ -1550,7 +1537,6 @@ class SettingInterface(QWidget, Ui_settingInterface):
         self._qwentts_task.signal_error.connect(self.on_qwentts_connection_error)
         self._qwentts_task.finished.connect(self.finish_qwentts_connection)
         self._qwentts_task.finished.connect(self._qwentts_task.deleteLater)
-        self._qwentts_error = ''
         self.update_qwentts_service_card()
         self._qwentts_task.start()
 
@@ -1568,14 +1554,13 @@ class SettingInterface(QWidget, Ui_settingInterface):
         if not self.qwentts_result_is_current():
             return
         if self.ctx.tts_engine.apply_qwentts_service_info(info):
-            self._qwentts_error = ''
             self.mark_dirty()
-            self.create_success_info_bar('已连接本地 TTS', '模型和音色已更新，可选择音色并试听')
+            voices = f"已读取 {len(info['voices'])} 个音色，可选择音色并试听" if info['voices'] else '将使用模型默认声音'
+            self.create_success_info_bar('已连接 qwentts.cpp 服务', f"模型：{info['model']}。{voices}")
 
     def on_qwentts_connection_error(self, message):
         if not self.qwentts_result_is_current():
             return
-        self._qwentts_error = message
         self.create_error_info_bar('连接失败', message)
 
     def finish_qwentts_connection(self):
@@ -1630,25 +1615,9 @@ class SettingInterface(QWidget, Ui_settingInterface):
             self._qwen_clone_manage_card = None
 
         card = CardWidget(self.importWidget)
-        h_layout = QHBoxLayout(card)
-        h_layout.setContentsMargins(20, 20, 20, 20)
-        self._insert_option_icon(h_layout, icons.FluentSystemIcon.VOICE, card)
-
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(0)
-
-        title_row, _icon = theme.make_title_row(
-            theme.make_card_title('复刻音色管理', card),
+        h_layout = self._make_setting_row(
+            card, '复刻音色管理', '管理保存在云端的复刻音色', icons.FluentSystemIcon.VOICE,
             '可上传参考音频创建音色，或删除不再使用的音色。选中音色并设为当前后，即可用于合成。')
-        info_layout.addLayout(title_row)
-
-        cap_lbl = CaptionLabel(card)
-        cap_lbl.setText('管理保存在云端的复刻音色')
-        cap_lbl.setWordWrap(True)
-        info_layout.addWidget(cap_lbl)
-
-        h_layout.addLayout(info_layout, stretch=1)
-        h_layout.addSpacing(20)
 
         open_button = PrimaryPushButton('打开音色管理', card)
         self._size_action_button(open_button)
@@ -1702,7 +1671,6 @@ class SettingInterface(QWidget, Ui_settingInterface):
             return False
         if self.update_thread is not None and self.update_thread.isRunning():
             return False
-        from tasks.update_task import UpdateCheckTask
 
         self._update_check_automatic = automatic
         self.update_thread = UpdateCheckTask(self)
@@ -1838,7 +1806,6 @@ class SettingInterface(QWidget, Ui_settingInterface):
 
     def download_update(self, info):
         """在后台下载更新包，并在按钮上显示进度。"""
-        from tasks.update_task import UpdateDownloadTask
 
         self.update_thread = UpdateDownloadTask(info, self)
         self.update_thread.progress.connect(

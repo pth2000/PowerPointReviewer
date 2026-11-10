@@ -1,37 +1,37 @@
 """覆盖跨操作顺序、失败恢复、导出状态和后台任务关闭的回归场景。"""
 
 import json
-from pathlib import Path
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from types import SimpleNamespace as NS
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QThread, QTimer
 from qfluentwidgets import PushButton
+from qt_test_case import QtTestCase
+from test_presentation_link import make_ppt
 
 from app import paths
-from app.presentation import link as presentation_link
-from app.documents import package as project_package
-from ui import theme
 from app.audio.playback import PlaybackBus
-from app.settings_store import AppSettings
+from app.documents import package as project_package
+from app.presentation import link as presentation_link
 from app.project.model import ProjectSession
+from app.settings_store import AppSettings
 from app.window import Window
+from app.workspaces import TemporaryWorkspace
 from tasks.audio_generation_task import AudioGenerationTask, GenerationResult
 from tasks.preview_task import PreviewTask
 from tts_engine import TTSEngine
-from test_presentation_link import make_ppt
+from ui import theme
 from ui.dialogs.rewrite_dialog import RewriteDialog
 from ui.dialogs.session_history_dialog import SessionHistoryDialog
 from ui.pages.reviewer_page import MissingAudioError, PPTReviewer
 from ui.pages.settings_page import SettingInterface
 from ui.pages.tools_page import ToolsInterface
-
-from qt_test_case import QtTestCase
 
 
 class WorkflowAuditTests(QtTestCase):
@@ -192,13 +192,11 @@ class WorkflowAuditTests(QtTestCase):
 
     def test_sparse_pages_can_jump_to_last_page_and_missing_page_does_not_stop(self):
         self.page.load_session_record(self.record())
-        self.assertEqual(self.page.pageJumpSpinBox.maximum(), 3)
-        self.page.pageJumpSpinBox.setValue(3)
-        self.page.jump_page()
+        self.assertEqual(self.page.playing_script_preview.page_position.total, 3)
+        self.page.playing_script_preview.page_requested.emit(3)
         self.assertEqual(self.page.project.current_index, 1)
-        self.page.pageJumpSpinBox.setValue(2)
-        with patch.object(self.page, 'stop_audio') as stop, patch('app.presentation.slideshow.goto') as goto:
-            self.page.jump_page()
+        with patch.object(self.page, 'stop_audio') as stop, patch.object(self.page.playback_show, 'goto_page') as goto:
+            self.page.playing_script_preview.page_requested.emit(2)
         stop.assert_not_called()
         goto.assert_not_called()
         self.assertEqual(self.page.project.current_index, 1)
@@ -243,7 +241,7 @@ class WorkflowAuditTests(QtTestCase):
         with patch.object(self.page, 'save_session_record', side_effect=OSError('disk full')):
             self.page.thread_save_finish(result)
         self.assertTrue(self.page.project.audio_loaded)
-        self.assertTrue(self.page.playCardWidget.isEnabled())
+        self.assertTrue(self.page.infoPushButton.isEnabled())
         self.assertTrue(self.page.getFileButton.isEnabled())
         self.page.create_error_info_bar.assert_called_once()
 
@@ -488,6 +486,25 @@ class WorkflowAuditTests(QtTestCase):
             settings.on_preview_generated(str(self.page.project.media_list[0]))
         play.assert_not_called()
 
+    def test_settings_preview_cleanup_does_not_delete_another_instances_audio(self):
+        settings = self.make_settings()
+        directory = self.root / 'previews'
+        own = TemporaryWorkspace(prefix='voice-preview-', dir=directory)
+        other = TemporaryWorkspace(prefix='voice-preview-', dir=directory)
+        self.addCleanup(other.cleanup)
+        self.addCleanup(own.cleanup)
+        settings._preview_directory = own
+        own_audio = Path(own.name) / 'preview_1.wav'
+        other_audio = Path(other.name) / 'preview_2.wav'
+        own_audio.write_bytes(b'own audio')
+        other_audio.write_bytes(b'other instance audio')
+        settings.clean_preview_files()
+        self.assertFalse(own_audio.exists())
+        self.assertEqual(other_audio.read_bytes(), b'other instance audio')
+        settings.release_preview_workspace()
+        self.assertFalse(Path(own.name).exists())
+        self.assertTrue(other_audio.exists())
+
     def test_drop_resolves_unsaved_settings_before_importing(self):
         settings = Mock()
         settings.is_dirty.return_value = True
@@ -535,7 +552,7 @@ class EngineSnapshotTests(QtTestCase):
         engine.set_mode('bailian')
         engine.set_current_option('volume', 35)
         task = AudioGenerationTask(engine)
-        task.configure([{'page': 1, 'text': '第一段'}, {'page': 1, 'text': '第二段'}], 0)
+        task.configure([{'page': 1, 'text': '第一段'}, {'page': 1, 'text': '第二段'}])
         engine.set_current_option('volume', 80)
         engine.set_mode('edge')
         with tempfile.TemporaryDirectory() as folder:
@@ -544,7 +561,7 @@ class EngineSnapshotTests(QtTestCase):
             task.audio_cache_path.mkdir()
             task.output_path.mkdir()
             with patch.object(task.tts_engine, 'save_file',
-                              side_effect=lambda text, path: AudioGenerationTask._write_silence(Path(path), 'wav')):
+                              side_effect=lambda text, path, **_kwargs: AudioGenerationTask._write_silence(Path(path), 'wav')):
                 result = task.save_wav()
         self.assertEqual(result.generation_profile['mode'], 'bailian')
         self.assertEqual(result.generation_profile['options']['volume'], 35)
@@ -552,6 +569,7 @@ class EngineSnapshotTests(QtTestCase):
 
     def test_parallel_bailian_initialization_keeps_each_account_key(self):
         import dashscope
+
         from engines import bailian
         observed = []
         class Callback:
@@ -559,6 +577,8 @@ class EngineSnapshotTests(QtTestCase):
                 self.path = Path(path)
                 self.error_message = None
                 self.done_event = threading.Event()
+            def _finish(self):
+                self.done_event.set()
         class Synthesizer:
             def __init__(self, **kwargs):
                 before = dashscope.api_key
@@ -568,6 +588,8 @@ class EngineSnapshotTests(QtTestCase):
             def call(self, text):
                 self.callback.path.write_bytes(b'audio')
                 self.callback.done_event.set()
+            def close(self):
+                pass
         with tempfile.TemporaryDirectory() as folder, \
              patch('engines.bailian._file_callback_class', return_value=Callback), \
              patch('dashscope.audio.tts_v2.SpeechSynthesizer', Synthesizer), \

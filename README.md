@@ -27,21 +27,21 @@
 - 基于Python、PySide6、PySide6-Fluent-Widgets实现
 - 支持从 PPT 备注导入演讲稿，也可从 Word / JSON 讲稿文件导入
 - 支持编辑页内分隔符，用于在一页PPT中执行点击效果
-- 支持朗读前插入并设置倒计时
+- 支持朗读前显示倒计时，配合简短提示音
 - 支持PPT同步翻页功能
 - 支持停止朗读后重新从当前语句开始朗读
 - 支持页码跳转
-- 支持统计演讲稿信息
+- 支持讲稿信息统计
 - 支持文件拖入导入
 - 支持导出 PPT备注、Markdown、SRT字幕、音频文件（逐条或合并）及工程包格式
 - 支持通过 PowerPoint 导出或 OBS 录制制作演示视频
-- 支持多TTS引擎切换与参数独立保存
+- 支持多TTS引擎切换、短句配音与参数独立保存
 - 支持在线TTS引擎（Edge / 阿里百炼 / 千问复刻）
-- 支持连接本机或局域网的 qwentts.cpp 服务，使用本地模型合成语音
+- 支持连接本机或其他设备部署的 qwentts.cpp 服务，合成讲稿配音
 - 支持AI改写讲稿，兼容 OpenAI 格式
 - 支持历史记录与会话恢复，可重新关联移动或改名后的 PPT
 - 支持更新 PPT 讲稿及 Word / JSON 往返编辑，复用未变更片段的配音
-- 支持逐段审听配音，调整语速、音量和头尾留白，支持撤销与重做
+- 支持逐段审听配音，调整语速、音量和头尾留白
 - 支持讲稿注释，以及生成前的空讲稿与点击动画校验，可在设置中开启或关闭
 - 支持切换界面字体
 - 支持自动检查更新与新版本通知，可在设置中关闭
@@ -54,7 +54,7 @@
 - 在线 Edge-TTS：配置简单，音色自然，支持切换语言地区
 - 在线 阿里百炼 CosyVoice：可配置模型/语速/音量/音调
 - 在线 千问音色复刻：支持云端复刻音色，支持 Qwen-Audio-TTS 3.1 Flash、3.0 系列模型
-- 本地 qwentts.cpp：连接已启动的本地服务，支持模型与音色读取、试听和批量合成
+- qwentts.cpp：连接已部署的服务，支持模型与音色读取、试听和批量合成
 
 ## 使用方法
 
@@ -65,6 +65,8 @@
 5. 在“实用工具”中逐段调整配音、优化讲稿，或导出文档、字幕、音频和视频。
 
 首次使用可查看入门指引，完成后可继续了解进阶技巧。两种指引均可在“设置 → 常规 → 使用指引”中重新查看。
+
+仅处理讲稿时，可在设置中关闭“自动生成配音”，直接编辑和导出讲稿。
 
 ### 修改讲稿
 
@@ -78,11 +80,11 @@ Word / JSON 讲稿可导出编辑后再导入，按页更新已关联 PPT 的讲
 
 ### 调整配音
 
-在“实用工具 → 配音审听”中，可逐段或批量调整语速、音量和头尾留白。对比试听后点击“采用新配音”，调整将用于正常播放和导出，支持撤销、重做。
+在“实用工具 → 配音审听”中，可逐段或批量调整语速、音量和头尾留白。对比试听后点击“采用新配音”，调整将用于正常播放和导出。
 
 ### 导出视频
 
-在“实用工具 → 导出 → 演示视频”中，选择 PowerPoint 导出或 OBS 录制。
+在“实用工具 → 导出 → 演示视频”中，选择 PowerPoint 导出或 OBS 录制。导出时可添加字幕。
 
 | 方式 | 特点 | 使用条件与注意事项 |
 | --- | --- | --- |
@@ -109,12 +111,12 @@ Word / JSON 讲稿可导出编辑后再导入，按页更新已关联 PPT 的讲
 
 推荐本地部署[NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)，能够为本软件提供微软自然语音的SAPI 5 TTS引擎。下载本地自然语音包后，启动相关功能即可，具体部署方法请参见该项目文档。
 
-### 本地 qwentts.cpp 接入
+### qwentts.cpp 服务接入
 
 兼容 [ServeurpersoCom 原始项目](https://github.com/ServeurpersoCom/qwentts.cpp) 与 [Panda-Panta Windows 便携版](https://github.com/Panda-Panta/qwentts.cpp/releases)。模型下载和服务启动在 qwentts.cpp 中完成，本软件负责连接服务并生成讲稿音频。
 
 1. 按对应项目说明准备 GGUF 模型并启动服务。Windows 便携版可解压后运行 `Qwen3-TTS-Launcher.exe`，选择模型、语言并启动；原始项目使用 `tts-server` 启动 HTTP 服务。
-2. 在本软件设置页选择“本地 · qwentts.cpp”，填写后端服务地址，默认 `http://127.0.0.1:8080`。
+2. 在本软件设置页选择“自部署 · qwentts.cpp”，填写服务地址。本机服务默认 `http://127.0.0.1:8080`，连接其他设备时请填写该设备的服务地址。
 3. 点击“测试连接”，读取当前模型与音色，再选择音色。
 4. 按需调整设置，点击试听确认效果，再保存设置。
 5. 导入讲稿或重新生成音频。
@@ -123,26 +125,26 @@ Word / JSON 讲稿可导出编辑后再导入，按页更新已关联 PPT 的讲
 
 ## 如何打包
 
-本项目提供 Windows 64 位可执行文件。如果您想从源码运行或打包，可在 Windows 64 位 Python 环境中安装依赖：
+本项目提供 Windows 64 位可执行文件。源码运行使用 uv 管理 Python 3.14 和项目依赖。安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 后，在项目目录执行：
 
 ```shell
-python -m pip install -r requirements.txt
-python main.py
+uv sync
+uv run main.py
 ```
 
-使用pyinstaller：
+仅生成程序目录：
 
 ```shell
-python -m pip install pyinstaller
-python -m PyInstaller PowerPointReviewer.spec
+uv sync --group build
+uv run --group build python -m PyInstaller PowerPointReviewer.spec
 ```
 
 如需生成安装器、便携包和增量更新包，先安装 .NET SDK 与 Velopack CLI（`vpk`），再执行：
 
 ```shell
-python build.py --notes CHANGELOG.md
+uv run --group build build.py --notes CHANGELOG.md
 ```
 
-最新版本的更新内容见 [CHANGELOG.md](CHANGELOG.md)。
+最新版本的更新内容见 [CHANGELOG.md](CHANGELOG.md)。开发者可参阅 [开发说明](docs/development.md) 与 [发布流程](docs/releasing.md)。
 
 如果遇到任何bug，或者有任何建议，欢迎提交issue，谢谢。

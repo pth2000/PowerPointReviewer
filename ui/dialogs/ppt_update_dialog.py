@@ -4,13 +4,20 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout
 from qfluentwidgets import (
-    BodyLabel, CaptionLabel, CardWidget, InfoBadge,
-    MessageBoxBase, StrongBodyLabel, SubtitleLabel, ToolTipFilter, isDarkTheme,
+    BodyLabel,
+    CaptionLabel,
+    CardWidget,
+    InfoBadge,
+    MessageBoxBase,
+    StrongBodyLabel,
+    SubtitleLabel,
+    ToolTipFilter,
+    isDarkTheme,
     setCustomStyleSheet,
 )
 
-from ui import theme
 from app.presentation.monitor import changed_pages
+from ui import theme
 
 
 def page_ranges(pages):
@@ -47,14 +54,15 @@ class _SummaryCard(CardWidget):
 
 
 class PptUpdateDialog(MessageBoxBase):
-    def __init__(self, name, before, after, edited, voice, parent=None):
+    def __init__(self, name, before, after, edited, voice, parent=None, *, generate_audio=True):
         super().__init__(parent)
         pages = changed_pages(before, after)
         self.viewLayout.setSpacing(16)
         title_row, self.help_icon = theme.make_title_row(
             SubtitleLabel('更新 PPT 讲稿', self),
-            '更新后按当前语音设置生成配音。\n'
-            'PPT 备注会替换当前讲稿中的编辑或 AI 改写内容，生成成功后更新当前历史记录。')
+            ('更新后按当前语音设置生成配音。\n' if generate_audio else '') +
+            'PPT 备注会替换当前讲稿中的编辑或 AI 改写内容。' +
+            ('生成成功后更新当前历史记录。' if generate_audio else '确认后可继续编辑或导出讲稿。'))
         if edited:
             badge = InfoBadge.warning('已编辑讲稿', self)
             badge.setCustomBackgroundColor('#fff3db', '#44381f')
@@ -108,7 +116,8 @@ class PptUpdateDialog(MessageBoxBase):
 
         self.voice_label = _ElidedCaption(f'配音 · {voice or "当前发音人"}', self)
         self.viewLayout.addWidget(self.voice_label)
-        self.yesButton.setText('更新并生成')
+        self.voice_label.setVisible(generate_audio)
+        self.yesButton.setText('更新并生成' if generate_audio else '更新讲稿')
         self.cancelButton.setText('暂不更新')
         self.buttonLayout.removeWidget(self.yesButton)
         self.buttonLayout.removeWidget(self.cancelButton)

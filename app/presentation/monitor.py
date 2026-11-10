@@ -4,9 +4,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QFileSystemWatcher, QObject, QThread, QTimer, Signal
 
-from app.presentation import link as presentation_link
 from app.documents import io as script_io
 from app.documents.text import spoken_notes
+from app.presentation import link as presentation_link
 
 
 def normalized_notes(notes):

@@ -1,9 +1,8 @@
 """Edge-TTS 音色目录刷新线程"""
 
-from app.logging_setup import get_logger
-
 from PySide6.QtCore import QThread, Signal
 
+from app.logging_setup import get_logger
 from engines import edge_tts
 
 

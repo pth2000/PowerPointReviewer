@@ -1,6 +1,6 @@
 """用 Qt 采集选中窗口的一帧，预览完成后立即释放采集资源。"""
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap, QWindow
 from PySide6.QtMultimedia import QCapturableWindow, QMediaCaptureSession, QVideoSink, QWindowCapture
 from PySide6.QtWidgets import QLabel, QSizePolicy

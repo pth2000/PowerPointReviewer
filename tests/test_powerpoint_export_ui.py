@@ -1,19 +1,29 @@
 """原生导出入口、模式切换以及线程退出后的文件提交与清理。"""
 
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace as NS
 import unittest
-from unittest.mock import Mock, patch
 import wave
+from pathlib import Path
+from types import SimpleNamespace as NS
+from unittest.mock import Mock, patch
 from zipfile import ZipFile
 
-from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QPoint, QRect, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QEventLoop,
+    QPoint,
+    QRect,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+)
 from PySide6.QtTest import QTest
+from qt_test_case import QtTestCase
 
 from app.settings_store import AppSettings
 from app.video.settings import RESOLUTIONS, VideoRecordingOptions, load_video_options
-from qt_test_case import QtTestCase
 from ui.dialogs.video_recording_dialog import VideoRecordingDialog
 
 

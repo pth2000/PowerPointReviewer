@@ -1,17 +1,19 @@
-"""创建 Qt 应用、恢复持久化配置并启动主窗口。"""
+﻿"""创建 Qt 应用、恢复持久化配置并启动主窗口。"""
 
 import sys
+
 from PySide6.QtWidgets import QApplication
 
 from app import logging_setup, paths
-from ui import theme
-from app.updates import manager as updater
 from app.app_context import AppContext
+from app.updates import manager as updater
 from app.window import Window
+from app.workspaces import start_cleanup
 from tts_engine import TTSEngine
+from ui import theme
+from ui.tooltips import install_fluent_tooltips
 
-
-VERSION = '1.8.2'
+VERSION = '1.9.0'
 
 
 def main():
@@ -23,8 +25,10 @@ def main():
         print(f'[更新] 已更新至 {updated_to}')
 
     app = QApplication(sys.argv)
+    install_fluent_tooltips(app)
     logging_setup.log_display()
     paths.ensure_runtime_dirs()
+    start_cleanup()
 
     context = AppContext(
         version=VERSION,
@@ -45,4 +49,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-

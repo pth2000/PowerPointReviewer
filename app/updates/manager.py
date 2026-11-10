@@ -4,6 +4,7 @@ import os
 
 from app import paths
 
+# 源码运行不需要更新器；Velopack 及下载模块仅在安装版调用更新功能时加载。
 # 从最新索引发现更新，增量包从各自版本的发行版附件下载。
 GITEE_FEED = 'https://gitee.com/pth2000/PowerPointReviewer/releases/download/latest'
 GITHUB_REPO = 'https://github.com/pth2000/PowerPointReviewer'

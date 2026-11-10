@@ -1,18 +1,22 @@
 """原生导出的动画组解析、全局时间对齐和文件保护。"""
 
+import tempfile
+import unittest
+import wave
 from array import array
 from pathlib import Path
 from types import SimpleNamespace as NS
-import tempfile
-import unittest
 from unittest.mock import Mock, patch
 from xml.etree import ElementTree as ET
-import wave
 
 from app.video.mux import MuxCancelled
 from app.video.native_media import join_narration, probe_media
 from app.video.powerpoint_timing import (
-    EffectTiming, P, SlideTiming, build_powerpoint_schedule, parse_slide_timing,
+    EffectTiming,
+    P,
+    SlideTiming,
+    build_powerpoint_schedule,
+    parse_slide_timing,
 )
 from app.video.timeline import SAMPLE_RATE, VideoTimeline
 
@@ -167,7 +171,7 @@ class PowerPointTimingTests(unittest.TestCase):
         first.set('repeatCount', 'indefinite')
         end = ET.SubElement(first, f'{{{P}}}endCondLst')
         ET.SubElement(end, f'{{{P}}}cond', {'evt': 'onNext', 'delay': '0'})
-        last = list(n for n in document.iter(f'{{{P}}}cTn') if n.get('nodeType') == 'clickEffect')[-1]
+        last = [n for n in document.iter(f'{{{P}}}cTn') if n.get('nodeType') == 'clickEffect'][-1]
         last.set('repeatCount', 'indefinite')
         timeline = self.timeline([1, 1, 1])
         parsed = parse_slide_timing(document, 1)
@@ -428,7 +432,7 @@ class PowerPointTimingTests(unittest.TestCase):
         self.assertEqual(second.read_bytes(), picture.read_bytes())
 
     def test_compatible_wps_registration_is_identified_separately_from_powerpoint(self):
-        from app.video.powerpoint import _require_video_export, VideoExportUnavailable
+        from app.video.powerpoint import VideoExportUnavailable, _require_video_export
         app, library = Mock(), Mock()
         app._oleobj_.GetTypeInfo.return_value.GetContainingTypeLib.return_value = (library, 0)
         library.GetLibAttr.return_value = ('{44720440-94BF-4940-926D-4F38FECF2A48}',)
@@ -481,8 +485,9 @@ class PowerPointTimingTests(unittest.TestCase):
         self.assertEqual(estimates, ['', '预计剩余约 3 分钟', ''])
 
     def test_success_failure_and_cancellation_release_encoder_and_workspace(self):
-        from PySide6.QtCore import QObject,Signal
+        from PySide6.QtCore import QObject, Signal
         from PySide6.QtWidgets import QApplication
+
         from app.video.powerpoint import PowerPointExportTask
         from app.video.settings import VideoRecordingOptions
         qt = QApplication.instance() or QApplication([])
@@ -506,8 +511,10 @@ class PowerPointTimingTests(unittest.TestCase):
                     def start(self):
                         self.progress.emit(.2)
                         self.target.write_bytes(b'encoded audio')
-                        if stage=='audio':self.failed.emit('audio failed')
-                        else:self.finished.emit(str(self.target))
+                        if stage=='audio':
+                            self.failed.emit('audio failed')
+                        else:
+                            self.finished.emit(str(self.target))
                 factory=tempfile.TemporaryDirectory
                 def temporary(*args,**kwargs):
                     kwargs['dir']=self.root
@@ -523,20 +530,23 @@ class PowerPointTimingTests(unittest.TestCase):
                     return path
                 def join(_picture,_audio,output,**_kwargs):
                     self.assertTrue(_audio.is_file())
-                    if stage=='join':raise RuntimeError('join failed')
+                    if stage=='join':
+                        raise RuntimeError('join failed')
                     output.write_bytes(b'joined')
                 def mux(_joined,output,*_args,**_kwargs):
                     output.write_bytes(b'incomplete final output')
                     _kwargs['progress'](5, 10)
-                    if stage=='done':return
-                    if stage=='cancel-mux':raise MuxCancelled()
+                    if stage=='done':
+                        return
+                    if stage=='cancel-mux':
+                        raise MuxCancelled()
                     raise RuntimeError('mux failed')
                 task=PowerPointExportTask(self.root/'source.pptx',self.timeline([1]),[],
                                          target,VideoRecordingOptions())
                 stages, progress = [], []
                 task.stage_changed.connect(stages.append)
                 task.progress.connect(lambda message, value: progress.append((task._stage, value)))
-                with patch('app.video.powerpoint.tempfile.TemporaryDirectory',side_effect=temporary), \
+                with patch('app.video.powerpoint.TemporaryWorkspace',side_effect=temporary), \
                         patch('app.video.powerpoint.export_powerpoint_video',side_effect=picture), \
                         patch('app.video.powerpoint.NarrationEncoder',Encoder), \
                         patch('app.video.powerpoint.join_narration',side_effect=join), \
@@ -548,7 +558,8 @@ class PowerPointTimingTests(unittest.TestCase):
                 encoders[0].session.setRecorder.assert_called_once_with(None)
                 encoders[0].session.setAudioBufferInput.assert_called_once_with(None)
                 self.assertEqual(task.was_cancelled,stage=='cancel-mux')
-                if stage not in ('cancel-mux', 'done'):self.assertIn(stage,task.error)
+                if stage not in ('cancel-mux', 'done'):
+                    self.assertIn(stage,task.error)
                 if stage=='done':
                     self.assertFalse(task.error)
                     self.assertEqual(stages, ['preparing', 'rendering', 'narration', 'joining', 'saving'])
@@ -592,7 +603,7 @@ class PowerPointTimingTests(unittest.TestCase):
             if len(calls)==1:
                 raise PermissionError('temporary Office file lock')
             cleanup()
-        with patch('app.video.powerpoint.tempfile.TemporaryDirectory',return_value=workspace), \
+        with patch('app.video.powerpoint.TemporaryWorkspace',return_value=workspace), \
                 patch.object(workspace,'cleanup',side_effect=locked_once), \
                 patch('app.video.powerpoint.time.sleep'):
             with _export_workspace() as directory:
@@ -603,14 +614,14 @@ class PowerPointTimingTests(unittest.TestCase):
     def test_locked_workspace_does_not_hide_export_error_or_invalidate_finished_video(self):
         from app.video.powerpoint import _export_workspace
         workspace = NS(name=str(self.root/'locked'),cleanup=Mock(side_effect=PermissionError('locked')))
-        with patch('app.video.powerpoint.tempfile.TemporaryDirectory',return_value=workspace), \
+        with patch('app.video.powerpoint.TemporaryWorkspace',return_value=workspace), \
                 patch('app.video.powerpoint.time.sleep'), \
                 self.assertLogs('pptreviewer.video.powerpoint',level='WARNING') as logs:
             with _export_workspace():
                 pass
         self.assertIn(workspace.name,logs.output[0])
         self.assertEqual(workspace.cleanup.call_count,5)
-        with patch('app.video.powerpoint.tempfile.TemporaryDirectory',return_value=workspace), \
+        with patch('app.video.powerpoint.TemporaryWorkspace',return_value=workspace), \
                 patch('app.video.powerpoint.time.sleep'), \
                 self.assertLogs('pptreviewer.video.powerpoint',level='WARNING'), \
                 self.assertRaisesRegex(ValueError,'original failure'):

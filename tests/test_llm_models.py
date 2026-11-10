@@ -9,11 +9,11 @@ import requests
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QWidget
+from qt_test_case import QtTestCase
+from test_user_messages import make_response
 
 from app.ai import client
 from app.settings_store import AppSettings
-from qt_test_case import QtTestCase
-from test_user_messages import make_response
 from ui.dialogs.llm_config_dialog import LLMConfigMessageBox
 
 

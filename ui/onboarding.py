@@ -1,12 +1,40 @@
 """入门与进阶引导：在真实控件旁展示可跳过的动画提示。"""
 
-from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QRect, QRectF, Qt, QTimer, QVariantAnimation
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QHBoxLayout, QVBoxLayout, QWidget
-from qfluentwidgets import (
-    BodyLabel, CaptionLabel, CardWidget, PrimaryPushButton, SubtitleLabel,
-    TransparentPushButton, isDarkTheme, themeColor,
+from functools import partial
+
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QPoint,
+    QRect,
+    QRectF,
+    Qt,
+    QTimer,
+    QVariantAnimation,
 )
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import (
+    QApplication,
+    QGraphicsOpacityEffect,
+    QHBoxLayout,
+    QVBoxLayout,
+    QWidget,
+)
+from qfluentwidgets import (
+    Action,
+    BodyLabel,
+    CaptionLabel,
+    CardWidget,
+    PrimaryPushButton,
+    RoundMenu,
+    SubtitleLabel,
+    TransparentDropDownPushButton,
+    TransparentPushButton,
+    isDarkTheme,
+    themeColor,
+)
+from shiboken6 import isValid
 
 from ui.widget_state import active_modal_dialog
 
@@ -18,11 +46,20 @@ class GuideCard(CardWidget):
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(12)
         self.progress = CaptionLabel(self)
+        self.topics_button = TransparentDropDownPushButton('目录', self)
+        self.topics_button.setFixedHeight(28)
+        self.topics_button.setFont(self.progress.font())
+        self.topics_button.setAccessibleName('进阶技巧目录')
+        self.topics_button.hide()
+        heading = QHBoxLayout()
+        heading.addWidget(self.progress)
+        heading.addStretch()
+        heading.addWidget(self.topics_button)
         self.title = SubtitleLabel(self)
         self.title.setWordWrap(True)
         self.body = BodyLabel(self)
         self.body.setWordWrap(True)
-        layout.addWidget(self.progress)
+        layout.addLayout(heading)
         layout.addWidget(self.title)
         layout.addWidget(self.body)
         layout.addSpacing(6)
@@ -168,6 +205,8 @@ class GuideOverlay(QWidget):
 
     def dismiss(self):
         self.animation.stop()
+        if self.card.topics_button.menu() is not None:
+            self.card.topics_button.menu().close()
         self.hide()
         self.card.hide()
 
@@ -175,10 +214,23 @@ class GuideOverlay(QWidget):
 class UsageGuide(QObject):
     """由业务信号推进引导，滚动、弹窗和布局变化通过事件更新。"""
 
-    ADVANCED_STEPS = (
-        'update_script', 'script_options', 'slideshow_sync', 'hotkeys', 'audio_review',
-        'ai_rewrite', 'script_roundtrip', 'audio_export', 'video_export', 'project_package',
+    ADVANCED_TOPICS = (
+        ('update_script', '更新 PPT 讲稿'),
+        ('home_navigation', '讲稿定位与审听'),
+        ('page_durations', '逐页时长与统计'),
+        ('script_only', '先处理讲稿，再生成配音'),
+        ('script_options', '备注注释与动画校验'),
+        ('sentence_audio', '短句配音与字幕'),
+        ('slideshow_sync', '放映联动'),
+        ('hotkeys', '全局快捷键'),
+        ('audio_review', '调整片段配音'),
+        ('ai_rewrite', 'AI 优化'),
+        ('script_roundtrip', '讲稿导出与导回'),
+        ('audio_export', '字幕与音频导出'),
+        ('video_export', '演示视频'),
+        ('project_package', '工程包与 PPT 关联'),
     )
+    ADVANCED_STEPS = tuple(step for step, _title in ADVANCED_TOPICS)
 
     def __init__(self, window):
         super().__init__(window)
@@ -196,6 +248,16 @@ class UsageGuide(QObject):
         self.overlay.card.next_button.clicked.connect(self.next)
         self.overlay.card.back_button.clicked.connect(self.back)
         self.overlay.card.skip_button.clicked.connect(self.skip)
+        menu = RoundMenu(parent=self.overlay.card)
+        menu.setMaxVisibleItems(9)
+        self.topic_actions = {}
+        for step, title in self.ADVANCED_TOPICS:
+            action = Action(title, menu)
+            action.setCheckable(True)
+            action.triggered.connect(partial(self._select_topic, step))
+            menu.addAction(action)
+            self.topic_actions[step] = action
+        self.overlay.card.topics_button.setMenu(menu)
         window.setting_interface.usage_guide_requested.connect(self.start)
         window.setting_interface.advanced_guide_requested.connect(self.start_advanced)
         task = window.ppt_r.save_thread
@@ -246,6 +308,10 @@ class UsageGuide(QObject):
             self.step = 'engine'
             self._present()
 
+    def _select_topic(self, step, *_):
+        if self.step in self.ADVANCED_STEPS and not self.window.ppt_r.is_busy():
+            self._go_to(step)
+
     def _present(self):
         if self.step is None or not self.window.isVisible():
             return
@@ -274,16 +340,16 @@ class UsageGuide(QObject):
                           '一页内有点击动画时，用分隔符将备注分段。点击“编辑分隔符”查看示例，默认使用 ●。没有点击动画可直接继续。',
                           '下一步', '开始使用 · 4 / 6', True, '跳过'),
             'import': (page, page.getFileButton.parentWidget(), '导入你的讲稿',
-                       '这里可导入 PPT，也支持拖入文件。软件会读取备注并生成配音。点击“下一步”继续了解播放功能。',
+                       '点击导入按钮或拖入 PPT，读取备注作为讲稿。默认会自动生成配音，也可在设置中关闭。暂时没有文稿，可以直接点击“下一步”。',
                        '下一步', '开始使用 · 5 / 6', True, '跳过'),
-            'play': (page, page.playButton.parentWidget(), '播放与审听',
-                     '生成配音后，点击“播放”审听。启用同步翻页后，可配合 PPT 放映。实用工具中还可逐段调整配音，或导出音频与视频。',
+            'play': (page, page.playButton.parentWidget(), '开始播放',
+                     '配音生成后，点击播放开始朗读，再次点击停止。两侧箭头切换前后页，也可在播放前开启倒计时和同步翻页。',
                      '完成引导', '开始使用 · 6 / 6', True, '关闭'),
             'basics_complete': (page, None, '入门指引已完成',
                                 '是否继续查看“进阶技巧”？了解讲稿更新、配音调整和视频导出等用法。也可稍后从设置中查看。',
                                 '查看进阶技巧', '', False, '暂时结束'),
             'generated': (page, page.playButton.parentWidget(), '配音已准备好',
-                          '可以在这里开始播放。在“实用工具”的“配音审听”中可逐段调整声音，也可以导出字幕、音频与视频。',
+                          '点击播放开始朗读。想调整某一段配音时，可点击首页讲稿打开配音审听，更多功能可在“实用工具”中查看。',
                           '前往实用工具', '', False, '知道了'),
         }
         extras = (settings.CardWidget_4,) if self.step == 'preview' else ()
@@ -291,25 +357,33 @@ class UsageGuide(QObject):
             tools = self.window.tools_interface
             tips = {
                 'update_script': (page, page.getFileButton.parentWidget(), '让讲稿跟上 PPT 的修改',
-                                  '修改 PowerPoint 或 WPS 的备注后，先保存文稿。回到这里点击更新提醒，也可从导入按钮的下拉菜单选择“更新 PPT 讲稿”。更新后保留所在页，从本页第一段重新播放。'),
+                                  '修改并保存 PPT 备注后，在导入菜单中选择“更新 PPT 讲稿”，即可更新当前讲稿，并按需重新生成配音。'),
+                'home_navigation': (page, page.playing_script_preview, '从当前讲稿快速定位',
+                                    '点击页码或片段数字跳转，用返回按钮回到原位置。悬停讲稿查看整页内容，点击讲稿打开配音审听。'),
+                'page_durations': (page, page.playbackOverview, '查看时长，找到需要打磨的页面',
+                                   '查看讲稿字数、配音总时长与各页的时长分布。点击左侧查看详细统计，点击右侧条形可定位页面。'),
+                'script_only': (settings, settings.auto_generate_audio_switch.parentWidget(), '先处理讲稿，再生成配音',
+                                '关闭“自动生成配音”后，可先提取、编辑和导出讲稿。需要朗读时，再回到首页生成配音。'),
                 'script_options': (settings, settings.script_comments_switch.parentWidget(), '将注释与讲稿写在一起',
-                                   '开启“识别讲稿注释”后，以 // 开头的整行文字会保留在备注中，但不参与朗读。下方的“生成前校验点击动画”可提醒空讲稿，以及点击动画与分段不一致的页面。'),
+                                   '开启“识别讲稿注释”后，可用 // 开头的整行文字记录讲者提示，朗读时会跳过。开启下方的动画校验，还可检查空讲稿及分段与点击动画的对应情况。'),
+                'sentence_audio': (settings, settings.dynamic_option_widgets['sentence_mode'].parentWidget(), '让长讲稿按短句配音',
+                                   '将“配音分段”设为“短句配音”，可逐句试听，并让字幕按短句显示。修改后请重新生成配音。'),
                 'slideshow_sync': (settings, settings.page_turn_card, '按习惯设置放映联动',
-                                   '启用同步翻页后，可选择翻页方式。使用“演示软件接口（COM）”时，还可分别设置自动开始放映、朗读跟随手动翻页，以及退出放映时是否停止朗读。'),
+                                   '播放前启用“同步翻页”，让幻灯片跟随讲稿播放。在这里选择翻页方式，调整放映联动偏好。'),
                 'hotkeys': (settings, settings.hotkey_card, '在放映时用快捷键控制朗读',
-                            '点击“配置”设置全局快捷键。配音生成后，即使当前在 PowerPoint 或其他程序中，也可控制播放、停止、上一段、下一段和重播当前段。保存时会检查组合键是否被占用。'),
+                            '点击“配置”设置快捷键。在 PowerPoint 或其他程序中，也能控制讲稿播放、切换片段和重播。'),
                 'audio_review': (tools, tools.audio_review_card, '逐段打磨配音',
-                                 '生成配音后，在“配音审听”中按页或关键词找到片段，调整语速、音量与头尾留白。对比当前配音和新配音，满意后点击“采用新配音”。调整会用于播放和导出，也可撤销、重做。'),
+                                 '选中片段即可试听。调整语速、音量与停顿后，点击“生成试听”对比效果，满意后“采用新配音”，用于播放和导出。'),
                 'ai_rewrite': (tools, tools.ai_rewrite_card, '逐页优化讲稿表达',
-                               '在“AI 优化”中设置处理页面与场景。“朗读纠错”侧重保留正文、修正读法。可连接 AI 接口，也可导出任务后导回结果。在结果页对照原文审查，确认应用后才会更新讲稿并生成配音。'),
+                               '选择页面和优化场景，生成后逐页对照原文，再确认应用。也可导出优化任务，处理后导入结果审查。'),
                 'script_roundtrip': (tools, tools.script_export_card, '导出讲稿，编辑后再导回',
-                                     '将讲稿导出为 Word 或 JSON，在外部编辑后重新导入，可按页更新当前讲稿。希望保留 PPT 关联时，先加载对应讲稿。也可通过“PPT 备注”另存一份包含当前讲稿的文稿。'),
+                                     '把讲稿导出为 Word 或 JSON 进行编辑，再从导入菜单选择“从文件更新讲稿”。“PPT 备注”可将讲稿写入另存的文稿。'),
                 'audio_export': (tools, tools.audio_export_card, '按用途导出字幕和音频',
-                                 '“逐条音频”适合逐段使用配音，“合并音频”会将整篇讲稿连成一个文件。SRT 字幕按配音时长生成时间轴，可导入视频剪辑软件继续制作。'),
+                                 '“逐条音频”用于单独使用各段配音，“合并音频”用于整篇播放。导出 SRT 字幕可继续用于视频剪辑。'),
                 'video_export': (tools, tools.video_export_card, '选择适合的演示视频',
                                  '在“导出”的“演示视频”中，可用“PowerPoint 导出”生成带动画的视频，或用“OBS 录制”录制 PowerPoint 和 WPS 放映。导出时可设置清晰度、帧率和字幕。'),
                 'project_package': (tools, tools.project_package_card, '把讲稿与配音带到其他设备',
-                                    '工程包可保留讲稿、配音及已采用的调整。将 PPT 文稿另行发送，接收方导入工程包后，可在“历史记录列表”中点击“关联 PPT”。文稿移动或改名后，也可从这里重新关联。'),
+                                    '导出工程包，将讲稿、配音和已采用的调整带到其他设备。PPT 文稿需另行发送，接收后可在“历史记录列表”中点击“关联 PPT”。'),
             }
             index = self.ADVANCED_STEPS.index(self.step)
             steps[self.step] = (*tips[self.step],
@@ -317,12 +391,17 @@ class UsageGuide(QObject):
                                 f'进阶技巧 · {index + 1} / {len(self.ADVANCED_STEPS)}', index > 0, '关闭')
             if self.step == 'script_options':
                 extras = (settings.animation_check_switch.parentWidget(),)
+            elif self.step == 'home_navigation':
+                extras = (page.playCardWidget_3.return_button,)
         destination, target, title, body, action, progress, back, skip = steps[self.step]
         if destination is not settings and settings.is_dirty():
             self.overlay.dismiss()
             if not settings.prompt_unsaved_changes(allow_regenerate=False):
                 return False
         self.target = target
+        self.overlay.card.topics_button.setVisible(self.step in self.ADVANCED_STEPS)
+        for topic, topic_action in self.topic_actions.items():
+            topic_action.setChecked(topic == self.step)
         if destination is not None:
             self.window.switchTo(destination)
             if self.target is not None and destination.isAncestorOf(self.target):
@@ -439,6 +518,11 @@ class UsageGuide(QObject):
                 or active_modal_dialog(self.window) is not None):
             self.overlay.dismiss()
             return
+        if self.target is not None and not isValid(self.target):
+            self.target = None
+        if self.target is None and self.step in self.ADVANCED_STEPS:
+            self._present()
+            return
         if self.target is not None and not self.target.isVisible():
             self.overlay.dismiss()
             return
@@ -450,6 +534,9 @@ class UsageGuide(QObject):
     def eventFilter(self, obj, event):
         if self.step is None:
             return False
+        if self.target is not None and not isValid(self.target):
+            self.target = None
+            self._queue_refresh()
         kind = event.type()
         if kind == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
             if active_modal_dialog(self.window) is None and isinstance(obj, QWidget) and obj.window() is self.window:

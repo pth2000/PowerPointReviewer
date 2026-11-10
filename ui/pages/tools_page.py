@@ -2,35 +2,36 @@
 
 import json
 import re
+import sys
 from itertools import count
 from pathlib import Path
-import sys
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CaptionLabel,
     CardWidget,
+    IconWidget,
     InfoBar,
     InfoBarPosition,
-    IconWidget,
     MessageBox,
     PrimaryPushButton,
     PushButton,
     SubtitleLabel,
 )
 
-from app.audio import cache as audio_cache
-from app.documents import export as exporters, package as project_package
-from ui import icons, theme
-from app.logging_setup import log_error
 from app.app_context import AppContext
+from app.audio import cache as audio_cache
+from app.documents import export as exporters
+from app.documents import package as project_package
+from app.logging_setup import log_error
 from app.project.model import UnavailableReason
-from ui.widget_state import set_enabled
-from toolsInterface import Ui_toolsInterface
-from ui.dialogs.rewrite_dialog import RewriteDialog
 from engines.defs import ENGINE_DEFS
+from toolsInterface import Ui_toolsInterface
+from ui import icons, theme
+from ui.dialogs.audio_merge_dialog import AudioMergeDialog
+from ui.dialogs.rewrite_dialog import RewriteDialog
+from ui.widget_state import set_enabled
 
 
 class ToolsInterface(QWidget, Ui_toolsInterface):
@@ -42,6 +43,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         self.reviewer_page = reviewer_page
         self.project = reviewer_page.project
         self.setupUi(self)
+        self.verticalLayout.setSpacing(theme.PAGE_SECTION_SPACING)
         self.bgScrollArea.enableTransparentBackground()
 
         self.processing_cards = []
@@ -55,13 +57,8 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
     def add_section(self, title: str, caption: str = ''):
         """向工具页追加分区标题和可选说明。"""
         label = SubtitleLabel(title, self.importWidget)
-        font = label.font()
-        font.setPointSize(12)
-        font.setWeight(QFont.Weight.DemiBold)
-        label.setFont(font)
-        label.setFixedHeight(28)
-        self.verticalLayout_2.addSpacing(16)
         self.verticalLayout_2.addWidget(label)
+        theme.space_page_section(self.verticalLayout_2, label, separated=True)
 
         caption_label = None
         if caption:
@@ -98,7 +95,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         info_layout.addWidget(caption_label)
 
         h_layout.addLayout(info_layout, stretch=1)
-        h_layout.addSpacing(16)
+        h_layout.addSpacing(8)
 
         for index, (text, slot) in enumerate(controls):
             factory = PrimaryPushButton if (primary_first and index == 0) else PushButton
@@ -123,14 +120,10 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         """将 Designer 骨架重排为讲稿处理和导出两个分区。"""
         # 复用 .ui 中的静态标题，避免运行期重建造成样式差异。
         self.SubtitleLabel.setText('讲稿处理')
-        section_font = self.SubtitleLabel.font()
-        section_font.setPointSize(12)
-        section_font.setWeight(QFont.Weight.DemiBold)
-        self.SubtitleLabel.setFont(section_font)
-        self.SubtitleLabel.setFixedHeight(28)
         self.verticalLayout_2.removeWidget(self.CaptionLabel_4)
         self.CaptionLabel_4.hide()
-        self.verticalLayout_2.setSpacing(8)
+        self.verticalLayout_2.setSpacing(theme.PAGE_CARD_SPACING)
+        theme.space_page_section(self.verticalLayout_2, self.SubtitleLabel)
         self.audio_review_card = self.add_card(
             '配音审听', '逐段试听，调整语速与停顿',
             [('打开面板', self.open_audio_review)],
@@ -287,6 +280,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         if not self.require_project(audio=True, presentation=True, durations=True):
             return
         page = self.reviewer_page
+        # 视频窗口连带加载 OBS、原生导出和媒体组件，仅在使用视频功能时加载。
         from ui.dialogs.video_recording_dialog import VideoRecordingDialog
 
         page.stop_audio()
@@ -324,6 +318,8 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
 
 
     def audio_metadata(self):
+        if not self.project.audio_loaded:
+            return {}, '', ''
         profile = self.project.generation_profile
         if profile is None:
             profile = self.ctx.tts_engine.get_generation_profile()
@@ -388,6 +384,7 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
             return
 
         try:
+            # PPT 读写库按需加载，避免进入工具页就初始化文档解析依赖。
             from pptx import Presentation
 
             ppt = Presentation(str(ppt_path))
@@ -552,7 +549,8 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         if not dir_path:
             return
 
-        content = exporters.build_srt(self.project.notes_list, self.project.notes_duration_list)
+        content = exporters.build_srt(self.project.notes_list, self.project.notes_duration_list,
+                                      self.project.media_list)
         if not content.strip():
             self.create_warning_info_bar('没有可导出的字幕', '请先生成讲稿配音，再导出字幕')
             return
@@ -599,7 +597,6 @@ class ToolsInterface(QWidget, Ui_toolsInterface):
         suffix = (Path(self.project.media_list[0]).suffix.lower() or '.wav') if direct else '.wav'
         file_path = self.unique_path(dir_path / f'{self.export_name()}_Full{suffix}')
         if not direct:
-            from ui.dialogs.audio_merge_dialog import AudioMergeDialog
             dialog = AudioMergeDialog(list(self.project.media_list), file_path, self)
             result = dialog.exec()
             if dialog.error:

@@ -1,7 +1,7 @@
 """视频方式的独立设置、旧配置迁移与 OBS 原生画质选择。"""
 
-from dataclasses import replace
 import unittest
+from dataclasses import replace
 
 from app.settings_store import AppSettings
 from app.video.settings import VideoRecordingOptions, load_video_options, save_video_options

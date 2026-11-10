@@ -1,11 +1,11 @@
-"""连接 qwentts.cpp 本地 HTTP 服务，兼容上游与 Panda-Panta Windows 分支。"""
+"""连接 qwentts.cpp HTTP 服务，兼容上游与 Panda-Panta Windows 分支。"""
 
 import math
 import re
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
-from app.audio import processing as audio_processing
 
+from app.audio import processing as audio_processing
 
 DEFAULT_BASE_URL = 'http://127.0.0.1:8080'
 DEFAULT_SEED = 42
@@ -40,7 +40,7 @@ def normalize_base_url(value: str) -> str:
     if path.endswith('/v1'):
         path = path[:-3]
     if path.endswith('/audio/speech'):
-        raise RuntimeError('请填写启动器显示的服务地址，例如 http://127.0.0.1:8080。')
+        raise RuntimeError('请填写服务根地址，例如 http://127.0.0.1:8080。')
     host = parts.hostname.lower()
     if host == '0.0.0.0':
         host = '127.0.0.1'
@@ -64,7 +64,7 @@ def _describe_error(response) -> str:
     except (ValueError, TypeError):
         pass
     return (message[:500] if message else
-            f'本地 TTS 服务返回 HTTP {response.status_code}，请确认端口指向 qwentts.cpp 服务。')
+            f'qwentts.cpp 服务返回 HTTP {response.status_code}，请确认服务地址与端口。')
 
 
 def _request(session, method: str, url: str, *, timeout: int, **kwargs):
@@ -73,11 +73,11 @@ def _request(session, method: str, url: str, *, timeout: int, **kwargs):
     try:
         response = session.request(method, url, timeout=(3, max(int(timeout), 1)), **kwargs)
     except requests.exceptions.Timeout as exc:
-        raise RuntimeError('本地 TTS 请求超时。请检查服务状态；合成较慢时可增大请求超时。') from exc
+        raise RuntimeError('qwentts.cpp 请求超时。请检查服务状态，合成较慢时可增大请求超时。') from exc
     except requests.exceptions.ConnectionError as exc:
-        raise RuntimeError('无法连接本地 TTS，请先启动 qwentts.cpp 服务，并确认服务地址与端口。') from exc
+        raise RuntimeError('无法连接 qwentts.cpp 服务，请确认服务已启动，并检查服务地址与端口。') from exc
     except requests.exceptions.RequestException as exc:
-        raise RuntimeError(f'本地 TTS 请求失败：{exc}') from exc
+        raise RuntimeError(f'qwentts.cpp 请求失败：{exc}') from exc
     if response.status_code != 200:
         raise ServiceError(response)
     return response
@@ -88,9 +88,9 @@ def _json(session, url: str, *, timeout: int):
     try:
         payload = response.json()
     except ValueError as exc:
-        raise RuntimeError('无法读取本地语音服务的信息，请确认地址与 qwentts.cpp 启动器中的服务地址一致。') from exc
+        raise RuntimeError('无法读取 qwentts.cpp 服务信息，请确认服务地址。') from exc
     if not isinstance(payload, dict):
-        raise RuntimeError('本地 TTS 服务响应格式不正确。')
+        raise RuntimeError('qwentts.cpp 服务响应格式不正确。')
     return payload
 
 
@@ -98,10 +98,10 @@ def _model(session, base_url: str, *, timeout: int) -> str:
     payload = _json(session, base_url + '/v1/models', timeout=timeout)
     models = payload.get('data')
     if not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict):
-        raise RuntimeError('未读到已加载的模型，请在 qwentts.cpp 启动器中选择模型并启动服务。')
+        raise RuntimeError('未读到已加载的模型，请确认 qwentts.cpp 服务已加载模型。')
     model = str(models[0].get('id') or '').strip()
     if not model:
-        raise RuntimeError('本地 TTS 服务未返回模型名称。')
+        raise RuntimeError('qwentts.cpp 服务未返回模型名称。')
     return model
 
 
@@ -109,7 +109,7 @@ def _session():
     import requests
 
     session = requests.Session()
-    # 本地或局域网服务直接连接，避免系统代理将请求送往互联网。
+    # 直接连接配置的服务地址，避免系统代理干扰自部署服务。
     session.trust_env = False
     return session
 
@@ -126,14 +126,14 @@ def query_service(base_url: str, *, timeout: int = 5, cancelled=None) -> dict:
         check_cancelled()
         health = _json(session, base_url + '/health', timeout=timeout)
         if health.get('status') != 'ok':
-            raise RuntimeError('本地 TTS 服务尚未就绪，请检查启动器中的状态。')
+            raise RuntimeError('qwentts.cpp 服务尚未就绪，请检查服务端状态。')
         check_cancelled()
         model = _model(session, base_url, timeout=timeout)
         check_cancelled()
         payload = _json(session, base_url + '/v1/audio/voices', timeout=timeout)
         items = payload.get('voices')
         if not isinstance(items, list):
-            raise RuntimeError('本地 TTS 服务未返回有效音色列表。')
+            raise RuntimeError('qwentts.cpp 服务未返回有效音色列表。')
         voices = []
         for item in items:
             if not isinstance(item, dict):
@@ -153,7 +153,7 @@ def check_model(base_url: str, expected_model: str) -> None:
     with _session() as session:
         current = _model(session, base_url, timeout=5)
     if current != expected_model:
-        raise RuntimeError('本地 TTS 模型已变化，请在设置页重新测试连接、选择音色并保存设置。')
+        raise RuntimeError('qwentts.cpp 模型已变化，请在设置页重新测试连接、选择音色并保存设置。')
 
 
 def save(text: str, path: str, *, base_url: str = DEFAULT_BASE_URL, model: str = '',

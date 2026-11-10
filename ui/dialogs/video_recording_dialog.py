@@ -1,42 +1,73 @@
 """共用视频导出流程，为各制作方式呈现独立的设置窗口。"""
 
-from pathlib import Path
 import logging
-import tempfile
 import sys
+import tempfile
+from pathlib import Path
 
-from PySide6.QtCore import QEvent, QTimer, Qt, QUrl
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QFont, QPainter
 from PySide6.QtWidgets import (
-    QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLayout, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLayout,
+    QPushButton,
+    QSizePolicy,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
 from qfluentwidgets import (
-    BodyLabel, CaptionLabel, CardWidget, CheckBox, ComboBox, DoubleSpinBox,
-    IconWidget, IndeterminateProgressBar, InfoBadge, InfoBarIcon, InfoLevel, LineEdit, PrimaryPushButton, ProgressBar,
-    PlainTextEdit, PushButton, ScrollArea, SubtitleLabel, ToolButton, ToolTipFilter,
+    BodyLabel,
+    CaptionLabel,
+    CardWidget,
+    CheckBox,
+    ComboBox,
+    DoubleSpinBox,
+    IconWidget,
+    IndeterminateProgressBar,
+    InfoBadge,
+    InfoBarIcon,
+    InfoLevel,
+    LineEdit,
+    PlainTextEdit,
+    PrimaryPushButton,
+    ProgressBar,
+    PushButton,
+    ScrollArea,
+    SubtitleLabel,
+    ToolButton,
+    ToolTipFilter,
     TransparentPushButton,
     setCustomStyleSheet,
 )
 
 from app import paths
-from ui import icons, theme
+from app.logging_setup import log_error
 from app.presentation.control import list_presentations
 from app.presentation.media import contains_embedded_media
 from app.presentation.session import PresentationSession as RecordingSession
 from app.video.audio import RecordingAudioPreparation
 from app.video.mux import VideoMuxTask, build_video_captions, ensure_mux_available
 from app.video.native_media import ensure_native_media_available
-from app.video.powerpoint import PowerPointExportTask
 from app.video.obs import ObsVideoRecording
 from app.video.obs_runtime import check_obs_version, find_obs
+from app.video.powerpoint import PowerPointExportTask
 from app.video.settings import (
-    OBS_QUALITY_PRESETS, RESOLUTIONS, VideoRecordingOptions,
-    load_video_options, save_video_options,
+    OBS_QUALITY_PRESETS,
+    RESOLUTIONS,
+    VideoRecordingOptions,
+    load_video_options,
+    save_video_options,
 )
 from app.video.timeline import SUPPORTED_FRAME_RATES, VideoTimeline
+from app.workspaces import TemporaryWorkspace
+from ui import icons, theme
 from ui.dialogs.base import ThemedDialog
 from ui.dialogs.window_target_dialog import WindowTargetDialog
-
+from ui.scrolling import configure_reading_scroll
 
 logger = logging.getLogger('pptreviewer.video.export')
 
@@ -131,6 +162,7 @@ class VideoRecordingDialog(ThemedDialog):
         )
         root.addLayout(row)
         self.scroll_area = ScrollArea(self)
+        configure_reading_scroll(self.scroll_area)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.enableTransparentBackground()
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -257,7 +289,7 @@ class VideoRecordingDialog(ThemedDialog):
         self.container_combo.addItem('MP4', userData='mp4')
         self.container_combo.addItem('MKV', userData='mkv')
         self.subtitle_checkbox = CheckBox('内嵌字幕', output_card)
-        self.subtitle_checkbox.setToolTip('字幕与配音同步，可在支持的播放器中开关。')
+        self.subtitle_checkbox.setToolTip('字幕可在播放器中开关。MKV 保留字体、描边与位置样式，MP4 使用基础样式。')
         self._build_output_settings(output_layout)
         form_layout.addWidget(output_card)
 
@@ -937,7 +969,7 @@ class VideoRecordingDialog(ThemedDialog):
                 self.output = self.output.with_name(self.output.name + '.' + self.options.container)
                 if self.output.exists():
                     raise RuntimeError('目标视频已存在，请选择另一个文件名。')
-            self.audio_directory = tempfile.TemporaryDirectory(prefix='video-audio-', dir=paths.TEMP_DIR)
+            self.audio_directory = TemporaryWorkspace(prefix='video-audio-', dir=paths.TEMP_DIR)
             self._remember_options()
             self._set_busy(True)
             self.open_button.setVisible(False)
@@ -1252,7 +1284,6 @@ class VideoRecordingDialog(ThemedDialog):
         self.waiting_manual = False
 
     def _failed(self, message):
-        from app.logging_setup import log_error
         log_error(f'视频导出失败（{self.mode}）', message)
         self._cleanup()
         self.error_details = message if '\n' in message or len(message) > 360 else ''
@@ -1272,6 +1303,7 @@ class VideoRecordingDialog(ThemedDialog):
         dialog.resize(680, 440)
         layout = QVBoxLayout(dialog)
         detail = PlainTextEdit(dialog)
+        configure_reading_scroll(detail)
         detail.setReadOnly(True)
         detail.setPlainText(self.error_details)
         layout.addWidget(detail)

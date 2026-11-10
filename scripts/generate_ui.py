@@ -1,12 +1,11 @@
 """生成 Designer 页面与 Qt 资源；--check 仅检查，不修改文件。"""
 
 import argparse
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = (

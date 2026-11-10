@@ -4,9 +4,9 @@ from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QTest
+from qt_test_case import QtTestCase
 
 from app.settings_store import AppSettings
-from qt_test_case import QtTestCase
 from ui.dialogs.audio_merge_dialog import AudioMergeDialog
 from ui.dialogs.hotkey_dialog import HotkeyDialog
 from ui.dialogs.presentation_link_dialog import PresentationLinkDialog

@@ -1,13 +1,14 @@
 """确认后台配音失败既返回界面消息，也保留完整诊断。"""
 
-from unittest.mock import Mock, patch
-from pathlib import Path
 import tempfile
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from qt_test_case import QtTestCase
+
+from app.settings_store import AppSettings, ConfigStore
 from tasks.audio_generation_task import AudioGenerationTask
 from tasks.preview_task import PreviewTask
-from app.settings_store import AppSettings, ConfigStore
 
 
 class TaskLoggingTests(QtTestCase):
@@ -53,8 +54,7 @@ class TaskLoggingTests(QtTestCase):
         task = AudioGenerationTask(Mock())
         errors = []
         task.signal_error.connect(errors.append)
-        with patch.object(task, 'save_countdown_wav'), \
-             patch.object(task, 'save_wav', side_effect=OSError('output full fixture')), \
+        with patch.object(task, 'save_wav', side_effect=OSError('output full fixture')), \
              self.assertLogs('pptreviewer', level='ERROR') as logs:
             task.run()
         self.assertEqual(errors, ['output full fixture'])

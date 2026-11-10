@@ -8,10 +8,10 @@ from unittest.mock import Mock, patch
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QWidget
 from qfluentwidgets import PushButton
+from test_sync_playback import SyncPlaybackFixture
 
 from app.settings_store import AppSettings
 from tasks.update_task import UpdateCheckTask
-from test_sync_playback import SyncPlaybackFixture
 
 
 class UpdateNotificationTests(SyncPlaybackFixture):

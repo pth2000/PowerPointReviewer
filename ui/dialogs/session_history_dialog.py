@@ -22,15 +22,16 @@ from qfluentwidgets import (
     TableWidget,
 )
 
-from ui import icons
 from app.audio import cache as audio_cache
+from app.logging_setup import get_logger, log_error
 from app.presentation import link as presentation_link
 from app.project.history_catalog import read_record_summary
-from app.logging_setup import get_logger, log_error
 from tasks.history_scan_task import HistoryScanTask
-from ui.dialogs.delete_record_dialog import DeleteRecordMessageBox
+from ui import icons
 from ui.dialogs.base import ThemedDialog
+from ui.dialogs.delete_record_dialog import DeleteRecordMessageBox
 from ui.dialogs.presentation_link_dialog import PresentationLinkDialog
+from ui.scrolling import configure_reading_scroll
 
 
 class SessionHistoryDialog(ThemedDialog):
@@ -62,6 +63,7 @@ class SessionHistoryDialog(ThemedDialog):
 
         # 使用 Fluent 表格保持与应用主题一致。
         self.table = TableWidget(self)
+        configure_reading_scroll(self.table)
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
             '更新时间', '来源文件', '配音段数', '引擎', '发音人', '分隔符', 'PPT'
@@ -74,18 +76,18 @@ class SessionHistoryDialog(ThemedDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
-        
+
         # 固定短字段的初始宽度，避免逐行计算列宽拖慢大量记录的加载。
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
-        
+
         for col in range(7):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == 1
                                         else QHeaderView.ResizeMode.Interactive)
         for col, width in ((2, 72), (3, 80), (4, 136), (5, 64), (6, 88)):
             header.resizeSection(col, width)
         header.resizeSection(0, max(180, self.table.fontMetrics().horizontalAdvance('2026-10-26 12:00:00') + 40))
-        
+
         self.table.itemDoubleClicked.connect(self.accept_selected)
         self.table.itemSelectionChanged.connect(self._update_action_buttons_state)
 
@@ -383,7 +385,8 @@ class SessionHistoryDialog(ThemedDialog):
             return
 
         # 仅统计目标记录独占缓存，避免破坏仍保留记录的音频引用。
-        exclusive = audio_cache.exclusive_keys(record_paths) - self.active_cache_keys
+        active_keys = audio_cache.expand_sentence_keys(self.active_cache_keys)
+        exclusive = audio_cache.exclusive_keys(record_paths) - active_keys
         audio_count, audio_bytes = audio_cache.measure_keys(exclusive)
 
         target_text = (f'"{record_paths[0].name}"' if len(record_paths) == 1
@@ -409,7 +412,7 @@ class SessionHistoryDialog(ThemedDialog):
         removed_audio, freed = (0, 0)
         if delete_audio and exclusive and deleted:
             try:
-                safe_keys = exclusive - audio_cache.referenced_keys() - self.active_cache_keys
+                safe_keys = exclusive - audio_cache.referenced_keys() - active_keys
                 removed_audio, freed = audio_cache.remove_keys(safe_keys)
             except Exception:
                 get_logger().exception('删除历史记录后清理音频失败')

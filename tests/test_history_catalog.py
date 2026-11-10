@@ -1,16 +1,16 @@
 """历史列表异步读取、搜索、关闭和摘要缓存的回归测试。"""
 
 import json
-from pathlib import Path
 import tempfile
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtCore import QEventLoop, QTimer
+from qt_test_case import QtTestCase
 
 from app import paths
 from app.project import history_catalog
-from qt_test_case import QtTestCase
 from ui.dialogs.session_history_dialog import SessionHistoryDialog
 
 

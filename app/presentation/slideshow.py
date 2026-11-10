@@ -9,6 +9,7 @@ COM 可控制对应放映，动画能否在后台播放还取决于演示软件�
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
+
 from app.presentation.com import ensure_com, running_applications
 
 
@@ -146,22 +147,6 @@ def advance(source=None) -> bool:
     return advanced
 
 
-def goto(page: int, source=None) -> bool:
-    """跳转到指定页；没有放映或页码越界时返回 False。"""
-    _label, views = _active_views(source)
-    if not views:
-        return False
-
-    jumped = False
-    for view in views:
-        try:
-            view.GotoSlide(int(page))
-            jumped = True
-        except Exception as e:
-            print(f'[放映] COM 跳页失败：{e}')
-    return jumped
-
-
 class SlideshowWatcher(QObject):
     """订阅演示软件的放映事件，把换页通知转成 Qt 信号。
 
@@ -233,6 +218,7 @@ class SlideshowWatcher(QObject):
             if not _contains_source(app, self.source_path):
                 continue
             try:
+                # 只在已初始化 COM 的订阅入口加载，避免改变主线程的初始化顺序。
                 import win32com.client
                 self._connection = win32com.client.WithEvents(app, _make_handler(self))
             except Exception:

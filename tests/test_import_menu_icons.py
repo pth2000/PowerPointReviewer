@@ -8,9 +8,9 @@ from PySide6.QtGui import QFontDatabase, QIcon, QImage, QPainter
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QStyle, QStyleOptionViewItem, QVBoxLayout, QWidget
 from qfluentwidgets import Action
+from qt_test_case import QtTestCase
 
 import resource_rc  # noqa: F401  注册项目 SVG 资源。
-from qt_test_case import QtTestCase
 from ui import icons, theme
 from ui.icon_menu import IconMenu
 

@@ -17,12 +17,12 @@ from qfluentwidgets import (
 from app.ai import exchange, rewrite
 from app.logging_setup import log_error
 from tasks.rewrite_task import RewriteTask
-from ui.dialogs.llm_config_dialog import LLMConfigMessageBox
-from ui.dialogs.style_manager_dialog import StyleManagerDialog
 from ui.dialogs.base import ThemedDialog
+from ui.dialogs.llm_config_dialog import LLMConfigMessageBox
 from ui.dialogs.rewrite_exchange_dialog import RewriteExchangeDialog
-from ui.dialogs.rewrite_workspace import RewriteWorkspace
 from ui.dialogs.rewrite_widgets import PREVIEW_ROLE, STATUS_ROLE
+from ui.dialogs.rewrite_workspace import RewriteWorkspace
+from ui.dialogs.style_manager_dialog import StyleManagerDialog
 
 STATUS_PENDING = '待优化'
 STATUS_DONE = '已优化'

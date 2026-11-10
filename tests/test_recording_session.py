@@ -1,16 +1,15 @@
 """自动放映来源绑定、资源所有权和取消流程验证。"""
 
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace as NS
 import unittest
+from pathlib import Path
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent
+from qt_test_case import QtTestCase
 
 from app.presentation.session import PresentationSession as RecordingSession
-
-from qt_test_case import QtTestCase
 
 
 class RecordingSessionTests(unittest.TestCase):
@@ -160,7 +159,8 @@ class RecordingSessionTests(unittest.TestCase):
 
     def test_running_wps_is_preferred_and_never_quit(self):
         def active(prog_id):
-            if prog_id == 'Kwpp.Application': return self.application
+            if prog_id == 'Kwpp.Application':
+                return self.application
             raise RuntimeError('not running')
         with patch('win32com.client.GetActiveObject', side_effect=active), \
              patch('win32com.client.DispatchEx') as launch, \

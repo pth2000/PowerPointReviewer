@@ -33,6 +33,14 @@ class GenerationWorkflow:
         project.cache_hit_count = result.cache_hit_count
         project.generation_profile = getattr(result, 'generation_profile', None) or engine.get_generation_profile()
         project.generation_speaker = getattr(result, 'speaker', '') or engine.get_selected_voice_name()
+        project.audio_outdated = False
+        self._restore_position()
+
+    def apply_script_only(self):
+        """保留当前讲稿和历史身份，撤下不再匹配的配音引用。"""
+        outdated = self.project.audio_loaded or self.project.audio_outdated
+        self.project.clear_audio()
+        self.project.audio_outdated = outdated
         self._restore_position()
 
     def _restore_position(self):

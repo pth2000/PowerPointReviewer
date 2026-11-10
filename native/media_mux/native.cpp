@@ -6,6 +6,7 @@
 #include <string.h>
 #include <exception>
 #include <mutex>
+#include <string>
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -48,6 +49,36 @@ struct Operation {
 int interrupt(void* opaque) { return static_cast<Operation*>(opaque)->cancelled() ? 1 : 0; }
 void check(int code) { if (code < 0) throw code; }
 void check_cancelled(const Operation& operation) { if (operation.cancelled()) throw AVERROR_EXIT; }
+
+std::string subtitle_header(int width, int height) {
+    char header[2048];
+    const int font = (height * 32 + 540) / 1080;
+    const int horizontal_margin = (width * 80 + 960) / 1920;
+    const int vertical_margin = (height * 42 + 540) / 1080;
+    const double outline = height * 1.6 / 1080;
+    snprintf(header, sizeof(header),
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: %d\nPlayResY: %d\n"
+        "WrapStyle: 0\nScaledBorderAndShadow: yes\nYCbCr Matrix: TV.709\n"
+        "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Default,Microsoft YaHei,%d,&H00FFFFFF,&H00FFFFFF,&H40101010,&HFF000000,0,0,0,0,100,100,0,0,1,%.2f,0,2,%d,%d,%d,1\n"
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
+        width, height, font > 0 ? font : 1, outline, horizontal_margin, horizontal_margin, vertical_margin);
+    return header;
+}
+
+std::string ass_text(const char* text) {
+    std::string result;
+    for (; *text; ++text) {
+        // ASS has no portable literal escaping for override braces and backslashes.
+        // Full-width forms preserve readable text without interpreting lecture text as tags.
+        if (*text == '{') result += "｛";
+        else if (*text == '}') result += "｝";
+        else if (*text == '\\') result += "＼";
+        else if (*text == '\n') result += "\\N";
+        else if (*text != '\r') result += *text;
+    }
+    return result;
+}
 }
 
 extern "C" __declspec(dllexport) unsigned mm_abi_version() { return 1; }
@@ -115,10 +146,13 @@ extern "C" __declspec(dllexport) int mm_mux(const char* input_path, const char* 
     auto write_caption = [&]() {
         check_cancelled(operation);
         const Caption& caption = captions[caption_index];
-        int length = static_cast<int>(strlen(caption.text));
+        std::string encoded;
+        if (!mp4) encoded = std::to_string(caption_index) + ",0,Default,,0,0,0,," + ass_text(caption.text);
+        const char* text = mp4 ? caption.text : encoded.c_str();
+        int length = static_cast<int>(strlen(text));
         check(p_av_new_packet(subtitle, length + (mp4 ? 2 : 0)));
         if (mp4) { subtitle->data[0] = static_cast<uint8_t>(length >> 8); subtitle->data[1] = static_cast<uint8_t>(length); }
-        memcpy(subtitle->data + (mp4 ? 2 : 0), caption.text, length);
+        memcpy(subtitle->data + (mp4 ? 2 : 0), text, length);
         subtitle->pts = subtitle->dts = caption.start_ms;
         subtitle->duration = caption.end_ms - caption.start_ms;
         subtitle->stream_index = subtitle_stream->index;
@@ -152,28 +186,36 @@ extern "C" __declspec(dllexport) int mm_mux(const char* input_path, const char* 
             stream->disposition = input->streams[i]->disposition;
         }
         if (count) {
-            const AVCodec* encoder = p_avcodec_find_encoder_by_name(mp4 ? "mov_text" : "srt");
-            if (!encoder) throw AVERROR_ENCODER_NOT_FOUND;
+            int width = 1920, height = 1080;
+            for (unsigned i = 0; i < input->nb_streams; ++i) {
+                const auto* codec = input->streams[i]->codecpar;
+                if (codec->codec_type == AVMEDIA_TYPE_VIDEO && codec->width > 0 && codec->height > 0) {
+                    width = codec->width; height = codec->height; break;
+                }
+            }
+            const std::string header = subtitle_header(width, height);
             subtitle_stream = p_avformat_new_stream(output, nullptr);
             if (!subtitle_stream) throw AVERROR(ENOMEM);
             subtitle_stream->time_base = AVRational{1, 1000};
             if (mp4) {
+                const AVCodec* encoder = p_avcodec_find_encoder_by_name("mov_text");
+                if (!encoder) throw AVERROR_ENCODER_NOT_FOUND;
                 subtitle_context = p_avcodec_alloc_context3(encoder);
                 if (!subtitle_context) throw AVERROR(ENOMEM);
                 subtitle_context->time_base = AVRational{1, 1000};
-                const char* header = "[Script Info]\nScriptType: v4.00+\nPlayResX: 1920\nPlayResY: 1080\n"
-                    "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-                    "Style: Default,Arial,36,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,1,0,2,20,20,30,1\n"
-                    "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
-                subtitle_context->subtitle_header_size = static_cast<int>(strlen(header));
-                subtitle_context->subtitle_header = static_cast<uint8_t*>(p_av_mallocz(strlen(header) + AV_INPUT_BUFFER_PADDING_SIZE));
+                subtitle_context->subtitle_header_size = static_cast<int>(header.size());
+                subtitle_context->subtitle_header = static_cast<uint8_t*>(p_av_mallocz(header.size() + AV_INPUT_BUFFER_PADDING_SIZE));
                 if (!subtitle_context->subtitle_header) throw AVERROR(ENOMEM);
-                memcpy(subtitle_context->subtitle_header, header, strlen(header));
+                memcpy(subtitle_context->subtitle_header, header.data(), header.size());
                 check(p_avcodec_open2(subtitle_context, encoder, nullptr));
                 check(p_avcodec_parameters_from_context(subtitle_stream->codecpar, subtitle_context));
             } else {
                 subtitle_stream->codecpar->codec_type = AVMEDIA_TYPE_SUBTITLE;
-                subtitle_stream->codecpar->codec_id = encoder->id;
+                subtitle_stream->codecpar->codec_id = AV_CODEC_ID_ASS;
+                subtitle_stream->codecpar->extradata_size = static_cast<int>(header.size());
+                subtitle_stream->codecpar->extradata = static_cast<uint8_t*>(p_av_mallocz(header.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+                if (!subtitle_stream->codecpar->extradata) throw AVERROR(ENOMEM);
+                memcpy(subtitle_stream->codecpar->extradata, header.data(), header.size());
             }
             subtitle_stream->disposition = AV_DISPOSITION_DEFAULT;
             check(p_av_dict_set(&subtitle_stream->metadata, "language", "zho", 0));

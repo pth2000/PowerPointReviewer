@@ -1,23 +1,21 @@
 """导入后的点击步骤预检与继续/取消生成流程。"""
 
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace as NS
 import unittest
+from pathlib import Path
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from pptx import Presentation
 from pptx.oxml import parse_xml
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer
-
-from app.presentation.animation import AnimationIssue, check_alignment
-from app.presentation.visibility import hidden_shape_ids
-from app.audio.playback import PlaybackBus
-from app.settings_store import AppSettings
-from ui.dialogs.animation_check_dialog import AnimationCheckDialog
-
 from qt_test_case import QtTestCase
 
+from app.audio.playback import PlaybackBus
+from app.presentation.animation import AnimationIssue, check_alignment
+from app.presentation.visibility import hidden_shape_ids
+from app.settings_store import AppSettings
+from ui.dialogs.animation_check_dialog import AnimationCheckDialog
 
 P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 

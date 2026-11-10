@@ -1,23 +1,22 @@
 """OBS 负责采集和编码，录制帧时钟驱动放映，结束后合入既有配音。"""
 
-from dataclasses import replace
 import copy
 import logging
-from pathlib import Path
 import shutil
 import tempfile
 import threading
 import time
+from dataclasses import replace
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
 from app.presentation import window_target
 from app.video.mux import MuxCancelled
-from app.video.native_media import ensure_native_media_available, join_narration, probe_media
 from app.video.narration import AUDIO_BIT_RATE, NarrationEncoder
+from app.video.native_media import ensure_native_media_available, join_narration, probe_media
 from app.video.obs_runtime import ObsRuntime, check_obs_version, find_obs, wait_saved
 from app.video.timeline import SAMPLE_RATE
-
 
 logger = logging.getLogger(__name__)
 

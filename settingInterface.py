@@ -3,7 +3,7 @@
 ################################################################################
 ## Form generated from reading UI file 'settingInterface.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.10.2
+## Created by: Qt User Interface Compiler version 6.11.2
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
@@ -38,7 +38,7 @@ class Ui_settingInterface(object):
         self.scrollAreaWidgetContents.setGeometry(QRect(0, 0, 830, 700))
         self.scrollAreaWidgetContents.setStyleSheet(u"background: transparent;")
         self.verticalLayout_4 = QVBoxLayout(self.scrollAreaWidgetContents)
-        self.verticalLayout_4.setSpacing(6)
+        self.verticalLayout_4.setSpacing(20)
         self.verticalLayout_4.setObjectName(u"verticalLayout_4")
         self.verticalLayout_4.setContentsMargins(20, 20, 20, 20)
         self.importWidget = QWidget(self.scrollAreaWidgetContents)

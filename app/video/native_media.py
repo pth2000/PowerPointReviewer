@@ -1,11 +1,11 @@
 """原生导出使用的视频时间读取和独立音轨封装，共用现有 Qt 媒体库。"""
 
 import ctypes
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
-from app.video.mux import MuxCancelled, _Progress, _library
+from app.video.mux import MuxCancelled, _library, _Progress
 
 
 class _MediaInfo(ctypes.Structure):

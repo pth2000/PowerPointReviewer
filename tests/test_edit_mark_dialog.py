@@ -3,8 +3,8 @@
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer
 from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QWidget
-
 from qt_test_case import QtTestCase
+
 from ui.dialogs.edit_mark_dialog import EditMarkMessageBox
 
 

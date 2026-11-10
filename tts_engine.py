@@ -1,19 +1,31 @@
 """统一调度 TTS 引擎，并维护按引擎隔离的配置、音色选择和缓存身份。"""
 
 import copy
-import time
-import traceback
 import hashlib
 import json
-from pathlib import Path
+import random
 import tempfile
-from typing import Optional
+import wave
+from contextlib import contextmanager
+from io import BytesIO
+from pathlib import Path
 
+from app import paths
 from app.audio import processing as audio_processing
-from engines import defs
-from engines import pyttsx3 as pyttsx3_engine
+from app.audio import sentence_cache
+from app.audio.captions import CONTINUOUS_MODE, SENTENCE_MODE, split_sentences, write_captions
+from app.audio.concurrency import (
+    SynthesisSession,
+    check_cancelled,
+    error_status,
+    interruptible_wait,
+    request_gate,
+    retry_after,
+)
+from app.audio.sentences import SentenceGenerationError
+from engines import bailian, defs
 from engines import edge_tts as edge_tts_engine
-from engines import bailian
+from engines import pyttsx3 as pyttsx3_engine
 from engines import qwen_clone as qwen_clone_engine
 from engines import qwentts as qwentts_engine
 
@@ -25,8 +37,7 @@ class TTSEngine:
 
     def __init__(self) -> None:
         self._engine_defs = defs.ENGINE_DEFS
-        # 枚举本机 SAPI 语音需要数百毫秒，且未必用得上（在线引擎不需要），
-        # 因此延迟到首次访问时再枚举。
+        # 在线引擎不需要 SAPI，延迟到首次访问本地音色时再枚举。
         self._local_voices = None
         self._local_voice_names = None
 
@@ -38,6 +49,7 @@ class TTSEngine:
         # 也避免同一引擎下不同地区的选择互相覆盖。
         self._voice_name_map: dict[str, str] = {}
         self._qwentts_service_info = None
+        self._synthesis_session = None
         for engine_def in self._engine_defs:
             eid = engine_def['id']
             self._engine_settings[eid] = {
@@ -92,6 +104,25 @@ class TTSEngine:
     def get_parallel_workers(self):
         """返回当前引擎建议的并行任务数。"""
         return int(self.get_current_engine_definition().get('parallel_workers', 1))
+
+    @contextmanager
+    def synthesis_session(self, cancelled):
+        session = SynthesisSession(self._request_gate(self.get_mode()), cancelled)
+        previous, self._synthesis_session = self._synthesis_session, session
+        try:
+            yield
+        finally:
+            self._synthesis_session = previous
+            session.close()
+
+    def _request_gate(self, mode):
+        values = self._engine_settings.get(mode, {})
+        identity = (mode, values.get('api_key', ''), values.get('region', ''),
+                    values.get('ws_url', values.get('base_url', '')), values.get('model', ''))
+        definition = next(item for item in self._engine_defs if item['id'] == mode)
+        workers = definition['parallel_workers'] if definition['parallel_enabled'] else 1
+        interval = 0.4 if mode in ('bailian', 'qwen_clone') else 0.0
+        return request_gate(identity, workers, interval)
 
     # 引擎选项
 
@@ -309,7 +340,7 @@ class TTSEngine:
                     f"{settings.get('workspace_id', '')}:{settings.get('model', '')}")
         return mode
 
-    def set_voice(self, index, name: Optional[str] = None):
+    def set_voice(self, index, name: str | None = None):
         """保存当前音色索引，并按作用域保存可选的稳定名称。"""
         mode = self.get_mode()
         self._voice_index_map[mode] = int(index)
@@ -369,6 +400,10 @@ class TTSEngine:
             'voice_index': int(self._voice_index_map.get(mode, 0)),
             'voice_name': self._voice_name_map.get(self.get_voice_scope(), ''),
         }
+        if profile['options'].get('sentence_mode') != SENTENCE_MODE:
+            profile['options'].pop('sentence_mode', None)
+        else:
+            profile['sentence_segmentation'] = 2
         if mode == 'qwentts':
             profile['audio_processing'] = audio_processing.PROCESSING_VERSION
         elif any(profile['options'].get(key, 0) for key in ('leading_silence_ms', 'trailing_silence_ms')):
@@ -379,15 +414,16 @@ class TTSEngine:
             profile['options'].pop('trailing_silence_ms', None)
         return profile
 
-    def get_output_extension(self, mode: Optional[str] = None) -> str:
+    def get_output_extension(self, mode: str | None = None) -> str:
         """返回指定或当前引擎的默认输出扩展名，不含点号。"""
         target_mode = mode or self.get_mode()
         if target_mode == 'edge':
             settings = self._engine_settings.get(target_mode, {})
-            return 'wav' if any(settings.get(key, 0) for key in ('leading_silence_ms', 'trailing_silence_ms')) else 'mp3'
+            return 'wav' if (settings.get('sentence_mode') == SENTENCE_MODE or any(
+                settings.get(key, 0) for key in ('leading_silence_ms', 'trailing_silence_ms'))) else 'mp3'
         return 'wav'
 
-    def create_qwen_clone_voice(self, reference_audio_path: str, *, preferred_name: Optional[str] = None) -> str:
+    def create_qwen_clone_voice(self, reference_audio_path: str, *, preferred_name: str | None = None) -> str:
         """创建千问复刻音色，返回 ID 供用户明确选择使用。"""
         settings = self._engine_settings.get('qwen_clone', {})
         model = str(settings.get('model') or self.option_default('qwen_clone', 'model'))
@@ -435,12 +471,17 @@ class TTSEngine:
         """折叠空白差异，减少语义相同文本的重复缓存。"""
         return ' '.join(text.strip().split())
 
-    def build_audio_cache_key(self, text: str, generation_profile: Optional[dict] = None) -> str:
+    def build_audio_cache_key(self, text: str, generation_profile: dict | None = None) -> str:
         """根据规范化文本和生成配置计算稳定的 SHA-256 缓存键。"""
         profile = generation_profile or self.get_generation_profile()
+        if profile.get('options', {}).get('sentence_mode') == SENTENCE_MODE:
+            normalized = '\n'.join(self.normalize_text_for_cache(line)
+                                   for line in text.splitlines() if line.strip())
+        else:
+            normalized = self.normalize_text_for_cache(text)
         payload = {
             'version': 1,
-            'text': self.normalize_text_for_cache(text),
+            'text': normalized,
             'profile': profile,
         }
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -448,10 +489,103 @@ class TTSEngine:
 
     # 音频合成
 
+    def _sentence_profile(self, mode, rate, volume, voice_index, overrides):
+        """按合成配置隔离句子缓存，段落头尾留白单独处理。"""
+        engine = self.snapshot()
+        engine.set_mode(mode)
+        values = engine._engine_settings[mode]
+        for key in values:
+            if key in overrides:
+                values[key] = overrides[key]
+        if rate is not None:
+            values['rate'] = rate
+        if volume is not None:
+            values['volume'] = volume
+        if voice_index is not None:
+            engine._voice_index_map[mode] = voice_index
+        profile = engine.get_generation_profile()
+        for key in ('leading_silence_ms', 'trailing_silence_ms', 'sentence_mode'):
+            profile['options'].pop(key, None)
+        profile.pop('sentence_segmentation', None)
+        if mode != 'qwentts':
+            profile.pop('audio_processing', None)
+        return profile
+
+    def prepare_sentence(self, text, *, mode=None, rate=None, volume=None, voice_index=None, **kwargs):
+        """生成或读取一句配音，返回缓存键、PCM 内容和命中标记。"""
+        from app.audio.decode import decode_wav
+
+        mode = mode or self.get_mode()
+        cancelled = kwargs.get('cancelled', lambda: False)
+        directory = Path(kwargs.get('sentence_cache_dir', paths.AUDIO_CACHE_DIR))
+        profile = self._sentence_profile(mode, rate, volume, voice_index, kwargs)
+        key = sentence_cache.cache_key(text, profile)
+
+        def generate(target):
+            source = target.with_name('source.mp3' if mode == 'edge' else 'source.wav')
+            self._synthesize_file_by_mode(mode, text, str(source), rate, volume, voice_index,
+                                         **{**kwargs, 'leading_silence_ms': 0, 'trailing_silence_ms': 0})
+            decode_wav(source, target, cancelled, normalize=True)
+
+        state = []
+        content = sentence_cache.get_or_generate(
+            directory, key, generate, force=bool(kwargs.get('force_sentence_regeneration', False)),
+            cancelled=cancelled, report=state.append)
+        return key, content, state[0]
+
+    def _save_sentence_audio(self, mode, text, path, rate, volume, voice_index, **kwargs):
+        """复用或生成各句音频，合并成讲稿段并记录实际采样帧边界。"""
+        if Path(path).suffix.lower() != '.wav':
+            raise RuntimeError('短句配音需要保存为 WAV，请重新生成配音。')
+        settings = self._engine_settings.get(mode, {})
+        leading = kwargs.get('leading_silence_ms', settings.get('leading_silence_ms', 0))
+        trailing = kwargs.get('trailing_silence_ms', settings.get('trailing_silence_ms', 0))
+        audio_processing.validate_options(1.0, leading, trailing)
+        output = BytesIO()
+        cues, cursor = [], 0
+        cancelled = kwargs.get('cancelled', lambda: False)
+        with wave.open(output, 'wb') as writer:
+            writer.setnchannels(1)
+            writer.setsampwidth(2)
+            writer.setframerate(48000)
+            sentences = split_sentences(text)
+            for number, sentence in enumerate(sentences, 1):
+                if cancelled():
+                    raise InterruptedError('配音生成已停止')
+                try:
+                    key, cached, reused = self.prepare_sentence(
+                        sentence, mode=mode, rate=rate, volume=volume, voice_index=voice_index, **kwargs)
+                except InterruptedError:
+                    raise
+                except Exception as exc:
+                    raise SentenceGenerationError(number, str(exc)) from exc
+                with wave.open(BytesIO(cached), 'rb') as reader:
+                    frames = reader.getnframes()
+                    if frames <= 0:
+                        raise RuntimeError('短句配音为空，请重新生成。')
+                    writer.writeframes(reader.readframes(frames))
+                cues.append({'start': cursor, 'end': cursor + frames, 'text': sentence, 'source_key': key})
+                cursor += frames
+                progress = kwargs.get('sentence_progress')
+                if progress is not None:
+                    progress(number, len(sentences), reused)
+        content = write_captions(output.getvalue(), cues)
+        content = audio_processing.process_wav(
+            content, leading_silence_ms=leading, trailing_silence_ms=trailing)
+        if cancelled():
+            raise InterruptedError('配音生成已停止')
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+
     def save_file_by_mode(self, mode: str, text: str, path: str,
                           rate=None, volume=None, voice_index=None, **kwargs) -> None:
         """按模式合成，再统一补足可选的最低头尾留白。"""
         settings = self._engine_settings.get(mode, {})
+        sentence_mode = kwargs.get('sentence_mode', settings.get('sentence_mode', CONTINUOUS_MODE))
+        if sentence_mode == SENTENCE_MODE and text.strip():
+            self._save_sentence_audio(mode, text, path, rate, volume, voice_index, **kwargs)
+            return
         leading = kwargs.get('leading_silence_ms', settings.get('leading_silence_ms', 0))
         trailing = kwargs.get('trailing_silence_ms', settings.get('trailing_silence_ms', 0))
         audio_processing.validate_options(1.0, leading, trailing)
@@ -495,88 +629,105 @@ class TTSEngine:
         r_volume = volume if volume is not None else settings.get('volume')
         r_voice = voice_index if voice_index is not None else self._voice_index_map.get(mode, 0)
 
-        last_error: Optional[Exception] = None
+        session = self._synthesis_session
+        cancelled = kwargs.get('cancelled', session.cancelled if session else lambda: False)
+        gate = session.gate if session else self._request_gate(mode)
+        last_error = None
         for attempt in range(retry_times + 1):
+            check_cancelled(cancelled)
             try:
-                if mode == 'local':
-                    pyttsx3_engine.save(
-                        text, path,
-                        voices=self._ensure_local_voices()[0],
-                        rate=r_rate, volume=r_volume, voice_index=r_voice,
-                    )
-                elif mode == 'edge':
-                    locale = str(kwargs.get('locale', settings.get(
-                        'locale', edge_tts_engine.DEFAULT_LOCALE)))
-                    voices = edge_tts_engine.voices_for_locale(locale)
-                    idx = int(r_voice) if voice_index is not None else self.resolve_voice_index(voices)
-                    edge_tts_engine.save(
-                        text, path,
-                        voice=voices[idx] if 0 <= idx < len(voices) else '',
-                        locale=locale,
-                        rate=r_rate, volume=r_volume,
-                        pitch=kwargs.get('pitch', settings.get('pitch', 0)),
-                    )
-                elif mode == 'bailian':
-                    bailian.save(
-                        text, path,
-                        voice_index=r_voice,
-                        rate=r_rate, volume=r_volume,
-                        pitch=kwargs.get('pitch', settings.get('pitch', 1.0)),
-                        model=kwargs.get('model', settings.get('model', 'cosyvoice-v3-flash')),
-                        api_key=kwargs.get('api_key', settings.get('api_key', '')),
-                        ws_url=kwargs.get('ws_url', settings.get(
-                            'ws_url', 'wss://dashscope.aliyuncs.com/api-ws/v1/inference')),
-                    )
-                elif mode == 'qwentts':
-                    qwentts_engine.save(
-                        text, path,
-                        base_url=str(kwargs.get('base_url', settings.get('base_url', qwentts_engine.DEFAULT_BASE_URL))),
-                        model=str(kwargs.get('model', settings.get('model', ''))),
-                        voice=str(kwargs.get('voice', settings.get('voice', ''))),
-                        instructions=str(kwargs.get('instructions', settings.get('instructions', ''))),
-                        request_timeout=int(kwargs.get('request_timeout', settings.get('request_timeout', 300))),
-                        seed=int(kwargs.get('seed', settings.get('seed', qwentts_engine.DEFAULT_SEED))),
-                        temperature=float(kwargs.get('temperature', settings.get(
-                            'temperature', qwentts_engine.DEFAULT_TEMPERATURE))),
-                        speed=float(kwargs.get('speed', settings.get('speed', 1.0))),
-                        leading_silence_ms=0,
-                        trailing_silence_ms=0,
-                    )
-                elif mode == 'qwen_clone':
-                    selected_voice = str(settings.get('voice', '')).strip()
-                    if not selected_voice:
-                        voices = self.get_voices_list()
-                        if voices:
-                            idx = max(0, min(int(r_voice), len(voices) - 1))
-                            selected_voice = voices[idx]
-
-                    qwen_clone_engine.save(
-                        text,
-                        path,
-                        model=str(kwargs.get('model')
-                                  or settings.get('model')
-                                  or self.option_default('qwen_clone', 'model')),
-                        voice=selected_voice,
-                        language_type=str(kwargs.get('language_type', settings.get('language_type', 'Chinese'))),
-                        instructions=str(kwargs.get('instructions', settings.get('instructions', ''))),
-                        optimize_instructions=bool(kwargs.get('optimize_instructions', settings.get('optimize_instructions', False))),
-                        api_key=str(kwargs.get('api_key', settings.get('api_key', ''))),
-                        region=str(kwargs.get('region', settings.get('region', 'cn-beijing'))),
-                        workspace_id=str(kwargs.get('workspace_id', settings.get('workspace_id', ''))),
-                        rate=kwargs.get('rate', r_rate if r_rate is not None else 1.0),
-                        volume=kwargs.get('volume', r_volume if r_volume is not None else 50),
-                        pitch=kwargs.get('pitch', settings.get('pitch', 1.0)),
-                        request_timeout=int(kwargs.get('request_timeout', settings.get('request_timeout', 60))),
-                    )
+                with gate.slot(cancelled):
+                    self._synthesize_once(mode, text, path, r_rate, r_volume, r_voice, settings, kwargs, voice_index)
+                check_cancelled(cancelled)
+                gate.succeeded()
                 return
-            except Exception as e:
-                last_error = e
-                print(f'[TTS][{mode}] 第 {attempt + 1}/{retry_times + 1} 次保存失败：{e}')
-                traceback.print_exc()
-                if attempt < retry_times and retry_delay > 0:
-                    time.sleep(retry_delay * (attempt + 1))
-
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                status = error_status(exc)
+                if status is not None and status != 429 and not 500 <= status < 600:
+                    break
+                if attempt == retry_times:
+                    break
+                delay = max(retry_after(exc), retry_delay * 2 ** attempt + random.uniform(0, 0.2))
+                if status == 429:
+                    gate.throttle(delay)
+                interruptible_wait(delay, cancelled)
         raise RuntimeError(f'语音生成失败：{last_error}') from last_error
+
+    def _synthesize_once(self, mode, text, path, r_rate, r_volume, r_voice, settings, kwargs, voice_index):
+        if mode == 'local':
+            pyttsx3_engine.save(
+                text, path,
+                voices=self._ensure_local_voices()[0],
+                rate=r_rate, volume=r_volume, voice_index=r_voice,
+            )
+        elif mode == 'edge':
+            locale = str(kwargs.get('locale', settings.get(
+                'locale', edge_tts_engine.DEFAULT_LOCALE)))
+            voices = edge_tts_engine.voices_for_locale(locale)
+            idx = int(r_voice) if voice_index is not None else self.resolve_voice_index(voices)
+            edge_tts_engine.save(
+                text, path,
+                voice=voices[idx] if 0 <= idx < len(voices) else '',
+                locale=locale,
+                rate=r_rate, volume=r_volume,
+                pitch=kwargs.get('pitch', settings.get('pitch', 0)),
+            )
+        elif mode == 'bailian':
+            bailian.save(
+                text, path,
+                voice_index=r_voice,
+                rate=r_rate, volume=r_volume,
+                pitch=kwargs.get('pitch', settings.get('pitch', 1.0)),
+                model=kwargs.get('model', settings.get('model', 'cosyvoice-v3-flash')),
+                api_key=kwargs.get('api_key', settings.get('api_key', '')),
+                ws_url=kwargs.get('ws_url', settings.get(
+                    'ws_url', 'wss://dashscope.aliyuncs.com/api-ws/v1/inference')),
+            )
+        elif mode == 'qwentts':
+            qwentts_engine.save(
+                text, path,
+                base_url=str(kwargs.get('base_url', settings.get('base_url', qwentts_engine.DEFAULT_BASE_URL))),
+                model=str(kwargs.get('model', settings.get('model', ''))),
+                voice=str(kwargs.get('voice', settings.get('voice', ''))),
+                instructions=str(kwargs.get('instructions', settings.get('instructions', ''))),
+                request_timeout=int(kwargs.get('request_timeout', settings.get('request_timeout', 300))),
+                seed=int(kwargs.get('seed', settings.get('seed', qwentts_engine.DEFAULT_SEED))),
+                temperature=float(kwargs.get('temperature', settings.get(
+                    'temperature', qwentts_engine.DEFAULT_TEMPERATURE))),
+                speed=float(kwargs.get('speed', settings.get('speed', 1.0))),
+                leading_silence_ms=0,
+                trailing_silence_ms=0,
+            )
+        elif mode == 'qwen_clone':
+            selected_voice = str(settings.get('voice', '')).strip()
+            if not selected_voice:
+                voices = self.get_voices_list()
+                if voices:
+                    idx = max(0, min(int(r_voice), len(voices) - 1))
+                    selected_voice = voices[idx]
+
+            qwen_clone_engine.save(
+                text,
+                path,
+                model=str(kwargs.get('model')
+                          or settings.get('model')
+                          or self.option_default('qwen_clone', 'model')),
+                voice=selected_voice,
+                language_type=str(kwargs.get('language_type', settings.get('language_type', 'Chinese'))),
+                instructions=str(kwargs.get('instructions', settings.get('instructions', ''))),
+                optimize_instructions=bool(kwargs.get('optimize_instructions', settings.get('optimize_instructions', False))),
+                api_key=str(kwargs.get('api_key', settings.get('api_key', ''))),
+                region=str(kwargs.get('region', settings.get('region', 'cn-beijing'))),
+                workspace_id=str(kwargs.get('workspace_id', settings.get('workspace_id', ''))),
+                rate=kwargs.get('rate', r_rate if r_rate is not None else 1.0),
+                volume=kwargs.get('volume', r_volume if r_volume is not None else 50),
+                pitch=kwargs.get('pitch', settings.get('pitch', 1.0)),
+                request_timeout=int(kwargs.get('request_timeout', settings.get('request_timeout', 60))),
+                **({'http_session': self._synthesis_session.http()} if self._synthesis_session else {}),
+            )
 
     def save_file(self, text: str, path: str,
                   rate=None, volume=None, voice_index=None, **kwargs) -> None:
@@ -585,13 +736,6 @@ class TTSEngine:
             self.get_mode(), text, path,
             rate=rate, volume=volume, voice_index=voice_index, **kwargs,
         )
-
-    def save_file_for_stable_local(self, text: str, path: str,
-                                   rate=None, volume=None, voice_index=None) -> None:
-        """强制使用本地引擎，供倒计时等不应依赖网络的短音频使用。"""
-        self.save_file_by_mode('local', text, path, rate=rate, volume=volume, voice_index=voice_index,
-                               leading_silence_ms=0, trailing_silence_ms=0)
-
 
 if __name__ == '__main__':
     tts = TTSEngine()

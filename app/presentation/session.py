@@ -1,13 +1,17 @@
 """为已导入的 PPT 连接或启动放映，管理本次打开的临时文稿。"""
 
 import logging
-from pathlib import Path
 import shutil
-import tempfile
+from pathlib import Path
 
+from app.presentation.com import (
+    application_candidates,
+    application_pid,
+    ensure_com,
+    running_applications,
+)
 from app.presentation.control import PresentationControl, list_presentations
-from app.presentation.com import application_candidates, application_pid, ensure_com, running_applications
-
+from app.workspaces import TemporaryWorkspace
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +29,7 @@ class PresentationSession:
     @classmethod
     def start(cls, source, *, reuse_open=False, allow_start=True, windowed=False, preference='auto'):
         """复用对应放映；普通播放可从已打开文稿启动，否则使用只读副本。"""
+        # COM 桥接库在放映操作的线程内加载，不在应用导入阶段初始化。
         import win32com.client
         import win32process
 
@@ -90,7 +95,7 @@ class PresentationSession:
             security = None
             application = None
             try:
-                session.directory = tempfile.TemporaryDirectory(prefix='pptreviewer-show-')
+                session.directory = TemporaryWorkspace(prefix='pptreviewer-show-')
                 copy = Path(session.directory.name) / (source.stem + '-slideshow' + source.suffix)
                 shutil.copyfile(source, copy)
                 started = running_application is None
@@ -222,7 +227,7 @@ class PresentationSession:
         if self.document is not None:
             try:
                 self.document.Close()
-            except Exception as error:
+            except Exception:
                 # 隐藏打开的 PowerPoint 文稿可能随放映退出而自动关闭。
                 still_open = True
                 try:

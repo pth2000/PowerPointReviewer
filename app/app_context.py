@@ -3,9 +3,9 @@
 from dataclasses import dataclass, field
 
 from app import paths
+from app.audio.playback import PlaybackBus
 from app.hotkeys import HotkeyManager
 from app.presentation.slideshow import SlideshowWatcher
-from app.audio.playback import PlaybackBus
 from app.project.model import ProjectSession
 from app.settings_store import AppSettings, ConfigStore
 from tts_engine import TTSEngine

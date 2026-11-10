@@ -1,10 +1,12 @@
 """只连接运行中的演示软件，并从文稿注册补查其他实例。"""
 
-from pathlib import Path
 import os
 import re
 import threading
+from pathlib import Path
 
+# pythoncom / win32com 导入可能初始化当前线程的 COM，留在放映操作入口。
+# winreg 的局部导入另用于不支持 Windows 注册表时的安装检测回退。
 
 _com_state = threading.local()
 

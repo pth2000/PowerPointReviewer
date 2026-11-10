@@ -2,19 +2,19 @@
 
 import copy
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QTimer, Qt
-from PySide6.QtWidgets import QDialog
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt, QTimer
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QDialog
+from qt_test_case import QtTestCase
 
 from app.ai import exchange, rewrite
 from app.settings_store import AppSettings
-from qt_test_case import QtTestCase
-from ui.dialogs.rewrite_dialog import RewriteDialog, STATUS_UNCHANGED, STATUS_WARN
+from ui.dialogs.rewrite_dialog import STATUS_UNCHANGED, STATUS_WARN, RewriteDialog
 from ui.dialogs.rewrite_exchange_dialog import RewriteExchangeDialog
 
 

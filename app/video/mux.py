@@ -2,18 +2,19 @@
 
 import ctypes
 import logging
-from dataclasses import dataclass
-from functools import lru_cache
-from pathlib import Path
 import sys
 import threading
 import time
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 import PySide6
 from PySide6.QtCore import QThread, Signal
 
-from app.video.timeline import SAMPLE_RATE
+from app.audio.sentences import load_sentences
 from app.paths import resource_root
+from app.video.timeline import SAMPLE_RATE
 
 
 class MuxCancelled(Exception):
@@ -51,7 +52,15 @@ def build_video_captions(notes, timeline):
         start = (cue.audio_frame * 1000 + SAMPLE_RATE // 2) // SAMPLE_RATE
         end = (cue.end_frame * 1000 + SAMPLE_RATE // 2) // SAMPLE_RATE
         if text and end > start:
-            captions.append(VideoCaption(start, end, text))
+            timing = load_sentences(cue.path, text)
+            if timing:
+                for item in timing.spans:
+                    begin = start + item.start_ms
+                    finish = min(end, start + item.end_ms)
+                    if finish > begin:
+                        captions.append(VideoCaption(begin, finish, item.text))
+            else:
+                captions.append(VideoCaption(start, end, text))
     validate_captions(captions)
     return tuple(captions)
 

@@ -1,13 +1,14 @@
 """为视频导出逐段准备统一格式的配音。"""
 
-from pathlib import Path
 import wave
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QAudioDecoder, QAudioFormat
 
-from app.video.timeline import SAMPLE_RATE
+from app.audio.captions import read_captions, transfer_captions
 from app.logging_setup import log_error
+from app.video.timeline import SAMPLE_RATE
 
 
 def pcm_format():
@@ -98,7 +99,15 @@ class RecordingAudioPreparation(QObject):
         self.writer = None
         self.decoder.stop()
         self.finishing_decode = False
-        self.outputs.append(self.directory / f'{len(self.outputs)}.wav')
+        index = len(self.outputs)
+        target = self.directory / f'{index}.wav'
+        try:
+            if read_captions(self.sources[index]):
+                target.write_bytes(transfer_captions(self.sources[index], target.read_bytes()))
+        except (OSError, ValueError) as exc:
+            self._fail(str(exc))
+            return
+        self.outputs.append(target)
         QTimer.singleShot(0, self._open_next)
 
     def cancel(self):

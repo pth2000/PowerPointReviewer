@@ -3,11 +3,12 @@
 import hashlib
 import logging
 from pathlib import Path
-import tempfile
 from urllib.parse import quote
 
 import requests
+import velopack
 
+from app.workspaces import TemporaryWorkspace
 
 logger = logging.getLogger(__name__)
 MAX_DELTAS = 10
@@ -17,8 +18,6 @@ class MirroredUpdateManager:
     """按包在发布镜像间回退，保留 Velopack 的检查和安装行为。"""
 
     def __init__(self, source, download_roots, locator=None):
-        import velopack
-
         self.download_roots = [root.rstrip('/') for root in download_roots]
         if not self.download_roots:
             raise ValueError('暂时无法获取更新包的下载地址，请稍后重试。')
@@ -30,15 +29,15 @@ class MirroredUpdateManager:
 
     def check_for_updates(self):
         info = self.manager.check_for_updates()
-        if info and (len(info.DeltasToTarget) > MAX_DELTAS or
-                     sum(asset.Size for asset in info.DeltasToTarget) >= info.TargetFullRelease.Size):
+        if info and (
+            len(info.DeltasToTarget) > MAX_DELTAS
+            or sum(asset.Size for asset in info.DeltasToTarget) >= info.TargetFullRelease.Size
+        ):
             info.BaseRelease = None
             info.DeltasToTarget = []
         return info
 
     def download_updates(self, info, progress_callback=None):
-        import velopack
-
         last_progress = -1
 
         def progress(value):
@@ -58,14 +57,23 @@ class MirroredUpdateManager:
         total = sum(asset.Size for asset in deltas)
         # Python 绑定不提供自定义 UpdateSource；从镜像取得经过校验的包后，
         # 交给 Velopack 本地源处理补丁、包锁、Update.exe 与旧包清理。
-        with tempfile.TemporaryDirectory(prefix='pptreviewer-update-') as folder:
+        with TemporaryWorkspace(prefix='pptreviewer-update-') as folder:
             local = velopack.UpdateManager(folder, locator=self.locator)
-            if info.BaseRelease is not None and 0 < len(deltas) <= MAX_DELTAS and total < info.TargetFullRelease.Size:
+            if (
+                info.BaseRelease is not None
+                and 0 < len(deltas) <= MAX_DELTAS
+                and total < info.TargetFullRelease.Size
+            ):
                 try:
                     downloaded = 0
                     for asset in deltas:
-                        self._download_asset(asset, Path(folder),
-                                             lambda size: progress(70 * (downloaded + size) / max(1, total)))
+                        self._download_asset(
+                            asset,
+                            Path(folder),
+                            lambda size, completed=downloaded: progress(
+                                70 * (completed + size) / max(1, total)
+                            ),
+                        )
                         downloaded += asset.Size
                     local.download_updates(info, lambda value: progress(70 + 0.3 * value))
                     progress(100)
@@ -74,7 +82,9 @@ class MirroredUpdateManager:
                     logger.warning('增量更新失败，改用完整包：%s', error)
 
             target = info.TargetFullRelease
-            self._download_asset(target, Path(folder), lambda size: progress(90 * size / max(1, target.Size)))
+            self._download_asset(
+                target, Path(folder), lambda size: progress(90 * size / max(1, target.Size))
+            )
             full = velopack.UpdateInfo(target, [], info.IsDowngrade)
             local.download_updates(full, lambda value: progress(90 + 0.1 * value))
         progress(100)

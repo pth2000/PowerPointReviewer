@@ -1,6 +1,7 @@
 """在后台生成设置页使用的单条试听音频。"""
 
 from PySide6.QtCore import QThread, Signal
+
 from app.logging_setup import get_logger
 
 

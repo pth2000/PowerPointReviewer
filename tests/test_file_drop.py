@@ -2,28 +2,29 @@
 
 import hashlib
 import json
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace as NS
 import unittest
-from unittest.mock import Mock, patch
 import wave
+from pathlib import Path
+from types import SimpleNamespace as NS
+from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent
 from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QWidget
+from qt_test_case import QtTestCase
+from test_presentation_link import make_ppt
 
-from app.documents import export as exporters, package as project_package, io as script_io
 from app import paths
-from app.presentation import link as presentation_link
-from ui.file_drop import FileDropImport
 from app.audio.playback import PlaybackBus
+from app.documents import export as exporters
+from app.documents import io as script_io
+from app.documents import package as project_package
+from app.presentation import link as presentation_link
 from app.settings_store import AppSettings
 from app.window import Window
-from test_presentation_link import make_ppt
+from ui.file_drop import FileDropImport
 from ui.pages.reviewer_page import PPTReviewer
-
-from qt_test_case import QtTestCase
 
 
 class FileDropTests(QtTestCase):
@@ -120,6 +121,7 @@ class FileDropTests(QtTestCase):
 
     def test_embedded_modal_color_dialog_blocks_drop_without_replacing_input(self):
         from PySide6.QtGui import QColor
+
         from ui import theme
         self.root.resize(850, 750)
         self.root.show()
@@ -451,19 +453,19 @@ class FileImportTests(QtTestCase):
         engine.can_parallel_generate.return_value = False
         engine.build_audio_cache_key.side_effect = lambda text, profile: hashlib.sha256(text.encode()).hexdigest()
         from tasks.audio_generation_task import AudioGenerationTask
-        engine.save_file.side_effect = lambda text, path: AudioGenerationTask._write_silence(Path(path), 'wav')
+        engine.save_file.side_effect = lambda text, path, **_kwargs: AudioGenerationTask._write_silence(Path(path), 'wav')
         task = self.page.save_thread
         task.audio_cache_path = paths.AUDIO_CACHE_DIR
         task.output_path = self.root / 'output'
         task.output_path.mkdir()
         self.page.project.split_notes(comments_enabled=self.page.ctx.app_settings.get('script_comments_enabled'))
-        task.configure(self.page.project.notes_list, 0)
+        task.configure(self.page.project.notes_list)
         first = task.save_wav()
         self.assertEqual(first.cache_hit_count, 0)
         engine.save_file.reset_mock()
         self.assertTrue(self.page.import_file(self.script_json({2: '只修改这一段'})))
         self.page.project.split_notes(comments_enabled=self.page.ctx.app_settings.get('script_comments_enabled'))
-        task.configure(self.page.project.notes_list, 0)
+        task.configure(self.page.project.notes_list)
         second = task.save_wav()
         self.assertEqual(second.cache_hit_count, 3)
         self.assertEqual(engine.save_file.call_count, 1)
@@ -471,6 +473,7 @@ class FileImportTests(QtTestCase):
 
     def test_ppt_import_dialog_has_two_exclusive_choices_and_cancel(self):
         from qfluentwidgets import FluentIcon, FluentWindow
+
         from ui.dialogs.ppt_import_dialog import PptImportDialog
         root = FluentWindow()
         root.addSubInterface(self.page, FluentIcon.HOME, '主页')

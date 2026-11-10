@@ -3,7 +3,12 @@
 import math
 import unittest
 
-from app.video.eta import RemainingTime, RemainingTimeDisplay, RemainingTimeEstimator, format_remaining
+from app.video.eta import (
+    RemainingTime,
+    RemainingTimeDisplay,
+    RemainingTimeEstimator,
+    format_remaining,
+)
 
 
 class RemainingTimeTests(unittest.TestCase):

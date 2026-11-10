@@ -3,10 +3,8 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional
 
 # edge_tts 会拉起 aiohttp，导入耗时可观，推迟到调用点。
-
 from app import paths
 
 # 当内存、磁盘和网络目录均不可用时，保留覆盖中英文的最小音色集合。
@@ -35,7 +33,7 @@ DEFAULT_LOCALE = 'zh-CN'
 # 发布包携带完整目录，首次进入设置页无需等待网络请求。
 SEED_CATALOG_PATH = Path(__file__).with_name('edge_voices.json')
 
-_CATALOG: Optional[dict[str, list[str]]] = None
+_CATALOG: dict[str, list[str]] | None = None
 
 
 # 音色目录
@@ -71,7 +69,7 @@ def _fetch_catalog_from_network(timeout: float = 8.0) -> dict[str, list[str]]:
     return catalog
 
 
-def _load_catalog_file(path) -> Optional[dict]:
+def _load_catalog_file(path) -> dict | None:
     """读取并规范化音色目录 JSON；文件缺失或结构无效时返回 ``None``。"""
     try:
         with Path(path).open('r', encoding='utf-8') as f:
@@ -169,26 +167,6 @@ def pitch_to_edge(pitch: int) -> str:
 
 # 音频合成
 
-def _prepare_synthesis_endpoint() -> None:
-    """兼容旧版库使用的合成地址；上游更新地址后自动跳过。
-
-    https://github.com/rany2/edge-tts/pull/491
-    TODO: 上游正式版本包含此修复后，提高 requirements.txt 中 edge-tts 的
-    最低版本，验证试听后移除此函数及调用，并调整对应兼容性测试。
-    音色目录仍使用库默认地址，合成参数和 MP3 格式保持一致。
-    """
-    import edge_tts.communicate as transport
-    from edge_tts.constants import TRUSTED_CLIENT_TOKEN
-
-    legacy = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?'
-    if transport.WSS_URL.startswith(legacy):
-        # 一次性迁移模块常量，避免并行合成期间来回切换全局地址。
-        transport.WSS_URL = (
-            'wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1'
-            f'?Ocp-Apim-Subscription-Key={TRUSTED_CLIENT_TOKEN}'
-        )
-
-
 def save(text: str, path: str, *, voice: str = '', locale: str = DEFAULT_LOCALE,
          rate: int = 200, volume: float = 1.0, pitch: int = 0) -> None:
     """使用 Edge-TTS 合成音频，并在未指定音色时选用地区首项。
@@ -206,7 +184,6 @@ def save(text: str, path: str, *, voice: str = '', locale: str = DEFAULT_LOCALE,
         import edge_tts
         from aiohttp import WSServerHandshakeError
 
-        _prepare_synthesis_endpoint()
         communicate = edge_tts.Communicate(
             text,
             target_voice,

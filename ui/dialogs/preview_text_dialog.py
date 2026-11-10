@@ -3,6 +3,8 @@
 from PySide6.QtCore import QSize
 from qfluentwidgets import CaptionLabel, MessageBoxBase, PlainTextEdit, SubtitleLabel
 
+from ui.scrolling import configure_reading_scroll
+
 
 class PreviewTextMessageBox(MessageBoxBase):
     """在独立多行编辑器中修改试听文本。
@@ -19,6 +21,7 @@ class PreviewTextMessageBox(MessageBoxBase):
         self.hintLabel.setWordWrap(True)
 
         self.textEdit = PlainTextEdit(self)
+        configure_reading_scroll(self.textEdit)
         self.textEdit.setMinimumSize(QSize(0, 140))
         self.textEdit.setPlainText(str(text or ''))
 

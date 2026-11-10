@@ -1,26 +1,25 @@
 """COM 窗口绑定、32/64 位类型库与页码/动画控制的回归验证。"""
 
 import ctypes
+import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
-import unittest
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent, QRect
-from PySide6.QtWidgets import QDialog
 from PySide6.QtGui import QImage
 from PySide6.QtMultimedia import QVideoFrame
+from PySide6.QtWidgets import QDialog
+from qt_test_case import QtTestCase
 
 from app.presentation.com_window import slideshow_hwnd
 from app.presentation.control import PresentationControl, list_presentations
 
-from qt_test_case import QtTestCase
-
 
 class PresentationTests(unittest.TestCase):
     def setUp(self):
-        self.identity = dict(hwnd=123, pid=456, process='powerpnt.exe',
-                             class_name='screenClass', title='', area=1920*1080)
+        self.identity = {'hwnd': 123, 'pid': 456, 'process': 'powerpnt.exe',
+                             'class_name': 'screenClass', 'title': '', 'area': 1920*1080}
         self.user32 = Mock()
         self.user32.GetAncestor.return_value = 123
         self.user32.IsWindowVisible.return_value = True
@@ -366,7 +365,7 @@ class PresentationTests(unittest.TestCase):
 class NativeGetterTests(unittest.TestCase):
     def _invoke(self, syskind, invalid=False, failed=False):
         from comtypes import HRESULT
-        from comtypes.automation import IDispatch, VT_HRESULT, VT_I4, VT_PTR
+        from comtypes.automation import VT_HRESULT, VT_I4, VT_PTR, IDispatch
         from comtypes.typeinfo import INVOKE_PROPERTYGET, TKIND_INTERFACE
         calls = []
         def get(pointer, output):
@@ -465,7 +464,7 @@ class WindowSelectionTests(QtTestCase):
 
     def test_shared_picker_keeps_ordinary_mode_and_can_pick_untitled_recording_window(self):
         from ui.dialogs.window_target_dialog import WindowTargetDialog
-        window = dict(hwnd=123, pid=456, title='', process='wpp.exe', class_name='Qt5QWindowIcon', area=100)
+        window = {'hwnd': 123, 'pid': 456, 'title': '', 'process': 'wpp.exe', 'class_name': 'Qt5QWindowIcon', 'area': 100}
         with patch('app.presentation.window_target.list_windows', return_value=[window]) as enumerate_windows:
             dialog = WindowTargetDialog(recording=True)
             enumerate_windows.assert_called_with(include_untitled=True)
@@ -534,7 +533,7 @@ class WindowSelectionTests(QtTestCase):
 
     def test_preview_is_required_and_unsupported_window_cannot_be_confirmed(self):
         from ui.dialogs.window_target_dialog import WindowTargetDialog
-        target = dict(hwnd=123, title='Edit window', process='powerpnt.exe', class_name='PPTFrameClass')
+        target = {'hwnd': 123, 'title': 'Edit window', 'process': 'powerpnt.exe', 'class_name': 'PPTFrameClass'}
         presentation = NS(capture_processes={'powerpnt.exe'},
                           validate_capture_window=Mock(side_effect=RuntimeError('编辑窗口暂不支持')))
         with patch('app.presentation.window_target.list_windows', return_value=[target]):
@@ -556,7 +555,7 @@ class WindowPreviewTests(QtTestCase):
         self.preview = WindowPreview()
         self.window = Mock()
         # 验证预览的资源与回调生命周期，不依赖测试平台提供原生窗口句柄。
-        self.target = dict(hwnd=123, pid=456, class_name='test')
+        self.target = {'hwnd': 123, 'pid': 456, 'class_name': 'test'}
         self.patchers = [patch('app.presentation.window_target.window_info', return_value=self.target),
                          patch('ui.dialogs.window_preview.QWindow', NS(fromWinId=lambda hwnd: self.window)),
                          patch('ui.dialogs.window_preview.QCapturableWindow', side_effect=lambda *args: Mock(isValid=lambda: True)),
@@ -619,8 +618,9 @@ class WindowPreviewTests(QtTestCase):
 
 class FullscreenWindowTests(unittest.TestCase):
     def test_capture_crops_window_chrome_in_physical_pixels_and_waits_for_resize(self):
-        from app.presentation import window_target
         from PySide6.QtCore import QSize
+
+        from app.presentation import window_target
         user32 = Mock()
         def window_rect(hwnd, pointer):
             pointer._obj.left, pointer._obj.top = -8, -8
@@ -641,8 +641,9 @@ class FullscreenWindowTests(unittest.TestCase):
             self.assertTrue(window_target.capture_client_rect(123, 456, QSize(1100, 800)).isEmpty())
 
     def test_capture_excludes_native_browse_scrollbar_without_color_detection(self):
-        from app.presentation import window_target
         from PySide6.QtCore import QSize
+
+        from app.presentation import window_target
         user32 = Mock()
         def window_rect(hwnd, pointer):
             rect = (0, 0, 1000, 800) if hwnd == 123 else (980, 30, 1000, 800)

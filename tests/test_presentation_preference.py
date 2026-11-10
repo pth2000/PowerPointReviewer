@@ -1,14 +1,15 @@
 """软件优先级、原生导出能力回退以及用户设置的边界。"""
 
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace as NS
 import unittest
+from pathlib import Path
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, PropertyMock, patch
+
+import test_export_progress as progress_fixture
 
 from app.presentation.com import PROG_IDS, application_candidates, ordered_prog_ids
 from app.video.powerpoint import VideoExportUnavailable, export_powerpoint_video
-import test_export_progress as progress_fixture
 
 
 class ProviderSelectionTests(unittest.TestCase):

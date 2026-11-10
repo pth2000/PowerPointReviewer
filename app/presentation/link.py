@@ -3,9 +3,10 @@
 import hashlib
 import json
 import logging
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
+from app.workspaces import TemporaryWorkspace
 
 PPT_SUFFIXES = ('.pptx', '.ppt')
 _KEEP_BASELINE = object()
@@ -43,8 +44,9 @@ def validate(path, pages) -> dict:
         info['slide_count'] = count
     else:
         # 旧 PPT 的二进制格式由演示软件读取，沿用只读副本与资源清理流程。
+        # 仅此分支需要演示软件导出模块。
         from app.presentation.images import export_slide_images
-        with tempfile.TemporaryDirectory(prefix='pptreviewer-link-') as directory:
+        with TemporaryWorkspace(prefix='pptreviewer-link-') as directory:
             export_slide_images(path, [required], directory, 16, 16)
     return info
 

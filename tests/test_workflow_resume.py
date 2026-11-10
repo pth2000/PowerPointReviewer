@@ -1,28 +1,27 @@
 """验证 PPT 更新需确认、后台检测及恢复上次讲稿时保持停止。"""
 
 import json
-from pathlib import Path
 import tempfile
-import wave
-from types import SimpleNamespace as NS
 import unittest
+import wave
+from pathlib import Path
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from pptx import Presentation
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QTimer
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import QWidget
+from qt_test_case import QtTestCase
+from test_presentation_link import make_ppt
 
-from app.presentation import link as presentation_link
-from app.documents import io as script_io
 from app.audio.playback import PlaybackBus
+from app.documents import io as script_io
+from app.presentation import link as presentation_link
 from app.presentation.monitor import changed_pages
 from app.settings_store import AppSettings
 from tasks.audio_generation_task import GenerationResult
-from test_presentation_link import make_ppt
 from ui.pages.reviewer_page import PPTReviewer
-
-from qt_test_case import QtTestCase
 
 
 class WorkflowResumeTests(QtTestCase):
@@ -51,12 +50,12 @@ class WorkflowResumeTests(QtTestCase):
         self.finish_update()
         self.assertEqual(self.page.project.current_index, 3)
         self.assertEqual(self.ctx.app_settings.get('last_session')['index'], 3)
-        self.assertEqual(self.page.currentPageLabel.text(), '2 / 2')
+        self.assertEqual(self.page.playing_script_preview.page_position.value, 2)
         self.assertEqual(self.page._segment_offset(), 0)
         self.assertFalse(self.page._playing_sequence)
         self.assertEqual(self.page.player.playbackState(), QMediaPlayer.PlaybackState.StoppedState)
 
-        self.page.scrollEnableSwitch.setChecked(True)
+        self.page.set_sync_playback_enabled(True)
         with patch.object(self.page.playback_show, 'prepare') as prepare:
             self.page.init_play()
         self.assertEqual(prepare.call_args.args, (self.source, 2, 0))
@@ -329,7 +328,7 @@ class WorkflowResumeTests(QtTestCase):
         payload = self.source.read_bytes()
         self.source.unlink()
         self.wait_until(lambda: self.page.is_restricted() and
-                        not self.page.scrollEnableSwitch.isEnabled())
+                        not self.page.can_sync_playback())
         self.source.write_bytes(payload)
         self.wait_until(lambda: not self.page.is_restricted() and
                         str(self.source) in monitor.watcher.files())
@@ -337,7 +336,8 @@ class WorkflowResumeTests(QtTestCase):
         self.assertFalse(self.page.device_watcher._timer.isActive())
 
     def test_new_dialog_shows_page_summary_without_script_text(self):
-        from qfluentwidgets import BodyLabel, FluentWindow, FluentIcon
+        from qfluentwidgets import BodyLabel, FluentIcon, FluentWindow
+
         from ui.dialogs.ppt_update_dialog import PptUpdateDialog, page_ranges
         root = FluentWindow()
         root.resize(760, 560)
@@ -393,7 +393,7 @@ class WorkflowResumeTests(QtTestCase):
         old_record = self.record_path.read_bytes()
         old_notes = dict(self.page.project.notes)
         self.edit_ppt()
-        with patch('ui.dialogs.ppt_update_dialog.PptUpdateDialog') as dialog, \
+        with patch('ui.pages.reviewer_page.PptUpdateDialog') as dialog, \
              patch.object(self.page, 'regenerate') as generate:
             dialog.return_value.exec.return_value = False
             self.page.update_ppt_notes()
@@ -407,7 +407,7 @@ class WorkflowResumeTests(QtTestCase):
         self.load()
         original = self.record_path.read_bytes()
         self.edit_ppt()
-        with patch('ui.dialogs.ppt_update_dialog.PptUpdateDialog') as dialog, \
+        with patch('ui.pages.reviewer_page.PptUpdateDialog') as dialog, \
              patch.object(self.page, 'regenerate') as generate:
             dialog.return_value.exec.return_value = True
             self.page.update_ppt_notes()
@@ -427,7 +427,7 @@ class WorkflowResumeTests(QtTestCase):
         engine.build_audio_cache_key.side_effect = lambda text, profile: (
             'key1' if text == self.baseline[1].strip() else
             'key2' if text == self.baseline[2].strip() else 'new-key')
-        def synthesize(text, path):
+        def synthesize(text, path, **_kwargs):
             with wave.open(path, 'wb') as audio:
                 audio.setnchannels(1)
                 audio.setsampwidth(2)
@@ -442,8 +442,7 @@ class WorkflowResumeTests(QtTestCase):
         old_audio = (self.page.audio_cache_path / 'key1.wav').read_bytes()
         old_record = self.record_path.read_bytes()
         self.edit_ppt()
-        with patch('ui.dialogs.ppt_update_dialog.PptUpdateDialog') as dialog, \
-             patch.object(task, 'save_countdown_wav'):
+        with patch('ui.pages.reviewer_page.PptUpdateDialog') as dialog:
             dialog.return_value.exec.return_value = True
             self.page.update_ppt_notes()
             loop = QEventLoop()
@@ -473,7 +472,7 @@ class WorkflowResumeTests(QtTestCase):
         self.load()
         original = dict(self.page.project.notes)
         self.edit_ppt()
-        with patch('ui.dialogs.ppt_update_dialog.PptUpdateDialog') as dialog, \
+        with patch('ui.pages.reviewer_page.PptUpdateDialog') as dialog, \
              patch.object(self.page, 'regenerate') as generate, \
              patch.object(self.page, 'create_error_info_bar') as error:
             def confirm():
@@ -553,7 +552,7 @@ class WorkflowResumeTests(QtTestCase):
         self.ctx.app_settings.set('last_session', {'record_path': str(self.record_path), 'index': 1})
         with patch('ui.pages.reviewer_page.MessageBox') as box, \
              patch.object(self.page.save_thread, 'start') as generate, \
-             patch('app.presentation.slideshow.goto') as go:
+             patch.object(self.page.playback_show, 'goto_page') as go:
             self.page.prompt_resume_session()
             self.assertIn('第 2 页', self.page._resume_bar.content)
             box.assert_not_called()
@@ -570,7 +569,7 @@ class WorkflowResumeTests(QtTestCase):
         return self.page._resume_bar.findChild(PushButton)
 
     def window_with_hidden_home(self):
-        from qfluentwidgets import FluentWindow, FluentIcon
+        from qfluentwidgets import FluentIcon, FluentWindow
         root = FluentWindow()
         root.resize(850, 750)
         root.addSubInterface(self.page, FluentIcon.HOME, '主页')
@@ -595,6 +594,7 @@ class WorkflowResumeTests(QtTestCase):
 
     def test_resume_waits_for_embedded_color_dialog_and_only_prompts_once(self):
         from PySide6.QtGui import QColor
+
         from ui import theme
         root = self.window_with_hidden_home()
         self.ctx.app_settings.set('last_session', {'record_path': str(self.record_path)})
@@ -623,6 +623,7 @@ class WorkflowResumeTests(QtTestCase):
 
     def test_deferred_resume_preserves_script_imported_while_waiting(self):
         from PySide6.QtGui import QColor
+
         from ui import theme
         root = self.window_with_hidden_home()
         self.ctx.app_settings.set('last_session', {'record_path': str(self.record_path)})
@@ -686,7 +687,7 @@ class WorkflowResumeTests(QtTestCase):
         self.assertEqual(self.page.project.current_index, 1)
         self.assertTrue(self.page.is_restricted())
         self.assertTrue(self.page.playButton.isEnabled())
-        self.assertFalse(self.page.scrollEnableSwitch.isEnabled())
+        self.assertFalse(self.page.can_sync_playback())
         self.source.write_bytes(payload)
         self.wait_until(lambda: not self.page.is_restricted())
         self.assertEqual(self.page.project.presentation_path, self.source)

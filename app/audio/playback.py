@@ -1,7 +1,61 @@
 """提供默认音频设备跟随和跨页面播放互斥。"""
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QTimer, QUrl, Signal, Slot
 from PySide6.QtMultimedia import QMediaDevices, QMediaPlayer
+
+from app.audio.sentences import SentenceTimeline, load_sentences
+
+
+class SentencePlayback(QObject):
+    """跟随播放器源和位置，媒体加载完成后应用分句定位。"""
+
+    changed = Signal()
+
+    def __init__(self, player, parent=None):
+        super().__init__(parent)
+        self.player = player
+        self.timeline = SentenceTimeline()
+        self.current = None
+        self._pending = None
+        player.sourceChanged.connect(self._source_changed)
+        player.positionChanged.connect(self._position_changed)
+        player.mediaStatusChanged.connect(self._apply_pending)
+        player.seekableChanged.connect(self._apply_pending)
+        self._source_changed(player.source())
+
+    @Slot(QUrl)
+    def _source_changed(self, source):
+        self._pending = None
+        self.timeline = load_sentences(source.toLocalFile()) if source.isLocalFile() else SentenceTimeline()
+        self.current = self.timeline.at(0)
+        self.changed.emit()
+
+    @Slot('qint64')
+    def _position_changed(self, position):
+        current = self.timeline.at(position)
+        if current != self.current:
+            self.current = current
+            self.changed.emit()
+
+    def seek_to(self, number):
+        sentence = self.timeline.sentence(number)
+        if sentence is None:
+            return False
+        self.seek_position(sentence.start_ms)
+        return True
+
+    def seek_position(self, position):
+        self._pending = max(0, round(position))
+        self._apply_pending()
+
+    @Slot()
+    def _apply_pending(self, *_):
+        if (self._pending is not None and self.player.isSeekable()
+                and self.player.mediaStatus() in (QMediaPlayer.MediaStatus.LoadedMedia,
+                                                  QMediaPlayer.MediaStatus.BufferingMedia,
+                                                  QMediaPlayer.MediaStatus.BufferedMedia)):
+            position, self._pending = self._pending, None
+            self.player.setPosition(position)
 
 
 class AudioOutputWatcher(QObject):

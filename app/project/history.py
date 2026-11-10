@@ -23,7 +23,7 @@ class LoadedHistory:
 
 def save_session(project, root, engine, *, baseline=None):
     """保存当前工程，沿用记录身份及扩展字段；失败时保留原文件。"""
-    if not project.notes_list:
+    if not project.notes_list or not project.audio_loaded:
         return
 
     generation_profile = project.generation_profile if project.generation_profile is not None else engine.get_generation_profile()

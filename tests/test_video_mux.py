@@ -1,23 +1,23 @@
 """视频封装、字幕播放及导出失败与取消保护验证。"""
 
+import hashlib
+import tempfile
+import unittest
+import wave
 from array import array
 from contextlib import contextmanager
-import hashlib
 from pathlib import Path
-import tempfile
 from types import SimpleNamespace
-import unittest
 from unittest.mock import Mock, patch
-import wave
 
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QSizeF, QTimer, QUrl, Signal
 from PySide6.QtGui import QImage
 from PySide6.QtMultimedia import QAudioDecoder, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import QApplication
-
-from app.video.mux import MuxCancelled, VideoCaption, build_video_captions, mux_video
-from app.video.audio import pcm_format
 from video_fixture import VideoFixtureEncoder
+
+from app.video.audio import pcm_format
+from app.video.mux import MuxCancelled, VideoCaption, build_video_captions, mux_video
 from app.video.settings import VideoRecordingOptions
 from app.video.timeline import SAMPLE_RATE, VideoTimeline
 
@@ -81,7 +81,8 @@ class VideoMuxTests(unittest.TestCase):
         recording.failed.connect(lambda error: (errors.append(error), self.loop.quit()))
         QTimer.singleShot(0, recording.start)
         self.wait()
-        if recording.state != 'done': recording.cancel()
+        if recording.state != 'done':
+            recording.cancel()
         self.assertTrue(done, errors)
         self.assertFalse(errors)
         recording.deleteLater()
@@ -156,6 +157,12 @@ class VideoMuxTests(unittest.TestCase):
             with self.subTest(container=container):
                 target = self.root / ('字幕 视频.' + container)
                 mux_video(source, target, container, captions)
+                content = target.read_bytes()
+                self.assertIn(b'Microsoft YaHei', content)
+                if container == 'mkv':
+                    self.assertIn(b'S_TEXT/ASS', content)
+                    self.assertIn(b'PlayResX: 640\nPlayResY: 360', content)
+                    self.assertIn(b'Style: Default,Microsoft YaHei,11,', content)
                 self.assertEqual(self.audio_hash(target), source_hash)
                 shown = self.play(target, 1)
                 for caption in captions:
@@ -174,18 +181,23 @@ class VideoMuxTests(unittest.TestCase):
         source_bytes = source.read_bytes()
         existing = self.root / '已有视频.mp4'
         existing.write_bytes(b'keep existing video')
-        with self.assertRaises(RuntimeError): mux_video(source, existing)
+        with self.assertRaises(RuntimeError):
+            mux_video(source, existing)
         self.assertEqual(existing.read_bytes(), b'keep existing video')
-        with self.assertRaises(ValueError): mux_video(source, source)
+        with self.assertRaises(ValueError):
+            mux_video(source, source)
         with self.assertRaises(ValueError):
             mux_video(source, self.root / 'bad.mp4', captions=[VideoCaption(0, 100, '正文'), VideoCaption(50, 150, '重叠')])
         with self.assertRaises(ValueError):
             mux_video(source, self.root / 'bad.mp4', captions=[VideoCaption(0, 100, '坏\0字幕')])
-        with self.assertRaises(RuntimeError): mux_video(source, self.root / '不存在/target.mkv', 'mkv')
-        with self.assertRaises(MuxCancelled): mux_video(source, self.root / 'cancel.mp4', cancelled=lambda: True)
+        with self.assertRaises(RuntimeError):
+            mux_video(source, self.root / '不存在/target.mkv', 'mkv')
+        with self.assertRaises(MuxCancelled):
+            mux_video(source, self.root / 'cancel.mp4', cancelled=lambda: True)
         cancel = [False]
         def progress(position, duration):
-            if position >= 600000: cancel[0] = True
+            if position >= 600000:
+                cancel[0] = True
         with self.assertRaises(MuxCancelled):
             mux_video(source, self.root / 'cancel-during.mkv', 'mkv', cancelled=lambda: cancel[0], progress=progress)
         self.assertEqual(source.read_bytes(), source_bytes)
@@ -274,7 +286,8 @@ class VideoMuxTests(unittest.TestCase):
         def hold(source, target, container, captions, cancelled, progress):
             import time
             target.write_bytes(b'partial mux')
-            while not cancelled(): time.sleep(0.005)
+            while not cancelled():
+                time.sleep(0.005)
             raise MuxCancelled()
         def cancel_when_muxing():
             if dialog.muxing:

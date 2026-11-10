@@ -1,22 +1,21 @@
 """验证关联操作保留已有配音，且作用于播放和视频的同一文稿。"""
 
 import json
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace as NS
 import unittest
-
 import zipfile
+from pathlib import Path
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent
-
-from app.presentation import link as presentation_link, slideshow
-from app.audio.playback import PlaybackBus
-from app.settings_store import AppSettings
+from qt_test_case import QtTestCase
 from test_presentation_link import make_ppt
 
-from qt_test_case import QtTestCase
+from app.audio.playback import PlaybackBus
+from app.presentation import link as presentation_link
+from app.presentation import slideshow
+from app.settings_store import AppSettings
 
 
 class LinkInterfaceTests(QtTestCase):
@@ -114,7 +113,7 @@ class LinkInterfaceTests(QtTestCase):
         self.assertIsNone(self.page.project.presentation_path)
         self.assertTrue(self.page.is_restricted())
         self.assertTrue(self.page.playButton.isEnabled())
-        self.assertFalse(self.page.scrollEnableSwitch.isEnabled())
+        self.assertFalse(self.page.can_sync_playback())
         self.assertEqual(self.page.project.media_list, [self.audio])
         self.assertEqual(self.page.notes_path_text.text, f'{self.source}（文件不可用）')
         self.page.set_presentation_link(presentation_link.validate(self.copy, [1]))
@@ -216,6 +215,7 @@ class LinkInterfaceTests(QtTestCase):
 
     def test_home_retains_original_card_size_and_layout(self):
         from qfluentwidgets import FluentIcon, FluentWindow
+
         from ui import theme
         theme.apply_theme('light', theme.DEFAULT_COLOR)
         theme.apply_font('')
@@ -276,8 +276,8 @@ class LinkInterfaceTests(QtTestCase):
         self.assertIn('受限模式', self.page.statusLabel.text())
         self.assertIn('历史记录', self.page.IconInfoBadge.toolTip())
         self.assertTrue(self.page.playButton.isEnabled())
-        self.assertTrue(self.page.pageJumpSpinBox.isEnabled())
-        self.assertFalse(self.page.scrollEnableSwitch.isEnabled())
+        self.assertTrue(self.page.playing_script_preview.page_position.isEnabled())
+        self.assertFalse(self.page.can_sync_playback())
         buttons = {button.text(): button for card in self.tools.export_cards + self.tools.processing_cards
                    for button in card.findChildren(PushButton)}
         ppt_buttons = [button for card in self.tools.export_cards for button in card.findChildren(PushButton)
@@ -296,8 +296,8 @@ class LinkInterfaceTests(QtTestCase):
             advance.assert_not_called()
             window_turn.assert_not_called()
             keyboard.assert_not_called()
-        with patch('app.presentation.slideshow.goto') as jump:
-            self.page.jump_page()
+        with patch.object(self.page.playback_show, 'goto_page') as jump:
+            self.page.playing_script_preview.page_requested.emit(1)
             jump.assert_not_called()
         with patch('ui.dialogs.video_recording_dialog.VideoRecordingDialog') as video, \
              patch.object(self.tools, 'get_ppt_path') as write_target, \
@@ -342,7 +342,7 @@ class LinkInterfaceTests(QtTestCase):
         self.assertEqual(self.page.project.current_index, 1)
         self.assertEqual(self.page.project.notes, notes)
         self.assertEqual(self.page.project.media_list, media)
-        self.assertTrue(self.page.scrollEnableSwitch.isEnabled())
+        self.assertTrue(self.page.can_sync_playback())
         from qfluentwidgets import PushButton
         ppt_buttons = [button for button in self.tools.findChildren(PushButton) if button.property('requires_ppt')]
         self.assertEqual(len(ppt_buttons), 3)
@@ -408,7 +408,7 @@ class LinkInterfaceTests(QtTestCase):
         stop.assert_not_called()
         self.assertTrue(self.page.is_restricted())
         self.assertIn('受限模式', self.page.statusLabel.text())
-        self.assertFalse(self.page.scrollEnableSwitch.isEnabled())
+        self.assertFalse(self.page.can_sync_playback())
 
     def test_different_content_requires_confirmation_and_bad_page_count_is_rejected(self):
         from ui.dialogs.presentation_link_dialog import PresentationLinkDialog
@@ -443,11 +443,8 @@ class LinkedSlideshowTests(unittest.TestCase):
         wps.SlideShowWindows.side_effect = lambda index: NS(Presentation=NS(FullName=str(path)), View=selected_view)
         with patch('app.presentation.slideshow._running_apps', side_effect=lambda: iter([('PowerPoint', pp), ('WPS', wps)])):
             self.assertTrue(slideshow.advance(path))
-            self.assertTrue(slideshow.goto(2, path))
         wrong_view.Next.assert_not_called()
-        wrong_view.GotoSlide.assert_not_called()
         selected_view.Next.assert_called_once()
-        selected_view.GotoSlide.assert_called_once_with(2)
 
     def test_unrelated_document_events_do_not_move_audio_position(self):
         watcher = NS(source_path=Path('linked.pptx').resolve(), show_began=Mock(),

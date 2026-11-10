@@ -9,8 +9,10 @@ import wave
 from datetime import datetime
 from pathlib import Path
 
+from app.audio.sentences import load_sentences
 from app.documents import io as script_io
 
+# Word 导出是低频功能，docx 仅在相关函数执行时加载，避免增加主窗口启动开销。
 
 # WordprocessingML 不接受这些控制字符，写入单元格前统一过滤。
 _CONTROL_CHARS_RE = re.compile('[' + ''.join(
@@ -75,7 +77,7 @@ def page_summary(notes_list, durations):
 def build_meta_line(notes_list, durations, *, engine_name='', speaker='') -> str:
     """生成文档顶部使用的页数、段数、字数和语音信息摘要。"""
     rows = page_summary(notes_list, durations)
-    total = sum(durations) if durations else 0.0
+    total = sum(durations) if durations and len(durations) == len(notes_list) else 0.0
     words = sum(row[3] for row in rows)
 
     parts = [f'{len(rows)} 页', f'{len(notes_list)} 段', f'{words} 字']
@@ -92,6 +94,7 @@ def build_markdown(notes_list, durations, *, title='演讲稿', mark='●',
                    engine_name='', speaker=''):
     """生成带全局摘要和逐页章节的只读 Markdown 讲稿。"""
     rows = page_summary(notes_list, durations)
+    timed = bool(notes_list) and len(durations) == len(notes_list)
     lines = [f'# {title}', '']
     lines.append('> ' + build_meta_line(notes_list, durations,
                                         engine_name=engine_name, speaker=speaker))
@@ -99,10 +102,11 @@ def build_markdown(notes_list, durations, *, title='演讲稿', mark='●',
     lines.append(f'> 页内的 `{mark}` 为点击分隔符。本文档用于阅读与打印，如需修改后回导请使用 Word 或 JSON 导出。')
     lines.append('')
 
-    lines.append('| 页 | 段数 | 字数 | 时长 |')
-    lines.append('| --- | --- | --- | --- |')
+    lines.append('| 页 | 段数 | 字数 | 时长 |' if timed else '| 页 | 段数 | 字数 |')
+    lines.append('| --- | --- | --- | --- |' if timed else '| --- | --- | --- |')
     for page, texts, duration, words in rows:
-        lines.append(f'| {page} | {len(texts)} | {words} | {format_duration(duration)} |')
+        fields = f'| {page} | {len(texts)} | {words} |'
+        lines.append(fields + (f' {format_duration(duration)} |' if timed else ''))
     lines.append('')
 
     for page, texts, duration, _words in rows:
@@ -128,7 +132,7 @@ def build_markdown(notes_list, durations, *, title='演讲稿', mark='●',
     return '\n'.join(lines).rstrip() + '\n'
 
 
-def build_srt(notes_list, durations):
+def build_srt(notes_list, durations, media_paths=None):
     """按音频实际时长连续排布并生成 SRT 字幕。"""
     blocks = []
     cursor = 0.0
@@ -144,12 +148,20 @@ def build_srt(notes_list, durations):
         if not text or duration <= 0:
             continue
 
-        index += 1
-        blocks.append(
-            f'{index}\n'
-            f'{format_srt_timestamp(start)} --> {format_srt_timestamp(cursor)}\n'
-            f'{text}\n'
-        )
+        timing = load_sentences(media_paths[position], text) if media_paths and position < len(media_paths) else None
+        spans = [(start, cursor, text)]
+        if timing:
+            spans = [(start + cue.start, min(cursor, start + cue.end), cue.text)
+                     for cue in timing.spans]
+        for begin, end, caption in spans:
+            if end <= begin:
+                continue
+            index += 1
+            blocks.append(
+                f'{index}\n'
+                f'{format_srt_timestamp(begin)} --> {format_srt_timestamp(end)}\n'
+                f'{caption}\n'
+            )
 
     return '\n'.join(blocks)
 
@@ -158,6 +170,7 @@ def build_script_json(notes_list, durations, *, source_name='', mark='●',
                       engine_name='', speaker='', notes=None):
     """构造可回导的讲稿 JSON 数据，并以分段列表保留页内点击节奏。"""
     pages = []
+    timed = bool(notes_list) and len(durations) == len(notes_list)
     for page, texts, duration, words in page_summary(notes_list, durations):
         entry = {
             'page': page,
@@ -168,9 +181,11 @@ def build_script_json(notes_list, durations, *, source_name='', mark='●',
         if notes is not None and page in notes:
             entry.pop('segments')
             entry['text'] = str(notes[page])
+        if not timed:
+            entry.pop('duration')
         pages.append(entry)
 
-    return {
+    result = {
         'format': script_io.JSON_FORMAT,
         'version': script_io.JSON_VERSION,
         'source_name': source_name,
@@ -180,6 +195,10 @@ def build_script_json(notes_list, durations, *, source_name='', mark='●',
         'speaker': speaker,
         'pages': pages,
     }
+    if not timed:
+        result.pop('engine')
+        result.pop('speaker')
+    return result
 
 
 def export_audio_files(media_paths, notes_list, target_dir: Path) -> int:
@@ -263,7 +282,6 @@ def merge_audio(media_paths, target_path: Path) -> None:
 
 def _set_repeating_header(row):
     """把表头标记为跨页重复，长讲稿翻页后仍能看到列含义。"""
-    from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
 
     tr_pr = row._tr.get_or_add_trPr()
@@ -282,6 +300,7 @@ def write_docx(target_path: Path, notes_list, durations, *, mark='●', notes=No
     from docx.shared import Inches, RGBColor
 
     document = Document()
+    timed = bool(notes_list) and len(durations) == len(notes_list)
 
     # 收窄页边距，把宽度尽量让给讲稿列
     section = document.sections[0]
@@ -291,15 +310,15 @@ def write_docx(target_path: Path, notes_list, durations, *, mark='●', notes=No
 
     page_width = Inches(0.5)
     time_width = Inches(0.62)
-    body_width = usable - page_width - time_width
-    widths = (page_width, body_width, time_width)
+    body_width = usable - page_width - (time_width if timed else 0)
+    widths = (page_width, body_width, time_width) if timed else (page_width, body_width)
 
-    table = document.add_table(rows=1, cols=3)
+    table = document.add_table(rows=1, cols=len(widths))
     table.style = 'Table Grid'
     table.autofit = False
 
     header = table.rows[0]
-    for index, label in enumerate(('页码', '讲稿', '时长')):
+    for index, label in enumerate(('页码', '讲稿', '时长') if timed else ('页码', '讲稿')):
         cell = header.cells[index]
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
         paragraph = cell.paragraphs[0]
@@ -328,10 +347,11 @@ def write_docx(target_path: Path, notes_list, durations, *, mark='●', notes=No
                 paragraph = row[1].add_paragraph()
             _apply_font(paragraph.add_run(line), size=11)
 
-        row[2].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-        time_paragraph = row[2].paragraphs[0]
-        time_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _apply_font(time_paragraph.add_run(format_duration(duration)), size=9, color=muted)
+        if timed:
+            row[2].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            time_paragraph = row[2].paragraphs[0]
+            time_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _apply_font(time_paragraph.add_run(format_duration(duration)), size=9, color=muted)
 
     # 列宽必须逐单元格设置，只设 columns 的宽度在 Word 中不会生效
     for index, width in enumerate(widths):

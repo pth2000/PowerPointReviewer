@@ -4,16 +4,21 @@ from PySide6.QtCore import QSize, QThread, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import (
-    FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, SplashScreen,
+    FluentIcon,
+    FluentWindow,
+    InfoBar,
+    InfoBarPosition,
+    NavigationItemPosition,
+    SplashScreen,
 )
 
 from app.app_context import AppContext
 from ui.file_drop import FileDropImport
 from ui.onboarding import UsageGuide
-from ui.widget_state import active_modal_dialog
 from ui.pages.reviewer_page import PPTReviewer
 from ui.pages.settings_page import SettingInterface
 from ui.pages.tools_page import ToolsInterface
+from ui.widget_state import active_modal_dialog
 
 
 class Window(FluentWindow):
@@ -22,8 +27,8 @@ class Window(FluentWindow):
     def __init__(self, context: AppContext):
         super().__init__()
         self.context = context
-        self.resize(850, 750)
-        # 页面内容最宽的一屏约需 680，加上导航栏与边距即为可用下限
+        self.resize(780, 710)
+        # 宽度预留导航栏与页面边距，高度在主页构建后按完整内容计算。
         self.setMinimumSize(QSize(760, 560))
         self.setWindowTitle('PowerPointReviewer')
         self.setWindowIcon(QIcon(':/image/image/ppt_ico.svg'))
@@ -31,8 +36,7 @@ class Window(FluentWindow):
         self.splashScreen = SplashScreen(self.windowIcon(), self)
         self.splashScreen.setIconSize(QSize(106, 106))
         self.show()
-        # 页面构造是同步的，期间事件循环尚未启动。不主动跑一次事件处理，
-        # 启动页在 finish() 之前得不到绘制机会，用户看到的就是一片空窗。
+        # 同步构造页面前先绘制启动页，此时主事件循环尚未运行。
         QApplication.processEvents()
 
         self.ppt_r = PPTReviewer(self.context, self, project=self.context.project)
@@ -42,13 +46,15 @@ class Window(FluentWindow):
         self.addSubInterface(self.ppt_r, FluentIcon.HOME, '主页')
         self.addSubInterface(self.tools_interface, FluentIcon.APPLICATION, '实用工具')
         self.addSubInterface(self.setting_interface, FluentIcon.SETTING, '设置', NavigationItemPosition.BOTTOM)
+        self.ppt_r.minimum_home_height_changed.connect(self._set_home_minimum_height)
+        self._set_home_minimum_height(self.ppt_r.minimumHeight())
         self.file_drop_import = FileDropImport(
             self, self._import_dropped_files, overlay_parent=self.stackedWidget,
             busy_check=self.ppt_r.is_busy, linked_check=self.ppt_r.has_presentation)
 
         # 设置页通过回调和信号表达意图，避免直接依赖主页实例。
         self.setting_interface.can_regenerate_check = (
-            lambda: bool(self.ppt_r.project.notes) and not self.ppt_r.is_busy())
+            lambda: self.ppt_r.project.audio_loaded and not self.ppt_r.is_busy())
         self.setting_interface.regenerate_requested.connect(self.ppt_r.regenerate)
         self.setting_interface.resume_session_changed.connect(self.ppt_r.on_resume_preference_changed)
 
@@ -60,6 +66,7 @@ class Window(FluentWindow):
         self.setting_interface.page_turn_mode_changed.connect(
             self.ppt_r.refresh_slideshow_watch)
         self._bind_sync_playback()
+        self._bind_countdown()
         self.ppt_r.refresh_slideshow_watch()
         self.setting_interface.hotkeys_changed.connect(self.ppt_r.refresh_hotkeys)
 
@@ -71,6 +78,10 @@ class Window(FluentWindow):
         QTimer.singleShot(750, self, self._show_startup_guidance)
         QTimer.singleShot(4000, self.setting_interface, self.setting_interface.check_updates_automatically)
 
+    def _set_home_minimum_height(self, height):
+        margins = self.widgetLayout.contentsMargins()
+        self.setMinimumHeight(height + margins.top() + margins.bottom())
+
     def _show_startup_guidance(self):
         if self.usage_guide.step is not None:
             return
@@ -81,6 +92,7 @@ class Window(FluentWindow):
         page, settings = self.ppt_r, self.setting_interface
         settings.sync_playback_available_check = page.can_sync_playback
         settings.sync_playback_unavailable_hint = page.sync_playback_unavailable_reason
+        settings.playback_preferences_locked_check = page.playback_preferences_locked
         settings.page_turn_source = page.slideshow_source
         settings.page_turn_description = page.describe_slideshow
         settings.sync_playback_changed.connect(page.set_sync_playback_enabled)
@@ -89,7 +101,15 @@ class Window(FluentWindow):
         page.presentation_state_changed.connect(settings.refresh_sync_playback_state)
         page.save_thread.started.connect(settings.refresh_sync_playback_state)
         page.save_thread.finished.connect(settings.refresh_sync_playback_state)
-        settings.refresh_sync_playback_state()
+        page.playback_preferences_lock_changed.connect(settings.refresh_playback_preferences_state)
+        settings.refresh_playback_preferences_state()
+
+    def _bind_countdown(self):
+        page, settings = self.ppt_r, self.setting_interface
+        settings.countdown_seconds_spin.setRange(page.currentSpinBox.minimum(), page.currentSpinBox.maximum())
+        settings.countdown_preferences_changed.connect(page.set_countdown_preferences)
+        page.countdown_preferences_changed.connect(settings.refresh_countdown_preferences)
+        settings.refresh_countdown_preferences()
 
     def show_updated_tip(self):
         """更新后首次启动时提示新版本号。"""
@@ -144,6 +164,7 @@ class Window(FluentWindow):
             return
         self.ppt_r.remember_session()
         self.ppt_r.stop_audio()
+        self.setting_interface.release_preview_workspace()
         self.ppt_r.release_playback_show()
         self.context.hotkeys.clear()
         self.context.slideshow_watcher.stop()

@@ -5,10 +5,10 @@ from unittest.mock import patch
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QDialog
+from qt_test_case import QtTestCase
 
 from app.ai import rewrite
 from app.settings_store import AppSettings
-from qt_test_case import QtTestCase
 from ui.dialogs.rewrite_dialog import RewriteDialog
 from ui.dialogs.style_manager_dialog import StyleManagerDialog
 

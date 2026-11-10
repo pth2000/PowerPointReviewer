@@ -5,14 +5,16 @@ from qfluentwidgets import BodyLabel, CardWidget, MessageBoxBase, RadioButton, S
 
 
 class PptImportDialog(MessageBoxBase):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, has_audio=True, generate_audio=True):
         super().__init__(parent)
         self.viewLayout.setSpacing(16)
         self.viewLayout.addWidget(SubtitleLabel('如何使用此 PPT？', self))
         self.link_radio = self._choice(
-            '关联 PPT，保留当前讲稿', '保留已有配音，用此 PPT 同步放映和导出视频。')
+            '关联 PPT，保留当前讲稿',
+            '保留已有配音，用此 PPT 同步放映和导出视频。' if has_audio else '将所选 PPT 与当前讲稿关联。')
         self.replace_radio = self._choice(
-            '读取 PPT 备注作为新讲稿', '替换当前讲稿，并按当前语音设置生成配音。')
+            '读取 PPT 备注作为新讲稿',
+            '替换当前讲稿，并按当前语音设置生成配音。' if generate_audio else '用此 PPT 的备注替换当前讲稿。')
         # 两个按钮处于不同卡片中，显式分组保证互斥。
         self.choices = QButtonGroup(self)
         self.choices.addButton(self.link_radio)

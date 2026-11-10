@@ -15,7 +15,6 @@ from qfluentwidgets import (
 from app import hotkeys
 from ui.dialogs.base import ThemedDialog
 
-
 # Qt 按键到本项目主键名的映射，仅覆盖可作为热键的按键
 _QT_KEY_NAMES = {
     Qt.Key.Key_Space: 'Space', Qt.Key.Key_Return: 'Enter', Qt.Key.Key_Enter: 'Enter',

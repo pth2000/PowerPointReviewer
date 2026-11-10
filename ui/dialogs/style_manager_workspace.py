@@ -1,14 +1,29 @@
 """优化场景编辑、通用模板和可选提示词预览的布局。"""
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QListWidgetItem, QSplitter, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QListWidgetItem,
+    QSplitter,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 from qfluentwidgets import (
-    CaptionLabel, LineEdit, ListWidget, PrimaryPushButton, PushButton,
-    StrongBodyLabel, SubtitleLabel, TransparentPushButton, setCustomStyleSheet,
+    CaptionLabel,
+    LineEdit,
+    ListWidget,
+    PrimaryPushButton,
+    PushButton,
+    StrongBodyLabel,
+    SubtitleLabel,
+    TransparentPushButton,
+    setCustomStyleSheet,
 )
 
 from ui.dialogs.rewrite_widgets import WorkspaceSwitch, metadata_label, text_editor, workspace_frame
-
+from ui.scrolling import configure_reading_scroll
 
 TEMPLATE_PARTS = (
     ('系统提示词', '设定所有场景共用的角色与处理原则。', ''),
@@ -22,6 +37,7 @@ TEMPLATE_PARTS = (
 
 def _listing(parent):
     listing = ListWidget(parent)
+    configure_reading_scroll(listing)
     style = 'ListWidget { border: none; background: transparent; outline: none; padding: 0; }'
     setCustomStyleSheet(listing, style, style)
     return listing

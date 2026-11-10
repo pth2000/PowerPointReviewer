@@ -6,8 +6,16 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout
 from qfluentwidgets import (
-    BodyLabel, CaptionLabel, CardWidget, LineEdit, MessageBoxBase,
-    StrongBodyLabel, SubtitleLabel, TransparentPushButton, isDarkTheme, themeColor,
+    BodyLabel,
+    CaptionLabel,
+    CardWidget,
+    LineEdit,
+    MessageBoxBase,
+    StrongBodyLabel,
+    SubtitleLabel,
+    TransparentPushButton,
+    isDarkTheme,
+    themeColor,
 )
 
 
@@ -19,10 +27,11 @@ class _ExampleCard(CardWidget):
 class EditMarkMessageBox(MessageBoxBase):
     """编辑分隔符，并阻止空白值破坏讲稿切分。"""
 
-    def __init__(self, current_mark: str, parent=None, *, has_script=False):
+    def __init__(self, current_mark: str, parent=None, *, has_script=False, generate_audio=True):
         super().__init__(parent)
         self._current_mark = current_mark
         self._has_script = has_script
+        self._generate_audio = bool(generate_audio)
         self.viewLayout.setSpacing(12)
         self.titleLabel = SubtitleLabel('编辑分隔符', self)
         self.viewLayout.addWidget(self.titleLabel)
@@ -109,7 +118,8 @@ class EditMarkMessageBox(MessageBoxBase):
         if not mark:
             hint = '请输入非空白字符作为分隔符。'
         elif self._has_script and mark != self._current_mark:
-            hint = '保存后，将按新分隔符重新生成当前讲稿的配音。'
+            hint = ('保存后，将按新分隔符重新生成当前讲稿的配音。' if self._generate_audio
+                    else '保存后，将按新分隔符重新划分当前讲稿。')
         else:
             hint = '分隔符不会被朗读。没有点击动画时，不需要插入分隔符。'
         self.hint_label.setText(hint)

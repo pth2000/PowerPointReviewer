@@ -77,6 +77,7 @@ class ProjectSession:
     script_comments_enabled: bool = False
     current_index: int = 0
     audio_loaded: bool = False
+    audio_outdated: bool = False
 
     def reading_notes(self):
         return spoken_notes(self.notes, self.script_comments_enabled)
@@ -103,6 +104,7 @@ class ProjectSession:
         self.generation_profile = None
         self.generation_speaker = ''
         self.audio_loaded = False
+        self.audio_outdated = False
 
     def replace_from(self, other):
         """装载已校验的工程，同时保留各界面共享的对象身份。"""

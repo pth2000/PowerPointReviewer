@@ -5,8 +5,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QTableWidget,
     QTableWidgetItem,
@@ -24,8 +24,10 @@ from qfluentwidgets import (
     TableWidget,
 )
 
-from ui.dialogs.base import ThemedDialog
+from app.logging_setup import log_error
 from engines.qwen_clone import is_audio_tts
+from ui.dialogs.base import ThemedDialog
+from ui.scrolling import configure_reading_scroll
 
 
 class QwenCloneVoiceDialog(ThemedDialog):
@@ -78,6 +80,7 @@ class QwenCloneVoiceDialog(ThemedDialog):
 
         # 云端音色列表
         self.table = TableWidget(self)
+        configure_reading_scroll(self.table)
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(['音色', '模型', '创建时间'])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -332,7 +335,6 @@ class QwenCloneVoiceDialog(ThemedDialog):
         )
 
     def _info_error(self, title: str, text: str):
-        from app.logging_setup import log_error
         log_error(title, text)
         InfoBar.error(
             title=title,

@@ -1,49 +1,63 @@
 """实现讲稿导入、分段、音频生成、会话恢复和播放。"""
 
-import ctypes
 import copy
+import ctypes
 import json
 import re
+from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import QFileDialog, QSizePolicy, QWidget
 from qfluentwidgets import (
     Action,
     FluentIcon,
+    HyperlinkLabel,
     InfoBar,
     InfoBarPosition,
     InfoLevel,
     MessageBox,
     PushButton,
+    Theme,
     ToolTipFilter,
 )
 
-from Ui_mainwindow import Ui_mainwindow
-from app.presentation import animation as animation_check, link as presentation_link, slideshow, window_target
 from app import hotkeys, paths
-from ui import icons, theme
-from ui.icon_menu import IconMenu
-from app.documents import package as project_package, io as script_io
-from app.audio import segments as segment_audio
 from app.app_context import AppContext
-from app.project import history as project_history
-from app.project.history import MissingAudioError
-from app.project.model import ProjectSession, UnavailableReason
-from app.project.generation import GenerationWorkflow
+from app.audio import segments as segment_audio
+from app.audio.captions import SENTENCE_MODE
+from app.audio.countdown import PlaybackCountdown
 from app.audio.playback import AudioOutputWatcher
+from app.audio.sentences import load_sentences
+from app.documents import io as script_io
+from app.documents import package as project_package
+from app.documents.statistics import build_statistics
+from app.documents.text import replace_spoken_text, spoken_notes, spoken_text
 from app.logging_setup import get_logger, log_error
+from app.presentation import animation as animation_check
+from app.presentation import link as presentation_link
+from app.presentation import slideshow, window_target
 from app.presentation.monitor import PresentationMonitor, changed_pages, file_stamp
 from app.presentation.playback import SlideshowPlayback
-from app.documents.statistics import build_statistics
-from app.documents.text import spoken_notes, spoken_text, replace_spoken_text
-from ui.widget_state import active_modal_dialog, set_enabled
+from app.project import history as project_history
+from app.project.generation import GenerationWorkflow
+from app.project.history import MissingAudioError
+from app.project.model import ProjectSession, UnavailableReason
 from tasks.audio_generation_task import AudioGenerationTask
+from ui import icons, theme
+from ui.dialogs.animation_check_dialog import AnimationCheckDialog
+from ui.dialogs.audio_review_dialog import AudioReviewDialog
 from ui.dialogs.edit_mark_dialog import EditMarkMessageBox
-from ui.dialogs.session_history_dialog import SessionHistoryDialog
+from ui.dialogs.ppt_import_dialog import PptImportDialog
+from ui.dialogs.ppt_update_dialog import PptUpdateDialog
 from ui.dialogs.script_statistics_dialog import ScriptStatisticsDialog
-
+from ui.dialogs.session_history_dialog import SessionHistoryDialog
+from ui.icon_menu import IconMenu
+from ui.manuscript_preview import ManuscriptPreview
+from ui.tooltips import TextToolTipFilter
+from ui.widget_state import active_modal_dialog, set_enabled
+from Ui_mainwindow import Ui_mainwindow
 
 # 翻页只需向前台窗口发送一次 PageDown。为此引入 pyautogui 会连带装载
 # Pillow 与 tkinter，启动多花约 240 毫秒，打包也多出二十余兆，因此直接调用 Win32。
@@ -98,7 +112,10 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
     presentation_state_changed = Signal()
     sync_playback_changed = Signal(bool)
+    countdown_preferences_changed = Signal(bool, int)
+    playback_preferences_lock_changed = Signal(bool)
     audio_changed = Signal()
+    minimum_home_height_changed = Signal(int)
 
     # 仅接受“页码_序号”命名的正文音频，避免倒计时或试听文件混入播放列表。
     _AUDIO_NAME_RE = re.compile(r'^(\d+)_(\d+)$')
@@ -111,14 +128,49 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.project.script_comments_enabled = bool(context.app_settings.get('script_comments_enabled'))
         self.generation = GenerationWorkflow(self.project)
         self.setupUi(self)
+        self.verticalLayout_11.setSpacing(theme.PAGE_SECTION_SPACING)
+        for layout, title in ((self.verticalLayout_2, self.SubtitleLabel),
+                              (self.verticalLayout_6, self.SubtitleLabel_2)):
+            layout.setSpacing(theme.PAGE_CARD_SPACING)
+            theme.space_page_section(layout, title)
+        self.infoPushButton = self.playbackOverview.statistics_button
+        self._overview_key = None
+        self.playbackOverview.page_requested.connect(
+            lambda value: self._jump_to_position('page', value, restart_current=True))
+        controls = self.playCardWidget_3
+        self.playButton = controls.play_button
+        self.previousPageButton = controls.previous_button
+        self.nextPageButton = controls.next_button
+        self.resetButton = controls.reset_button
+        self.returnPositionButton = controls.return_button
+        self._navigation_history = deque(maxlen=20)
+        self._navigation_notes = self.project.notes_list
+        self.currentSwitch = controls.countdown_switch
+        self.currentSpinBox = controls.countdown_seconds
+        controls.countdown_seconds.invalid_input.connect(
+            lambda message: self.create_warning_info_bar('无法设置倒计时', message))
+        self.playing_script_preview = ManuscriptPreview(self.scrollAreaWidgetContents_3)
+        self._preview_notes = None
+        self.playing_script_preview.page_requested.connect(lambda value: self._jump_to_position('page', value))
+        self.playing_script_preview.segment_requested.connect(lambda value: self._jump_to_position('segment', value))
+        self.playing_script_preview.review_requested.connect(
+            lambda: self.open_audio_review(current_segment=True))
+        self.playing_script_preview.navigation_error.connect(
+            lambda message: self.create_warning_info_bar('无法跳转', message))
+        self.verticalLayout_6.insertWidget(
+            self.verticalLayout_6.indexOf(self.playCardWidget_3), self.playing_script_preview)
+        self.bgScrollArea.viewport().installEventFilter(self)
+        self.scrollAreaWidgetContents_3.installEventFilter(self)
+        self.bgScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.bgScrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.CaptionLabel_5.setText('将一页讲稿分为多段，与幻灯片的点击动画对应')
         theme.wrap_title_with_help(
             self.verticalLayout_7, self.notesPathLabel_5,
             '开启同步翻页后，每读完一段发送一次翻页，用于触发幻灯片中的下一个动画。默认分隔符为 ●。')
-        self.CaptionLabel_4.setText('开始朗读前先播放一段倒计时')
-        self.CaptionLabel_6.setText('设置倒计时持续的秒数')
         self.notes_path_text = ElidedLabelText(self.notesPathLabel)
         self.notes_path_text.set_text(self.notesPathLabel.text())
+        self.notesPathLabel.installEventFilter(TextToolTipFilter(self.notesPathLabel))
+        self.statusLabel.installEventFilter(ToolTipFilter(self.statusLabel))
         self.IconInfoBadge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self.IconInfoBadge.installEventFilter(ToolTipFilter(self.IconInfoBadge))
 
@@ -126,12 +178,16 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.audio_output = QAudioOutput()
         self.player.setAudioOutput(self.audio_output)
         self.player.mediaStatusChanged.connect(self.media_status_changed)
+        self.player.playbackStateChanged.connect(self._refresh_playing_script)
+        self.player.positionChanged.connect(self._refresh_overview_position)
+        self.audio_changed.connect(self._refresh_playing_script)
         self.player.errorOccurred.connect(self.on_playback_error, Qt.ConnectionType.QueuedConnection)
         self.device_watcher = AudioOutputWatcher(self.player, self.audio_output, '播放器', parent=self)
         self.ctx.playback_bus.stop_requested.connect(self.on_stop_requested)
 
-        self.wait_media_list = []  # 本次播放使用的倒计时音频。
-        self.wait_current_index = 0  # 当前倒计时音频索引。
+        self.countdown = PlaybackCountdown(self)
+        self.countdown.changed.connect(self._refresh_playing_script)
+        self.countdown.finished.connect(self.play_notes)
         self._presentation_state = None
         self._ppt_update_bar = None
         self._resume_bar = None
@@ -139,18 +195,23 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.audio_review_dialog = None
         self.is_play_notes = False
         self._playing_sequence = False
+        self._playback_preferences_locked = False
         self._audio_only_playback = False
         self._advancing_show = False
         self._confirming_generation = False
 
         self.partingIconWidget.setIcon(icons.SystemIcon.LIST)
         self.fileIconWidget.setIcon(icons.SystemIcon.FOLDER)
-        self.currentIconWidget.setIcon(icons.SystemIcon.TIMER)
-        self.currentTimeIconWidget.setIcon(icons.SystemIcon.CLOCK)
-        self.pageJumpToolButton.setIcon(FluentIcon.ACCEPT_MEDIUM)
-        self.playButton.setIcon(icons.SystemIcon.PLAY)
-        self.stopButton.setIcon(icons.SystemIcon.STOP)
-        self.resetButton.setIcon(icons.SystemIcon.RESET)
+        self.generate_audio_link = HyperlinkLabel('生成配音', self.widget_5)
+        self.generate_audio_link.setFont(self.statusLabel.font())
+        self.generate_audio_link.setFixedHeight(20)
+        self.generate_audio_link.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.generate_audio_link.clicked.connect(lambda: self.regenerate())
+        self.generate_audio_link.hide()
+        self.statusLabel.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        self.horizontalLayout_2.addSpacing(8)
+        self.horizontalLayout_2.addWidget(self.generate_audio_link)
+        self.horizontalLayout_2.addStretch()
         self.IndeterminateProgressBar.setVisible(False)
 
         icons.apply(self.getFileButton, ':/image/image/ppt.svg')
@@ -172,6 +233,10 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.update_ppt_action = Action(
             icons.SystemIcon.UPDATE, '更新 PPT 讲稿', triggered=self.update_ppt_notes)
         self.file_button_menu.addAction(self.update_ppt_action)
+        self.import_notes_action = Action(
+            icons.SystemIcon.DOCUMENT, '从文件更新讲稿', triggered=self.import_notes_from_file)
+        self.import_notes_action.setToolTip('按页码更新讲稿，保留当前关联的 PPT。支持 PowerPoint、Word 和 JSON。')
+        self.file_button_menu.addAction(self.import_notes_action)
         self.regenerate_action = Action(
             icons.SystemIcon.RESET, '忽略缓存重新生成', triggered=self.force_regenerate)
         self.file_button_menu.addAction(self.regenerate_action)
@@ -179,12 +244,13 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         self.bgScrollArea.enableTransparentBackground()
 
-        self.playButton.clicked.connect(self.init_play)
-        self.stopButton.clicked.connect(self.stop_audio)
+        self.playButton.clicked.connect(self.toggle_play)
+        self.previousPageButton.clicked.connect(lambda: self._change_page(-1))
+        self.nextPageButton.clicked.connect(lambda: self._change_page(1))
         self.resetButton.clicked.connect(lambda: self.reset_audio())
+        self.returnPositionButton.clicked.connect(self.return_to_previous_position)
         self.getFileButton.clicked.connect(self.import_pptx)
         self.editMarkPushButton.clicked.connect(self.show_edit_mark_dialog)
-        self.pageJumpToolButton.clicked.connect(self.jump_page)
         self.infoPushButton.clicked.connect(self.show_info_dialog)
 
         self.next_timer = QTimer(self)
@@ -192,16 +258,17 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         paths.ensure_runtime_dirs()
         self.wav_temp_path = paths.TEMP_DIR
-        self.countdown_wav_temp_path = paths.COUNTDOWN_CACHE_DIR
         self.audio_cache_path = paths.AUDIO_CACHE_DIR
         self.session_root_path = paths.SESSION_DIR
 
         self.save_thread = AudioGenerationTask(self.ctx.tts_engine, self)
         self.save_thread.signal_import_index.connect(self.thread_print_index)
+        self.save_thread.signal_progress.connect(self.thread_generation_progress)
         self.save_thread.signal_finish.connect(self.thread_save_finish)
         self.save_thread.signal_error.connect(self.thread_save_error)
         self.save_thread.finished.connect(self.refresh_presentation_state)
         self.save_thread.finished.connect(self.remember_session)
+        self.save_thread.finished.connect(self.check_import)
 
         self.playback_show = SlideshowPlayback(self)
         self.playback_show.ready.connect(self._playback_show_ready)
@@ -218,6 +285,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         self.restore_preferences()
         self.check_import()
+        self._refresh_home_minimum_height()
 
     def restore_preferences(self):
         """将已保存的分隔符和播放偏好恢复到主页控件。"""
@@ -225,13 +293,14 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.project.mark = str(settings.get('mark')).strip() or '●'
         self.currentSwitch.setChecked(bool(settings.get('countdown_enabled')))
         self.currentSpinBox.setValue(int(settings.get('countdown_seconds')))
-        set_enabled(self.currentSpinBox, self.currentSwitch.isChecked())
-        self.scrollEnableSwitch.setChecked(bool(settings.get('scroll_enabled')))
+        self.playCardWidget_3.refresh_countdown()
+        self._sync_playback_enabled = bool(settings.get('scroll_enabled'))
 
         # 初值设置完成后再接信号，避免把恢复动作误当成用户修改。
-        self.currentSwitch.checkedChanged.connect(self.persist_preferences)
-        self.currentSpinBox.valueChanged.connect(self.persist_preferences)
-        self.scrollEnableSwitch.toggled.connect(self._on_sync_playback_changed)
+        self.currentSwitch.checkedChanged.connect(self._on_countdown_preferences_changed)
+        self.currentSpinBox.valueChanged.connect(self._on_countdown_preferences_changed)
+        self.playCardWidget_3.sync_switch.checkedChanged.connect(self.set_sync_playback_enabled)
+        self._refresh_sync_switch()
 
     def persist_preferences(self, *_):
         """即时保存不影响音频生成的主页播放偏好。"""
@@ -239,49 +308,95 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             'mark': self.project.mark,
             'countdown_enabled': self.currentSwitch.isChecked(),
             'countdown_seconds': self.currentSpinBox.value(),
-            'scroll_enabled': self.scrollEnableSwitch.isChecked(),
+            'scroll_enabled': self.sync_playback_enabled(),
         }
         if any(self.ctx.app_settings.get(key) != value for key, value in values.items()):
             self.ctx.app_settings.update(values)
             self.ctx.config.save_later()
 
-    def _on_sync_playback_changed(self, checked):
+    def _on_countdown_preferences_changed(self, *_):
+        if self.playback_preferences_locked():
+            with QSignalBlocker(self.currentSwitch), QSignalBlocker(self.currentSpinBox):
+                self.currentSwitch.setChecked(bool(self.ctx.app_settings.get('countdown_enabled')))
+                self.currentSpinBox.setValue(int(self.ctx.app_settings.get('countdown_seconds')))
+            self.playCardWidget_3.refresh_countdown()
+            return
+        self.playCardWidget_3.refresh_countdown()
         self.persist_preferences()
-        if checked and self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.stop_audio()
-        self.refresh_slideshow_watch()
-        self.sync_playback_changed.emit(bool(checked))
+        self.countdown_preferences_changed.emit(self.currentSwitch.isChecked(), self.currentSpinBox.value())
+
+    def set_countdown_preferences(self, enabled, seconds):
+        if self.playback_preferences_locked():
+            return
+        with QSignalBlocker(self.currentSwitch), QSignalBlocker(self.currentSpinBox):
+            self.currentSwitch.setChecked(bool(enabled))
+            self.currentSpinBox.setValue(int(seconds))
+        self._on_countdown_preferences_changed()
+
+    def sync_playback_enabled(self):
+        return self._sync_playback_enabled
 
     def set_sync_playback_enabled(self, enabled):
-        self.scrollEnableSwitch.setChecked(bool(enabled))
+        enabled = bool(enabled)
+        if enabled == self._sync_playback_enabled:
+            self._refresh_sync_switch()
+            return
+        if not self.can_sync_playback() or self.playback_preferences_locked():
+            self._refresh_sync_switch()
+            return
+        self._sync_playback_enabled = enabled
+        self._refresh_sync_switch()
+        self.persist_preferences()
+        self.refresh_slideshow_watch()
+        self.sync_playback_changed.emit(enabled)
+
+    def _refresh_sync_switch(self):
+        control = self.playCardWidget_3.sync_switch
+        with QSignalBlocker(control):
+            control.setChecked(self._sync_playback_enabled)
+        locked = self.playback_preferences_locked()
+        set_enabled(control, self.can_sync_playback() and not locked)
+        mode = self.ctx.app_settings.get('page_turn_mode')
+        hint = {
+            'foreground': '朗读时同步翻页。请先开始放映，并保持放映窗口在前台。',
+            'window': '朗读时同步翻页。请先开始放映，并在设置中选择放映窗口。',
+        }.get(mode, '朗读时同步控制 PPT 放映。放映联动可在设置中调整。')
+        reason = ('请先停止播放，再修改此设置。' if locked else
+                  self.sync_playback_unavailable_reason() if not control.isEnabled() else '')
+        self.playCardWidget_3.set_sync_hint(hint + ('\n' + reason if reason else ''))
+
+    def playback_preferences_locked(self):
+        return (self._playing_sequence or self.playback_show.preparing
+                or self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState)
 
     def check_import(self):
         """根据讲稿导入状态更新播放控件和状态徽标。"""
+        self._refresh_playing_script()
         if self.project.notes:
             self.dismiss_resume_notice()
+        action = '更新配音' if self.project.audio_outdated else '生成配音'
+        self.generate_audio_link.setText(action)
+        self.generate_audio_link.setVisible(
+            bool(self.project.notes) and not self.project.audio_loaded and not self.is_busy())
+        self.generate_audio_link.setEnabled(bool(self.project.notes) and not self.is_busy())
         if self.project.audio_loaded:
-            self.playCardWidget.setEnabled(True)
-            self.playCardWidget_2.setEnabled(True)
-            self.playCardWidget_3.setEnabled(True)
             self.statusLabel.setText('已导入')
             self.IconInfoBadge.setLevel(InfoLevel.SUCCESS)
             self.IconInfoBadge.setIcon(FluentIcon.ACCEPT_MEDIUM)
+            self.IconInfoBadge.setToolTip('')
+            self.statusLabel.setToolTip('')
             self.regenerate_action.setEnabled(True)
         else:
-            set_enabled(self.playCardWidget, False)
-            set_enabled(self.playCardWidget_2, bool(self.project.notes))
-            set_enabled(self.playCardWidget_3, False)
-            self.statusLabel.setText('配音尚未就绪' if self.project.notes else '未导入')
+            pending = '配音待更新' if self.project.audio_outdated else '尚未生成配音'
+            self.statusLabel.setText(pending if self.project.notes else '未导入')
             self.IconInfoBadge.setLevel(InfoLevel.INFOAMTION)
             self.IconInfoBadge.setIcon(FluentIcon.ACCEPT_MEDIUM)
             self.regenerate_action.setEnabled(False)
-            hint = '请重新导入讲稿，重试配音生成。' if self.project.notes else ''
+            self.playButton.setEnabled(False)
+            hint = f'点击“{action}”后可播放和导出音频。' if self.project.notes else ''
             self.IconInfoBadge.setToolTip(hint)
             self.statusLabel.setToolTip(hint)
         self.refresh_presentation_state()
-        set_enabled(self.infoPushButton, bool(self.project.notes))
-        set_enabled(self.pageJumpSpinBox, self.project.audio_loaded)
-        set_enabled(self.pageJumpToolButton, self.project.audio_loaded)
 
     def remember_session(self):
         """保存最近一次可恢复的记录与段落，不记录播放中状态。"""
@@ -441,13 +556,14 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                 return
             self.create_success_info_bar('讲稿已是最新', 'PPT 中的讲稿与当前内容一致。')
             return
-        from ui.dialogs.ppt_update_dialog import PptUpdateDialog
         baseline = self.presentation_monitor.baseline
         edited = baseline is not None and bool(changed_pages(
             baseline, self.project.notes, comments_enabled=self.project.script_comments_enabled))
+        automatic = bool(self.ctx.app_settings.get('auto_generate_audio'))
+        voice = self.ctx.tts_engine.get_selected_voice_name() if automatic else ''
         dialog = PptUpdateDialog(source.name, self.reading_notes(),
                                  spoken_notes(data.notes, self.project.script_comments_enabled), edited,
-                                 self.ctx.tts_engine.get_selected_voice_name(), self)
+                                 voice, self, **({} if automatic else {'generate_audio': False}))
         if not dialog.exec():
             return
         snapshot = self._project_snapshot()
@@ -463,7 +579,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.project.note_file_name = data.source_name or source.stem
         self.project.notes = dict(data.notes)
         self.notes_path_text.set_text(str(source))
-        if not self.regenerate():
+        if not self.refresh_script():
             self._restore_project(snapshot)
 
     def _accept_ppt_baseline(self, link, notes, *, persist=True):
@@ -502,12 +618,13 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         available = self.has_presentation()
         restricted = self.is_restricted()
         sync_available = self.can_sync_playback()
-        set_enabled(self.scrollEnableSwitch, sync_available)
+        self._refresh_sync_switch()
+        self._refresh_play_button()
         self.update_ppt_action.setEnabled(
             bool(self.project.notes) and available and not self.is_busy()
             and self.project.presentation_path.suffix.lower() == '.pptx')
+        self.import_notes_action.setEnabled(bool(self.project.notes) and not self.is_busy())
         hint = '在“历史记录列表”中关联 PPT 后，可使用同步翻页、视频导出和写回 PPT 备注。'
-        self.scrollEnableSwitch.setToolTip(self.sync_playback_unavailable_reason())
         if self.project.audio_loaded:
             self.statusLabel.setText('已导入 · 受限模式' if restricted else '已导入')
             self.IconInfoBadge.setLevel(InfoLevel.WARNING if restricted else InfoLevel.SUCCESS)
@@ -541,14 +658,34 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._refresh_home_minimum_height()
         self.refresh_presentation_state()
+
+    def eventFilter(self, obj, event):
+        if (obj is self.bgScrollArea.viewport()
+                and event.type() == QEvent.Type.Resize
+                or obj is self.scrollAreaWidgetContents_3
+                and event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.FontChange)):
+            self._refresh_home_minimum_height()
+        return super().eventFilter(obj, event)
+
+    def _refresh_home_minimum_height(self):
+        content_height = self.verticalLayout_11.minimumSize().height()
+        if self.IndeterminateProgressBar.isHidden():
+            content_height += self.IndeterminateProgressBar.minimumHeight() + self.verticalLayout_2.spacing()
+        margins = self.layout().contentsMargins()
+        minimum = (content_height + margins.top() + margins.bottom()
+                   + 2 * self.bgScrollArea.frameWidth())
+        if self.minimumHeight() != minimum:
+            self.setMinimumHeight(minimum)
+            self.minimum_home_height_changed.emit(minimum)
 
     def _poll_presentation(self):
         if self.project.presentation_path is None and self.project.presentation_link.get('path'):
             candidate = Path(self.project.presentation_link['path'])
             if candidate.is_file():
                 self.project.presentation_path = candidate
-        if self.project.audio_loaded and self.has_presentation() != self._presentation_state[1]:
+        if self.project.notes and self.has_presentation() != self._presentation_state[1]:
             if not self.has_presentation():
                 self._dismiss_ppt_update()
             self.refresh_presentation_state()
@@ -556,12 +693,14 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
     def set_presentation_link(self, link, *, persist=True, notes_baseline=None):
         # 先保存关联，失败时继续使用原文稿；不触碰讲稿、音频或生成配置。
-        if persist and self.project.session_record_path and self.project.session_record_path.is_file():
+        if (persist and self.project.audio_loaded and self.project.session_record_path
+                and self.project.session_record_path.is_file()):
             presentation_link.update_record(self.project.session_record_path, link, notes_baseline=notes_baseline)
         self.stop_audio()
         self.release_playback_show()
         self.project.presentation_link = dict(link)
         self.project.presentation_path = Path(link['path'])
+        self.notes_path_text.set_text(str(self.project.presentation_path))
         self._bind_presentation_monitor(baseline=notes_baseline)
         self.refresh_presentation_state()
         self.refresh_slideshow_watch()
@@ -588,46 +727,30 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.refresh_presentation_state()
 
     def on_stop_requested(self, requester):
-        """响应其它页面的播放请求，停止当前正文或倒计时音频。"""
+        """响应其它页面的播放请求，停止当前正文或倒计时。"""
         if requester is self:
             return
         self.stop_audio()
 
     def play_audio(self):
-        """播放当前倒计时或正文音频。"""
-        if self.is_play_notes:
-            if self.project.current_index < len(self.project.media_list):
-                self._playing_sequence = True
-                if self.playback_show.session and not self._audio_only_playback:
-                    note = self.project.notes_list[self.project.current_index]
-                    self.playback_show.set_segment(note['page'], self._segment_offset())
-                self.player.setSource(QUrl.fromLocalFile(str(self.project.media_list[self.project.current_index])))
-                self.player.play()
-                set_enabled(self.playButton, False)
-                self.currentStatusLabel.setText('播放')
-                self.set_current_label_text()
-                print(self.project.notes_list[self.project.current_index]['text'])
-            else:
-                print('播放完毕')
-                self.reset_audio(align_show=False)
+        """播放当前正文音频。"""
+        if not self.is_play_notes:
+            return
+        if self.project.current_index < len(self.project.media_list):
+            self._playing_sequence = True
+            if self.playback_show.session and not self._audio_only_playback:
+                note = self.project.notes_list[self.project.current_index]
+                self.playback_show.set_segment(note['page'], self._segment_offset())
+            self.player.setSource(QUrl.fromLocalFile(str(self.project.media_list[self.project.current_index])))
+            self.player.play()
+            self.set_current_label_text()
         else:
-            if self.wait_current_index < len(self.wait_media_list):
-                self._playing_sequence = True
-                self.player.setSource(QUrl.fromLocalFile(str(self.wait_media_list[self.wait_current_index])))
-                self.player.play()
-                set_enabled(self.playButton, False)
-                temp_index = len(self.wait_media_list) - self.wait_current_index
-                self.currentStatusLabel.setText('倒计时')
-                self.currentPageLabel.setText(f'{temp_index}')
-                self.currentIndexLabel.setText(f'{temp_index}')
-            else:
-                print('播放完毕')
-                self.wait_current_index = 0
-                self.play_notes()
+            self.reset_audio(align_show=False, remember_position=False)
+        self._refresh_playing_script()
 
     def media_status_changed(self, status):
-        """在媒体结束后推进倒计时或正文播放状态机。"""
-        if status == QMediaPlayer.MediaStatus.EndOfMedia and self._playing_sequence:
+        """在媒体结束后推进正文播放状态机。"""
+        if status == QMediaPlayer.MediaStatus.EndOfMedia and self._playing_sequence and self.is_play_notes:
             self.next_timer.start(100)
 
     def on_playback_error(self, error, message):
@@ -641,21 +764,23 @@ class PPTReviewer(QWidget, Ui_mainwindow):
     def stop_audio(self):
         """停止全部播放器并保留当前正文索引。"""
         self._playing_sequence = False
+        self.countdown.stop()
         self.next_timer.stop()
         if self.playback_show.preparing:
             self.playback_show.cancel_preparation()
             self.getFileButton.setEnabled(True)
             self.refresh_presentation_state()
         self.player.stop()
-        self.playButton.setEnabled(True)
-        self.currentStatusLabel.setText('停止')
+        self._refresh_playing_script()
         self.ctx.playback_bus.request_stop(self)
 
-    def reset_audio(self, *, align_show=True):
+    def reset_audio(self, *, align_show=True, remember_position=True):
         """停止播放并将正文索引重置到首段。"""
+        if remember_position:
+            self._remember_navigation(0)
         self.stop_audio()
         self.project.current_index = 0
-        if (align_show and self.playback_show.session and self.scrollEnableSwitch.isChecked()
+        if (align_show and self.playback_show.session and self.sync_playback_enabled()
                 and self.ctx.app_settings.get('slideshow_sync_navigation')
                 and not self._audio_only_playback
                 and self.ctx.app_settings.get('page_turn_mode') == 'com' and self.project.notes_list):
@@ -666,13 +791,174 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         if self.project.notes_list:
             self.set_current_label_text()
 
-    def set_current_label_text(self):
-        """刷新当前段数和页码标签。"""
-        if not self.project.notes_list:
+    def _refresh_playing_script(self, *_):
+        self._refresh_play_button()
+        self._refresh_overview()
+        if self._preview_notes is not self.project.notes_list:
+            self.playing_script_preview.cancel_navigation()
+            self._preview_notes = self.project.notes_list
+        ready = self.project.audio_loaded and bool(self.project.notes_list)
+        if not ready:
+            self.playing_script_preview.set_position()
+            self.playing_script_preview.set_content('', empty_text='播放时显示当前讲稿')
             return
         index = min(max(self.project.current_index, 0), len(self.project.notes_list) - 1)
-        self.currentPageLabel.setText(f'{self.project.notes_list[index]["page"]} / {max(self.project.notes, default=1)}')
-        self.currentIndexLabel.setText(f'{index + 1} / {len(self.project.notes_list)}')
+        page = self.project.notes_list[index]['page']
+        self.playing_script_preview.set_position(
+            page=page, page_count=max(self.project.notes, default=1),
+            segment=index + 1, segment_count=len(self.project.notes_list),
+        )
+        start, end = index, index + 1
+        while start > 0 and self.project.notes_list[start - 1]['page'] == page:
+            start -= 1
+        while end < len(self.project.notes_list) and self.project.notes_list[end]['page'] == page:
+            end += 1
+        texts = tuple(self.project.audio_edits.get(i, {}).get('spoken_text', self.project.notes_list[i]['text'])
+                      for i in range(start, end))
+        offset = index - start
+        self.playing_script_preview.set_content(
+            texts[offset], following=texts[offset + 1:], page_text='\n\n'.join(texts),
+            playing=self._playing_sequence and self.is_play_notes,
+            countdown=self._playing_sequence and not self.is_play_notes,
+        )
+
+    def _refresh_play_button(self):
+        active = self._playing_sequence or self.playback_show.preparing
+        action = '停止' if active else '播放'
+        self.playButton.setAccessibleName(action)
+        self.playButton.setToolTip(action)
+        self.playButton.setIcon((icons.SystemIcon.STOP if active else icons.SystemIcon.PLAY).icon(Theme.DARK))
+        self.playButton.setEnabled(active or (self.project.audio_loaded and not self.is_busy()))
+        navigation_enabled = self.project.audio_loaded and not self.is_busy()
+        locked = self.playback_preferences_locked()
+        self.playCardWidget_3.set_countdown_available(navigation_enabled, locked=locked)
+        self._refresh_sync_switch()
+        remaining = self.countdown.remaining if self._playing_sequence and not self.is_play_notes else None
+        self.playCardWidget_3.set_countdown_progress(playing=self._playing_sequence, remaining=remaining)
+        self.resetButton.setEnabled(navigation_enabled)
+        self.playing_script_preview.set_navigation_enabled(navigation_enabled)
+        previous, following = self._neighbor_pages()
+        self.previousPageButton.setEnabled(navigation_enabled and previous is not None)
+        self.nextPageButton.setEnabled(navigation_enabled and following is not None)
+        self._refresh_return_position_button()
+        self.playbackOverview.set_available(bool(self.project.notes) and not self.is_busy())
+        self.playbackOverview.set_navigation_enabled(
+            navigation_enabled and bool(self.project.notes_list)
+            and len(self.project.media_list) == len(self.project.notes_list))
+        self.playing_script_preview.set_review_available(
+            navigation_enabled and bool(self.project.notes_list)
+            and len(self.project.media_list) == len(self.project.notes_list))
+        if locked != self._playback_preferences_locked:
+            self._playback_preferences_locked = locked
+            self.playback_preferences_lock_changed.emit(locked)
+
+    def _refresh_overview(self):
+        notes = self.reading_notes()
+        durations = tuple(self.project.notes_duration_list) if self.project.audio_loaded else ()
+        key = (tuple(notes.items()), tuple(item['page'] for item in self.project.notes_list),
+               durations, self.project.audio_loaded, self.project.mark)
+        if key != self._overview_key:
+            self._overview_key = key
+            statistics = build_statistics(notes, self.project.notes_list,
+                                          durations if self.project.audio_loaded else None, self.project.mark)
+            self.playbackOverview.set_statistics(statistics, self.project.notes_list, durations)
+        self._refresh_overview_position()
+
+    def _refresh_overview_position(self, *_):
+        position = self.player.position() if self.is_play_notes else 0
+        self.playbackOverview.set_position(self.project.current_index, position)
+
+    def _sync_navigation_history(self):
+        if self._navigation_notes is not self.project.notes_list or not self.project.audio_loaded:
+            self._navigation_notes = self.project.notes_list
+            self._navigation_history.clear()
+
+    def _remember_navigation(self, target):
+        self._sync_navigation_history()
+        current = self.project.current_index
+        limit = min(len(self.project.notes_list), len(self.project.media_list))
+        if (not 0 <= current < limit or current == target
+                or (self._navigation_history and self._navigation_history[-1] == current)):
+            return
+        self._navigation_history.append(current)
+
+    def _return_position_target(self):
+        self._sync_navigation_history()
+        limit = min(len(self.project.notes_list), len(self.project.media_list))
+        return next((index for index in reversed(self._navigation_history)
+                     if 0 <= index < limit and index != self.project.current_index), None)
+
+    def _refresh_return_position_button(self):
+        target = self._return_position_target()
+        self.returnPositionButton.setEnabled(
+            target is not None and self.project.audio_loaded and not self.is_busy())
+        hint = '手动跳转后可返回刚才的位置'
+        if target is not None:
+            page = self.project.notes_list[target]['page']
+            segment = target - self.get_index_from_page(page) + 1
+            hint = f'返回第 {page} 页 · 第 {segment} 段'
+        self.returnPositionButton.setToolTip(hint)
+
+    def return_to_previous_position(self):
+        """取回上一处手动定位，沿用当前播放状态，不写入新的返回记录。"""
+        if self.is_busy() or not self.project.audio_loaded:
+            return
+        target = self._return_position_target()
+        if target is None:
+            self._refresh_return_position_button()
+            return
+        while self._navigation_history.pop() != target:
+            pass
+        self._jump_to_position('segment', target + 1, remember_position=False)
+
+    def _neighbor_pages(self):
+        if not self.project.notes_list:
+            return None, None
+        index = min(max(self.project.current_index, 0), len(self.project.notes_list) - 1)
+        current_page = self.project.notes_list[index]['page']
+        previous = following = None
+        for note in self.project.notes_list:
+            page = note['page']
+            if page < current_page and (previous is None or page > previous):
+                previous = page
+            elif page > current_page and (following is None or page < following):
+                following = page
+        return previous, following
+
+    def _change_page(self, direction):
+        previous, following = self._neighbor_pages()
+        target = previous if direction < 0 else following
+        if target is not None:
+            self._jump_to_position('page', target)
+
+    def _jump_to_position(self, kind, value, *, remember_position=True, restart_current=False):
+        """定位到目标讲稿，保留当前播放状态；播放中跳转不重放倒计时。"""
+        if self.is_busy() or not self.project.audio_loaded or not self.project.notes_list:
+            return
+        index = self.get_index_from_page(value) if kind == 'page' else value - 1
+        if index < 0 and kind == 'page':
+            self.create_warning_info_bar('此页没有讲稿', f'当前讲稿不包含第 {value} 页')
+            return
+        if not 0 <= index < min(len(self.project.notes_list), len(self.project.media_list)):
+            return
+        if index == self.project.current_index:
+            if restart_current and self._playing_sequence:
+                self._seek_segment(0, remember_position=False)
+            return
+        if self._playing_sequence:
+            self._seek_segment(index - self.project.current_index, remember_position=remember_position)
+        else:
+            if remember_position:
+                self._remember_navigation(index)
+            self.stop_audio()
+            self.project.current_index = index
+            self.set_current_label_text()
+
+    def set_current_label_text(self):
+        """刷新当前段数和页码标签。"""
+        self._refresh_playing_script()
+        if not self.project.notes_list:
+            return
         self.remember_session()
 
     def get_index_from_page(self, page):
@@ -683,21 +969,18 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         return -1
 
     def timeout_play_next_audio(self):
-        """推进到下一段，并按设置选择是否发送翻页指令。"""
+        """推进正文片段，并按设置发送翻页指令。"""
         self.next_timer.stop()
-        if not self._playing_sequence:
+        if not self._playing_sequence or not self.is_play_notes:
             return
-        if self.is_play_notes:
-            next_index = self.project.current_index + 1
-            if next_index >= len(self.project.notes_list):
-                self.reset_audio(align_show=False)
+        next_index = self.project.current_index + 1
+        if next_index >= len(self.project.notes_list):
+            self.reset_audio(align_show=False, remember_position=False)
+            return
+        if self.sync_playback_enabled() and not self._audio_only_playback:
+            if self.send_page_down(next_index) is False:
                 return
-            if self.scrollEnableSwitch.isChecked() and not self._audio_only_playback:
-                if self.send_page_down(next_index) is False:
-                    return
-            self.project.current_index = next_index
-        else:
-            self.wait_current_index += 1
+        self.project.current_index = next_index
         self.play_audio()
 
     def send_page_down(self, next_index=None):
@@ -755,7 +1038,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
     def handle_hotkey(self, action: str):
         """执行全局热键对应的播放动作。"""
         if self.playback_show.preparing:
-            if action == 'stop':
+            if action in ('stop', 'play_pause'):
                 self.stop_audio()
             return
         if not self.hotkey_ready():
@@ -772,19 +1055,24 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
     def toggle_play(self):
         """在播放与停止之间切换。"""
-        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+        if (self._playing_sequence or self.playback_show.preparing
+                or self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState):
             self.stop_audio()
         else:
             self.init_play()
 
-    def _seek_segment(self, offset: int):
+    def _seek_segment(self, offset: int, *, remember_position=True):
         """按偏移移动正文索引，并从该段开始播放。"""
+        if self.is_busy() or not self.project.audio_loaded or not self.project.media_list:
+            return
+        index = min(max(self.project.current_index + offset, 0), len(self.project.media_list) - 1)
+        if remember_position:
+            self._remember_navigation(index)
         self.stop_audio()
         self.is_play_notes = True
-        limit = len(self.project.media_list) - 1
-        self.project.current_index = min(max(self.project.current_index + offset, 0), limit)
+        self.project.current_index = index
         self.set_current_label_text()
-        if (self.scrollEnableSwitch.isChecked() and self.can_sync_playback()
+        if (self.sync_playback_enabled() and self.can_sync_playback()
                 and not self._audio_only_playback
                 and self.ctx.app_settings.get('slideshow_sync_navigation')
                 and self.ctx.app_settings.get('page_turn_mode') == 'com'):
@@ -860,6 +1148,44 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             return False
         return True
 
+    def refresh_script(self):
+        """讲稿变化后按偏好生成配音，或保留仅处理讲稿的状态。"""
+        if self.ctx.app_settings.get('auto_generate_audio'):
+            return self.regenerate()
+        return self.prepare_script_only()
+
+    def prepare_import(self, *, comments_enabled=None):
+        if self.ctx.app_settings.get('auto_generate_audio'):
+            if comments_enabled is None:
+                return self.init_general_play()
+            return self.init_general_play(comments_enabled=comments_enabled)
+        return self.prepare_script_only(comments_enabled=comments_enabled)
+
+    def prepare_script_only(self, *, comments_enabled=None):
+        """读取和分段独立于语音引擎，不写入配音历史。"""
+        if self.is_busy() or not self.project.notes:
+            return False
+        enabled = (bool(self.ctx.app_settings.get('script_comments_enabled'))
+                   if comments_enabled is None else bool(comments_enabled))
+        try:
+            self.generation.prepare_notes(comments_enabled=enabled)
+        except Exception as exc:
+            self.getFileButton.setEnabled(True)
+            self.create_error_info_bar('讲稿解析错误', str(exc))
+            return False
+        self.presentation_monitor.comments_enabled = self.project.script_comments_enabled
+        self.stop_audio()
+        self.release_playback_show()
+        self.player.setSource(QUrl())
+        self.generation.apply_script_only()
+        self.getFileButton.setEnabled(True)
+        self.check_import()
+        self.set_current_label_text()
+        self.refresh_hotkeys()
+        self.refresh_slideshow_watch()
+        self.audio_changed.emit()
+        return True
+
     def _project_snapshot(self):
         return (copy.deepcopy(self.project), self.generation.resume_page,
                 copy.deepcopy(self.presentation_monitor.baseline), self.notes_path_text.text)
@@ -879,7 +1205,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.getFileButton.setEnabled(True)
 
     def apply_rewritten_notes(self, mapping: dict) -> int:
-        """写回确认采用的逐页改写结果，并重建音频。
+        """写回确认采用的逐页改写结果，并按偏好准备配音。
 
         未改动页面会自然命中原缓存。返回实际写回页数；任务忙时返回 -1。
         """
@@ -897,7 +1223,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         if not applied:
             return 0
 
-        if not self.regenerate():
+        if not self.refresh_script():
             self._restore_project(snapshot)
             return -1
         return applied
@@ -913,6 +1239,54 @@ class PPTReviewer(QWidget, Ui_mainwindow):
     def import_data_script(self):
         """打开文件选择器并导入结构化讲稿 JSON。"""
         return self.import_script('选择 JSON 讲稿', 'JSON 讲稿 (*.json)')
+
+    def import_notes_from_file(self):
+        if self.is_busy() or not self.project.notes:
+            return
+        selected, _ = QFileDialog.getOpenFileName(
+            self, '选择讲稿来源文件', '', script_io.SCRIPT_FILTER)
+        if selected:
+            self.update_notes_from_file(Path(selected))
+
+    def update_notes_from_file(self, path):
+        """只读取来源讲稿，保留当前文稿关联、文件名称和历史身份。"""
+        if self.is_busy() or not self.project.notes:
+            return False
+        snapshot = self._project_snapshot()
+        set_enabled(self.getFileButton, False)
+        try:
+            path = Path(path)
+            stamp = file_stamp(path)
+            data = script_io.load_script(path)
+            if not data.notes or any(page < 1 for page in data.notes):
+                raise ValueError('来源文件中没有有效的分页讲稿。')
+            if stamp != file_stamp(path):
+                raise RuntimeError('来源文件正在保存，请稍后重试。')
+            if self.has_presentation():
+                presentation_link.validate(self.project.presentation_path, data.notes)
+            missing = set(self.project.notes) - set(data.notes)
+            if path.suffix.lower() in presentation_link.PPT_SUFFIXES and missing:
+                box = MessageBox(
+                    '按页码更新讲稿？',
+                    f'来源 PPT 包含 {len(data.notes)} 页讲稿，当前有 {len(missing)} 页未包含在来源中。'
+                    '这些页面将保留原讲稿。请确认两份 PPT 的页面顺序一致。', self)
+                box.yesButton.setText('更新讲稿')
+                box.cancelButton.setText('取消')
+                if not box.exec():
+                    return False
+                if stamp != file_stamp(path):
+                    raise RuntimeError('来源文件又有修改，请重新选择。')
+            if not self._update_imported_script(data):
+                self._restore_project(snapshot)
+                return False
+            return True
+        except Exception as exc:
+            self._restore_project(snapshot)
+            self.create_error_info_bar('讲稿更新失败', str(exc))
+            return False
+        finally:
+            if not self.is_busy():
+                self.getFileButton.setEnabled(True)
 
     def import_script(self, title: str, file_filter: str):
         """执行脚本文件的选择、解析、装载和音频生成共用流程。"""
@@ -945,11 +1319,13 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         return result
 
     def _import_script_path(self, path: Path) -> bool:
-        """解析讲稿后再替换当前内容，并按原有设置生成配音。"""
+        """解析讲稿后再替换当前内容，并按偏好准备配音。"""
         set_enabled(self.getFileButton, False)
         try:
             stamp = file_stamp(path)
             data = script_io.load_script(path)
+            if not data.notes:
+                raise ValueError('文件中没有可导入的讲稿页面。')
             if any(page < 1 for page in data.notes):
                 raise ValueError('讲稿页码须从第 1 页开始。')
             link = (presentation_link.describe(path)
@@ -995,6 +1371,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.project.session_record_path = None
             self.generation.resume_page = None
             self.project.audio_edits = {}
+            self.project.clear_audio()
         self.project.note_file_path = path
         self.project.presentation_link = link
         self.project.presentation_path = path if self.project.presentation_link else None
@@ -1007,9 +1384,9 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.persist_preferences()
 
         self.notes_path_text.set_text(str(path))
-        if self.init_general_play() is not False:
+        if self.prepare_import() is not False:
             InfoBar.info(
-                title='正在生成配音', content=' / '.join(data.report),
+                title='正在生成配音' if self.ctx.app_settings.get('auto_generate_audio') else '讲稿已导入', content=' / '.join(data.report),
                 orient=Qt.Horizontal, isClosable=True,
                 position=InfoBarPosition.TOP, duration=2000, parent=self)
             return True
@@ -1017,7 +1394,8 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
     def _update_imported_script(self, data: script_io.ScriptData) -> bool:
         """按页码更新当前讲稿，沿用 PPT 关联与已有备注对比基准。"""
-        presentation_link.validate(self.project.presentation_path, data.notes)
+        if self.has_presentation():
+            presentation_link.validate(self.project.presentation_path, data.notes)
         incoming = dict(data.notes)
         # JSON 声明的分段转换为当前分隔符，避免影响未更新页的动画分段。
         if data.mark.strip() and data.mark != self.project.mark:
@@ -1038,17 +1416,23 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.create_success_info_bar('讲稿已是最新', '文件中的讲稿与当前内容一致')
             return True
         self.project.notes = updated
-        if self.init_general_play() is False:
+        if self.prepare_import() is False:
             return False
         if pages:
             self.create_success_info_bar('讲稿已更新', f'已更新 {len(pages)} 页讲稿')
-        else:
+        elif self.ctx.app_settings.get('auto_generate_audio'):
             self.create_success_info_bar('正在准备配音', '讲稿内容未变化，将继续生成配音')
+        else:
+            self.create_success_info_bar('讲稿已是最新', '文件中的讲稿与当前内容一致')
         return True
 
     def _choose_ppt_import(self):
-        from ui.dialogs.ppt_import_dialog import PptImportDialog
-        dialog = PptImportDialog(self)
+        options = {}
+        if not self.project.audio_loaded:
+            options['has_audio'] = False
+        if not self.ctx.app_settings.get('auto_generate_audio'):
+            options['generate_audio'] = False
+        dialog = PptImportDialog(self, **options)
         return dialog.selected_action() if dialog.exec() else None
 
     def _link_imported_ppt(self, path, data, link) -> bool:
@@ -1059,7 +1443,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         if required > count:
             raise ValueError(f'讲稿包含第 {required} 页，但所选 PPT 只有 {count} 页。')
         self.set_presentation_link({**link, 'slide_count': count}, notes_baseline=data.notes)
-        self.create_success_info_bar('PPT 已关联', '可以使用同步翻页和视频导出')
+        self.create_success_info_bar('PPT 已关联', '当前讲稿已与所选 PPT 关联。')
         return True
 
     def import_package(self):
@@ -1093,6 +1477,8 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                 notes = {int(page): str(text) for page, text in record.get('notes', {}).items()}
                 if not notes or any(page < 1 for page in notes):
                     raise RuntimeError('工程包中没有可用的讲稿，请重新导出后再导入。')
+                # 此记录由本次导入新建，配音不完整时不加入历史列表。
+                result['record_path'].unlink()
                 self.clean_and_reset()
                 self.project.notes = notes
                 self.project.mark = str(record.get('mark') or self.project.mark).strip() or '●'
@@ -1105,8 +1491,10 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                 self._bind_presentation_monitor(baseline=record.get('presentation_notes'))
                 self.notes_path_text.set_text(str(path))
                 self.persist_preferences()
-                self.create_warning_info_bar('工程包配音不完整', '已导入讲稿，将按当前语音设置生成配音')
-                return self.init_general_play(
+                detail = ('已导入讲稿，将按当前语音设置生成配音' if self.ctx.app_settings.get('auto_generate_audio')
+                          else '已导入讲稿，可继续处理讲稿或手动生成配音')
+                self.create_warning_info_bar('工程包配音不完整', detail)
+                return self.prepare_import(
                     comments_enabled=bool(record.get('script_comments_enabled', False))) is not False
             except Exception as exc:
                 self.create_error_info_bar('工程包加载失败', str(exc))
@@ -1140,7 +1528,9 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.getFileButton.setEnabled(True)
             return False
 
+        outdated = self.project.audio_loaded or self.project.audio_outdated
         self.clean_and_reset()
+        self.project.audio_outdated = outdated
 
         try:
             self.clean_temp_folder(self.wav_temp_path)
@@ -1152,10 +1542,10 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         try:
             extra = {'audio_edits': self.project.audio_edits} if self.project.audio_edits else {}
-            self.save_thread.configure(self.project.notes_list, self.currentSpinBox.maximum(),
+            self.save_thread.configure(self.project.notes_list,
                                        force_regenerate=force_regenerate, **extra)
             self.save_thread.start()
-            self.refresh_presentation_state()
+            self.check_import()
             self.IndeterminateProgressBar.setVisible(True)
         except Exception as e:
             print(e)
@@ -1174,7 +1564,6 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                 None, None, None, '无法读取 PPT 动画，请确认文稿已保存且可以正常打开')]
         if not issues:
             return True
-        from ui.dialogs.animation_check_dialog import AnimationCheckDialog
         self.stop_audio()
         self._confirming_generation = True
         try:
@@ -1188,7 +1577,6 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.release_playback_show()
         self.player.setSource(QUrl())
         self.project.clear_audio()
-        self.wait_media_list = []
         self.check_import()
         self.audio_changed.emit()
 
@@ -1209,9 +1597,20 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
     def thread_print_index(self, import_index):
         """根据已完成条数刷新生成进度。"""
+        if self.save_thread.tts_engine.get_current_option_values().get('sentence_mode') == SENTENCE_MODE:
+            return
         text = f'已生成：{import_index}/{len(self.project.notes_list)}'
         print(text)
         self.statusLabel.setText(text)
+
+    def thread_generation_progress(self, progress):
+        if progress['short']:
+            detail = ('空白讲稿' if progress['blank'] else
+                      f'{progress["sentence"]} / {progress["sentences"]} 句')
+            self.statusLabel.setText(
+                f'配音准备 {progress["completed"]} / {progress["total"]} · '
+                f'第 {progress["page"]} 页 · 第 {progress["segment"]} 段'
+                f'（{detail}）')
 
     def thread_save_error(self, message: str):
         """报告生成错误，并恢复被任务占用的界面状态。"""
@@ -1228,27 +1627,29 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         """接收有序生成结果、恢复界面并保存会话。"""
         print('转换完成')
         self.generation.apply_result(result, self.ctx.tts_engine)
+        self.project.audio_loaded = True
         try:
             self.save_session_record()
         except Exception as exc:
             self.create_error_info_bar('历史记录保存失败', f'配音仍可播放，请检查保存位置的权限和剩余空间。\n{exc}')
         self.IndeterminateProgressBar.setVisible(False)
-        
+
         # 将缓存命中数纳入提示，便于用户判断是否发生重新合成。
         total_notes = len(self.project.notes_list)
-        if self.project.cache_hit_count > 0:
+        if getattr(result, 'sentence_cache_hit_count', 0) > 0:
+            self.create_success_info_bar('转换完成',
+                                         f'配音已准备就绪，复用 {result.sentence_cache_hit_count} 句配音')
+        elif self.project.cache_hit_count > 0:
             cache_info = f'（命中缓存 {self.project.cache_hit_count}/{total_notes} 条）'
             self.create_success_info_bar('转换完成', f'音频播放功能已准备就绪 {cache_info}')
         else:
             self.create_success_info_bar('转换完成', '音频播放功能已准备就绪')
         self.getFileButton.setEnabled(True)
-        self.project.audio_loaded = True
         self.check_import()
         if self.project.notes_list:
             self.set_current_label_text()
         self.refresh_hotkeys()
         self.refresh_slideshow_watch()
-        self.pageJumpSpinBox.setMaximum(max(self.project.notes, default=1))
         self.remember_session()
         self.audio_changed.emit()
 
@@ -1297,7 +1698,6 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             baseline=loaded.record.get('presentation_notes'),
             expected_sha=presentation_link.from_record(loaded.record).get('sha256', ''))
         self.check_import()
-        self.pageJumpSpinBox.setMaximum(max(self.project.notes, default=1))
         if self.project.notes_list:
             self.set_current_label_text()
         self.create_success_info_bar('加载成功', '历史记录已恢复，可直接播放')
@@ -1348,15 +1748,17 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.remember_session()
         self.refresh_hotkeys()
         self.presentation_state_changed.emit()
+        self._refresh_playing_script()
 
-    def open_audio_review(self):
+    def open_audio_review(self, *, current_segment=False):
         if self.is_busy() or not self.project.audio_loaded or len(self.project.media_list) != len(self.project.notes_list):
             self.create_warning_info_bar('配音尚未就绪', '完成讲稿配音后可逐段试听和调整。')
             return
         if self.audio_review_dialog is None:
-            from ui.dialogs.audio_review_dialog import AudioReviewDialog
             self.audio_review_dialog = AudioReviewDialog(self, self.window())
         self.audio_review_dialog.show()
+        if current_segment:
+            self.audio_review_dialog.focus_segment(self.project.current_index)
         self.audio_review_dialog.raise_()
         self.audio_review_dialog.activateWindow()
 
@@ -1368,7 +1770,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self._page_turn_notified = False
         self._audio_only_playback = False
         self.ctx.playback_bus.request_stop(self)
-        if (self.scrollEnableSwitch.isChecked() and self.can_sync_playback()
+        if (self.sync_playback_enabled() and self.can_sync_playback()
                 and self.ctx.app_settings.get('page_turn_mode') == 'com'):
             self._prepare_playback_show()
             return
@@ -1381,21 +1783,19 @@ class PPTReviewer(QWidget, Ui_mainwindow):
     def _prepare_playback_show(self, *, countdown=True):
         self._playback_countdown = countdown
         self.ctx.slideshow_watcher.stop()
-        self.playButton.setEnabled(False)
         self.getFileButton.setEnabled(False)
-        self.currentStatusLabel.setText('准备放映')
         self.playback_show.prepare(self.project.presentation_path,
                                    self.project.notes_list[self.project.current_index]['page'], self._segment_offset(),
                                    allow_start=self.ctx.app_settings.get('slideshow_auto_start'),
                                    align=self.ctx.app_settings.get('slideshow_sync_navigation'),
                                    windowed=self.ctx.app_settings.get('slideshow_windowed'),
                                    preference=self.ctx.app_settings.get('presentation_preference'))
+        self._refresh_play_button()
         self.refresh_presentation_state()
 
     def _finish_playback_preparation(self):
         self.getFileButton.setEnabled(True)
-        self.playButton.setEnabled(True)
-        self.currentStatusLabel.setText('停止')
+        self._refresh_play_button()
         self.refresh_presentation_state()
         self.presentation_monitor.poll()
 
@@ -1458,7 +1858,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
     def on_slideshow_checked(self):
         if (not self._playing_sequence or self.playback_show.preparing
                 or not self.playback_show.session or self._audio_only_playback
-                or not self.scrollEnableSwitch.isChecked()
+                or not self.sync_playback_enabled()
                 or self.ctx.app_settings.get('page_turn_mode') != 'com'):
             return
         try:
@@ -1472,7 +1872,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             return
         if self.playback_show.session and self.playback_show.session.presentation.is_active():
             return
-        if (self.scrollEnableSwitch.isChecked() and not self._audio_only_playback
+        if (self.sync_playback_enabled() and not self._audio_only_playback
                 and self.ctx.app_settings.get('page_turn_mode') == 'com'):
             was_playing = self._playing_sequence
             stop = bool(self.ctx.app_settings.get('slideshow_stop_on_exit'))
@@ -1489,19 +1889,16 @@ class PPTReviewer(QWidget, Ui_mainwindow):
                     self.create_success_info_bar('放映已结束', '继续播放配音。')
 
     def play_wait(self):
-        """播放倒计时列表中的当前音频。"""
+        """显示数字倒计时，结束后开始正文。"""
         self.is_play_notes = False
-        self.wait_current_index = 0
-        self.load_wait_audio_files()
-        if not self.wait_media_list:
-            self.create_warning_info_bar('倒计时音频缺失', '未找到倒计时音频文件（data/cache/countdown）')
-            return
-        print('已导入倒计时')
-        self.play_audio()
+        self._playing_sequence = True
+        self.countdown.start(self.currentSpinBox.value())
+        self._refresh_playing_script()
 
     def play_notes(self):
         """播放当前正文段对应的音频。"""
         self.is_play_notes = True
+        self.countdown.stop()
         if not self.project.media_list:
             self.load_audio_files()
         self.play_audio()
@@ -1517,42 +1914,6 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         self.project.media_list = [item[2] for item in sorted(indexed)]
         print(f'音频列表载入完成，共 {len(self.project.media_list)} 条')
 
-    def load_wait_audio_files(self):
-        """按降序构造当前设置秒数的现有倒计时媒体列表。"""
-        audio_files = [
-            path for path in self.countdown_wav_temp_path.glob('*.wav')
-            if path.stem.isdigit() and int(path.stem) <= self.currentSpinBox.value()
-        ]
-        audio_files = sorted(audio_files, key=lambda path: int(path.stem), reverse=True)
-        self.wait_media_list = audio_files
-        print('倒计时列表载入完成')
-
-    def jump_page(self):
-        """将播放索引定位到用户输入页码的第一段。
-
-        使用演示软件接口时同步驱动放映跳页，其余方式只调整软件内部索引。
-        """
-        page = self.pageJumpSpinBox.value()
-        index = self.get_index_from_page(page)
-        if index < 0:
-            self.create_warning_info_bar('此页没有讲稿', f'当前讲稿不包含第 {page} 页')
-            return
-        self.stop_audio()
-        self.project.current_index = index
-        if self.project.notes_list:
-            self.set_current_label_text()
-        if (self.scrollEnableSwitch.isChecked() and self.can_sync_playback()
-                and not self._audio_only_playback
-                and self.ctx.app_settings.get('slideshow_sync_navigation')
-                and self.ctx.app_settings.get('page_turn_mode') == 'com'):
-            if self.playback_show.session:
-                try:
-                    self.playback_show.goto_page(page)
-                except Exception:
-                    self.release_playback_show()
-            else:
-                slideshow.goto(page, self.project.presentation_path)
-
     # 放映进度跟随
 
     def refresh_slideshow_watch(self):
@@ -1560,6 +1921,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
 
         没有讲稿时无从跟随，此时不订阅，启动阶段也就不必加载 COM 依赖。
         """
+        self._refresh_sync_switch()
         watcher = self.ctx.slideshow_watcher
         if (self.ctx.app_settings.get('scroll_enabled')
                 and self.ctx.app_settings.get('page_turn_mode') == 'com'
@@ -1577,7 +1939,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         用户在演示软件里手动翻页后，软件不再按自己的计数继续，避免两边错位。
         正在播放正文时从新页重新开始，否则当前音频放完会在新索引上再前进一段。
         """
-        if (not self.scrollEnableSwitch.isChecked() or not self.can_sync_playback()
+        if (not self.sync_playback_enabled() or not self.can_sync_playback()
                 or not self.ctx.app_settings.get('slideshow_follow_page')
                 or self.ctx.app_settings.get('page_turn_mode') != 'com'
                 or self._audio_only_playback or self._advancing_show
@@ -1641,7 +2003,8 @@ class PPTReviewer(QWidget, Ui_mainwindow):
         if self.is_busy():
             self.create_warning_info_bar('暂时无法修改', '请等待当前任务完成后再修改分隔符')
             return
-        box = EditMarkMessageBox(self.project.mark, self.window(), has_script=bool(self.project.notes))
+        extra = {} if self.ctx.app_settings.get('auto_generate_audio') else {'generate_audio': False}
+        box = EditMarkMessageBox(self.project.mark, self.window(), has_script=bool(self.project.notes), **extra)
         if box.exec():
             text = box.get_mark()
             if not text or text == self.project.mark:
@@ -1651,7 +2014,7 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.project.mark = text
             self.persist_preferences()
             if self.project.notes:
-                if not self.regenerate():
+                if not self.refresh_script():
                     self._restore_project(snapshot)
 
     def show_info_dialog(self):
@@ -1660,7 +2023,18 @@ class PPTReviewer(QWidget, Ui_mainwindow):
             self.create_warning_info_bar('暂无统计信息', '导入讲稿后可查看统计')
             return
         statistics = build_statistics(self.reading_notes(), self.project.notes_list,
-                                      self.project.notes_duration_list if self.project.audio_loaded else None, self.project.mark)
+                                      self.project.notes_duration_list if self.project.audio_loaded else None,
+                                      self.project.mark, sentence_counts=self._sentence_counts())
         dialog = ScriptStatisticsDialog(statistics, self.window())
         dialog.exec()
         dialog.deleteLater()
+
+    def _sentence_counts(self):
+        if not self.project.audio_loaded or len(self.project.media_list) != len(self.project.notes_list):
+            return None
+        result = []
+        for index, note in enumerate(self.project.notes_list):
+            spoken = self.project.audio_edits.get(index, {}).get('spoken_text', note['text'])
+            timeline = load_sentences(self.project.media_list[index], spoken)
+            result.append(len(timeline) if timeline else (0 if not spoken.strip() else None))
+        return result

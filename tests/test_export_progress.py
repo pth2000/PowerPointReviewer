@@ -3,12 +3,17 @@
 import ctypes
 import itertools
 import os
+import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
-import unittest
 from unittest.mock import Mock, PropertyMock, patch
 
-from app.video.export_progress import ExportProgress, ExportProgressMonitor, _Snapshot, powerpoint_process_id
+from app.video.export_progress import (
+    ExportProgress,
+    ExportProgressMonitor,
+    _Snapshot,
+    powerpoint_process_id,
+)
 from app.video.mux import MuxCancelled
 from app.video.powerpoint import _render_video
 

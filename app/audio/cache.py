@@ -5,13 +5,29 @@
 """
 
 import json
+import re
 from pathlib import Path
 
 from app import paths
-from app.logging_setup import get_logger
+from app.audio.captions import read_captions
 from app.audio.segments import references
+from app.audio.sentence_cache import is_sentence_key
+from app.logging_setup import get_logger
 
 AUDIO_SUFFIXES = ('.wav', '.mp3')
+
+
+def expand_sentence_keys(keys):
+    """合并音频仍被引用时，同时保留其中各句的原始合成缓存。"""
+    result = {str(key) for key in keys}
+    for key in tuple(result):
+        if not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}', key):
+            continue
+        data = read_captions(paths.AUDIO_CACHE_DIR / f'{key}.wav')
+        if data:
+            result.update(cue['source_key'] for cue in data['cues']
+                          if is_sentence_key(cue.get('source_key')))
+    return result
 
 
 def format_size(num_bytes: int) -> str:
@@ -49,7 +65,7 @@ def keys_of_record(record_path) -> set[str]:
     for item in record.get('items', []) or []:
         if isinstance(item, dict):
             keys.update(str(value['key']) for value in references(item))
-    return keys
+    return expand_sentence_keys(keys)
 
 
 def referenced_keys(exclude=None) -> set[str]:
@@ -128,7 +144,7 @@ def clear_orphans(protected_keys=()) -> tuple[int, int]:
 
     被引用的音频必须保留，否则相应历史记录将无法恢复播放。
     """
-    keys = referenced_keys() | set(protected_keys)
+    keys = referenced_keys() | expand_sentence_keys(protected_keys)
     orphans = [path for path in iter_cache_files() if path.stem not in keys]
     return _remove(orphans)
 

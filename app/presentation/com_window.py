@@ -2,6 +2,7 @@
 
 import ctypes
 
+# 两套 COM 桥接库会初始化线程；仅在已进入放映操作后加载，避免抢在 Qt 前设置 COM 模型。
 
 def _dispatch_from_window(window):
     """通过标准 COM 封送连接两套 Python 包，始终使用传入的放映对象。"""
@@ -41,7 +42,7 @@ def slideshow_hwnd(window):
     """调用类型库中声明的 HWND getter；不支持该接口时返回 0。"""
     try:
         from comtypes import HRESULT, IUnknown
-        from comtypes.automation import IDispatch, VT_HRESULT, VT_I4, VT_INT, VT_PTR
+        from comtypes.automation import VT_HRESULT, VT_I4, VT_INT, VT_PTR, IDispatch
         from comtypes.typeinfo import INVOKE_PROPERTYGET, TKIND_INTERFACE
 
         dispatch = _dispatch_from_window(window)

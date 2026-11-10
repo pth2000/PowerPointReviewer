@@ -1,17 +1,17 @@
 """验证路径迁移、讲稿保留和工程包跨设备恢复。"""
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 import zipfile
+from pathlib import Path
+from unittest.mock import patch
 
 from pptx import Presentation
 
 from app import paths
-from app.presentation import link as presentation_link
 from app.documents import package as project_package
+from app.presentation import link as presentation_link
 
 
 def make_ppt(path, count=2):

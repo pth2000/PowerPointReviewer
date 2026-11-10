@@ -1,20 +1,51 @@
 """以概览和逐页明细展示讲稿统计。"""
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QFrame, QHeaderView, QHBoxLayout, QTableWidgetItem, QVBoxLayout
+from PySide6.QtGui import QColor, QFont, QFontMetrics
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QHeaderView, QTableWidgetItem, QVBoxLayout
 from qfluentwidgets import (
-    BodyLabel, CardWidget, MessageBoxBase, StrongBodyLabel,
-    SubtitleLabel, TableWidget, isDarkTheme, setCustomStyleSheet, setFont,
+    BodyLabel,
+    CardWidget,
+    MessageBoxBase,
+    StrongBodyLabel,
+    SubtitleLabel,
+    TableWidget,
+    isDarkTheme,
+    setCustomStyleSheet,
+    setFont,
 )
 
-from ui import theme
 from app.documents.statistics import format_duration
+from ui import theme
+from ui.scrolling import configure_reading_scroll
 
 
 class _OverviewCard(CardWidget):
     def _normalBackgroundColor(self):
         return QColor('#303030' if isDarkTheme() else '#f7f7f7')
+
+
+class _DurationLabel(StrongBodyLabel):
+    """在可用宽度内完整显示时长，保持单行。"""
+
+    def __init__(self, text, parent, *, font_size, weight):
+        super().__init__(parent)
+        self._preferred_size = font_size
+        self.setText(text)
+        self.setWordWrap(False)
+        setFont(self, font_size, weight)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        font = QFont(self.font())
+        size = self._preferred_size
+        font.setPixelSize(size)
+        width = max(1, self.contentsRect().width())
+        while size > 1 and QFontMetrics(font).horizontalAdvance(self.text()) > width:
+            size -= 1
+            font.setPixelSize(size)
+        if font != self.font():
+            self.setFont(font)
 
 
 def _divider(parent):
@@ -45,15 +76,10 @@ class ScriptStatisticsDialog(MessageBoxBase):
         duration_column.setAlignment(Qt.AlignmentFlag.AlignTop)
         duration_column.addWidget(BodyLabel('配音总时长', self.overview_card))
         duration = format_duration(statistics.duration)
-        duration_label = StrongBodyLabel(duration, self.overview_card)
-        duration_label.setWordWrap(True)
-        if statistics.duration is None:
-            setFont(duration_label, 22)
-        else:
-            setFont(duration_label, 30 if len(duration) <= 8 else 24, QFont.Weight.DemiBold)
-        duration_width = max(120, (min(680, parent.width() - 40) - 157) // 3)
-        duration_height = max(duration_label.fontMetrics().height(), duration_label.heightForWidth(duration_width))
-        duration_label.setMinimumHeight(duration_height)
+        duration_label = _DurationLabel(
+            duration, self.overview_card,
+            font_size=22 if statistics.duration is None else 30 if len(duration) <= 8 else 24,
+            weight=QFont.Weight.Normal if statistics.duration is None else QFont.Weight.DemiBold)
         duration_column.addWidget(duration_label)
         self.summary_values['配音总时长'] = duration_label
         overview.addLayout(duration_column, 3)
@@ -71,6 +97,8 @@ class ScriptStatisticsDialog(MessageBoxBase):
             setFont(label, 24, QFont.Weight.DemiBold)
             layout.addWidget(label)
             self.summary_values[name] = label
+            if name == '配音段数' and statistics.sentences is not None:
+                layout.addWidget(BodyLabel(f'共 {statistics.sentences} 句', self.overview_card))
             overview.addLayout(layout, 2)
         self.viewLayout.addWidget(self.overview_card)
 
@@ -78,8 +106,11 @@ class ScriptStatisticsDialog(MessageBoxBase):
         details.setSpacing(8)
         details.addWidget(StrongBodyLabel('逐页明细', self))
         self.table = TableWidget(self)
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(['页码', '字数', '段数', '配音时长'])
+        configure_reading_scroll(self.table)
+        has_sentences = statistics.sentences is not None
+        headers = ['页码', '字数', '段数'] + (['句数'] if has_sentences else []) + ['配音时长']
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
         self.table.setEditTriggers(TableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(TableWidget.SelectionMode.NoSelection)
         self.table.setWordWrap(False)
@@ -88,11 +119,11 @@ class ScriptStatisticsDialog(MessageBoxBase):
         self.table.verticalHeader().hide()
         self.table.verticalHeader().setDefaultSectionSize(36)
         header = self.table.horizontalHeader()
-        for column, width in enumerate((142, 130, 110)):
+        for column, width in enumerate((110, 100, 80, 80) if has_sentences else (142, 130, 110)):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
             self.table.setColumnWidth(column, width)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        for column in range(4):
+        header.setSectionResizeMode(len(headers) - 1, QHeaderView.ResizeMode.Stretch)
+        for column in range(len(headers)):
             align = Qt.AlignmentFlag.AlignLeft if column == 0 else Qt.AlignmentFlag.AlignRight
             self.table.horizontalHeaderItem(column).setTextAlignment(align | Qt.AlignmentFlag.AlignVCenter)
         table_style = '''
@@ -110,15 +141,17 @@ class ScriptStatisticsDialog(MessageBoxBase):
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setRowCount(len(statistics.pages))
         for row, data in enumerate(statistics.pages):
-            for column, text in enumerate((f'第 {data.page} 页', f'{data.characters:,}',
-                                           str(data.segments), format_duration(data.duration))):
+            values = [f'第 {data.page} 页', f'{data.characters:,}', str(data.segments)]
+            if has_sentences:
+                values.append(str(data.sentences))
+            values.append(format_duration(data.duration))
+            for column, text in enumerate(values):
                 item = QTableWidgetItem(text)
                 align = Qt.AlignmentFlag.AlignLeft if column == 0 else Qt.AlignmentFlag.AlignRight
                 item.setTextAlignment(align | Qt.AlignmentFlag.AlignVCenter)
                 self.table.setItem(row, column, item)
         self.table.setMinimumHeight(96)
         available = parent.height() - (410 if statistics.longest is not None else 350)
-        available -= max(0, duration_height - duration_label.fontMetrics().height())
         if statistics.longest is not None and len(format_duration(statistics.longest.duration)) > 15:
             available -= 28
         self.table.setFixedHeight(min(260, max(96, available), 38 + 36 * max(1, len(statistics.pages))))

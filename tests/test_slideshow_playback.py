@@ -1,17 +1,16 @@
 """普通播放自动放映、运行期副本匹配和资源清理。"""
 
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace as NS
 import unittest
+from pathlib import Path
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
+from qt_test_case import QtTestCase
+from test_sync_playback import SyncPlaybackFixture
 
 from app.presentation import slideshow
 from app.presentation.playback import SlideshowPlayback
-from test_sync_playback import SyncPlaybackFixture
-
-from qt_test_case import QtTestCase
 
 
 def fake_session(source, provider='PowerPoint'):
@@ -226,7 +225,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         self.session, self.state = fake_session(self.source)
         self.addCleanup(self.page.playback_show.release)
         self.page.currentSwitch.setChecked(False)
-        self.page.scrollEnableSwitch.setChecked(True)
+        self.page.set_sync_playback_enabled(True)
         self.ctx.slideshow_watcher.reset_mock()
 
     def launch(self):
@@ -234,7 +233,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
              patch.object(self.page, 'play_audio') as audio:
             self.page.init_play()
             audio.assert_not_called()
-            self.assertEqual(self.page.currentStatusLabel.text(), '准备放映')
+            self.assertTrue(self.page.playback_show.preparing)
             self.page.playback_show._prepare_step()
             audio.assert_called_once()
         return start
@@ -294,10 +293,10 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
     def test_sync_off_or_manual_modes_play_without_starting_office(self):
         with patch('app.presentation.playback.PresentationSession.start') as start, \
              patch.object(self.page, 'play_audio') as audio:
-            self.page.scrollEnableSwitch.setChecked(False)
+            self.page.set_sync_playback_enabled(False)
             self.page.init_play()
             self.assertEqual(audio.call_count, 1)
-            self.page.scrollEnableSwitch.setChecked(True)
+            self.page.set_sync_playback_enabled(True)
             for mode in ('window', 'foreground'):
                 self.ctx.app_settings.set('page_turn_mode', mode)
                 self.page.init_play()
@@ -336,7 +335,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
             self.assertFalse(self.page._audio_only_playback)
             self.assertTrue(self.page.playButton.isEnabled())
             self.assertTrue(self.page.getFileButton.isEnabled())
-            self.assertEqual(self.page.currentStatusLabel.text(), '停止')
+            self.assertEqual(self.page.playButton.accessibleName(), '播放')
             self.assertFalse(self.page.playback_show.timer.isActive())
             # Starting a show and clicking play again remains the user's choice.
             self.page.init_play()
@@ -351,8 +350,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         self.page._audio_only_playback = True
         view = self.session.presentation.window.View
         view.GotoSlide.reset_mock()
-        self.page.pageJumpSpinBox.setValue(2)
-        self.page.jump_page()
+        self.page.playing_script_preview.page_requested.emit(2)
         self.assertEqual(self.page.project.current_index, 1)
         view.GotoSlide.assert_not_called()
         with patch.object(self.page, 'play_audio') as audio, \
@@ -394,8 +392,7 @@ class ReviewerAutoShowTests(SyncPlaybackFixture):
         self.state.page = self.session.presentation.window.View.Slide.SlideIndex = 2
         self.launch()
         view = self.session.presentation.window.View
-        self.page.pageJumpSpinBox.setValue(1)
-        self.page.jump_page()
+        self.page.playing_script_preview.page_requested.emit(1)
         self.page.reset_audio()
         with patch.object(self.page, 'play_audio') as audio, \
              patch.object(self.page, '_prepare_playback_show') as prepare:

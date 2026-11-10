@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, QTimer
 
 from app import hotkeys
 from app.ai import rewrite
+from app.audio.countdown import MAX_COUNTDOWN_SECONDS, MIN_COUNTDOWN_SECONDS
 from app.logging_setup import get_logger
 from ui import theme
 
@@ -28,6 +29,7 @@ class AppSettings:
         'mark': '●',
         'script_comments_enabled': False,
         'animation_check_enabled': True,
+        'auto_generate_audio': True,
         'countdown_enabled': True,
         'countdown_seconds': 5,
         'scroll_enabled': False,
@@ -67,7 +69,7 @@ class AppSettings:
     }
 
     def __init__(self):
-        self._values = dict(self.DEFAULTS)
+        self._values = copy.deepcopy(self.DEFAULTS)
 
     def get(self, key, default=None):
         """读取偏好；未知键回退到字段默认值或调用方默认值。"""
@@ -76,6 +78,8 @@ class AppSettings:
     def set(self, key, value):
         """写入已声明的偏好，忽略未知键。"""
         if key in self.DEFAULTS:
+            if key == 'countdown_seconds':
+                value = min(MAX_COUNTDOWN_SECONDS, max(MIN_COUNTDOWN_SECONDS, int(value)))
             self._values[key] = value
 
     def update(self, mapping):
@@ -85,8 +89,10 @@ class AppSettings:
 
     def to_dict(self) -> dict:
         """导出可序列化副本，防止调用方通过容器引用修改内部状态。"""
-        return {k: (copy.deepcopy(v) if isinstance(v, (list, dict)) else v)
-                for k, v in self._values.items()}
+        return {
+            k: (copy.deepcopy(v) if isinstance(v, (list, dict)) else v)
+            for k, v in self._values.items()
+        }
 
     def load_from(self, data):
         """从配置片段恢复已知字段，无法转换的值保留当前默认。"""
@@ -111,10 +117,11 @@ class AppSettings:
             except (TypeError, ValueError):
                 print(f'[配置] 忽略无法解析的字段 {key}={value!r}')
                 continue
-            self._values[key] = value
+            self.set(key, value)
 
         styles, selected, templates = rewrite.migrate_presets(
-            self.get('llm_styles'), self.get('llm_style'), self.get('llm_templates'))
+            self.get('llm_styles'), self.get('llm_style'), self.get('llm_templates')
+        )
         self._values.update(llm_styles=styles, llm_style=selected, llm_templates=templates)
 
 
@@ -156,22 +163,23 @@ class ConfigStore(QObject):
         try:
             with self.path.open('r', encoding='utf-8') as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError('配置文件的顶层必须是对象')
+            self.tts_engine.import_persistent_state(data)
+            self.app_settings.load_from(data.get('app', {}))
         except Exception:
             get_logger().exception('配置读取失败，将使用默认配置：%s', self.path)
             return False
 
-        self.tts_engine.import_persistent_state(data)
-        self.app_settings.load_from(data.get('app', {}))
         print(f'[配置] 已加载：{self.path}')
         return True
 
     def save(self) -> bool:
         """原子写入合并后的配置，成功时返回 ``True``。"""
         self._save_timer.stop()
-        data = self.tts_engine.export_persistent_state()
-        data['app'] = self.app_settings.to_dict()
-
         try:
+            data = self.tts_engine.export_persistent_state()
+            data['app'] = self.app_settings.to_dict()
             self.path.parent.mkdir(parents=True, exist_ok=True)
             # 旁路写入后再替换，避免进程中断留下无法解析的半截 JSON。
             temp_path = self.path.with_suffix('.json.tmp')
